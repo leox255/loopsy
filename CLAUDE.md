@@ -379,10 +379,25 @@ pnpm install
 pnpm build
 ```
 
+## Data Storage
+
+Default location: `~/.loopsy/`
+
+| File | Purpose |
+|------|---------|
+| `config.yaml` | Daemon configuration |
+| `context.json` | Context key-value store |
+| `peers.json` | Peer registry |
+| `logs/audit.jsonl` | Request audit log |
+| `daemon.pid` | Main daemon PID |
+| `sessions/<name>/` | Per-session data directories (same structure) |
+
 ## Configuration
 
 Config lives at `~/.loopsy/config.yaml`. Key settings:
 - `server.port` - Daemon port (default 19532)
+- `server.hostname` - Custom hostname (default: OS hostname)
+- `server.dataDir` - Data directory (set automatically by `--data-dir` flag)
 - `auth.apiKey` - This machine's API key
 - `auth.allowedKeys` - Map of peer name -> API key
 - `execution.denylist` - Commands that cannot be executed remotely

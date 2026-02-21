@@ -90,26 +90,26 @@ export async function createDaemon(config: LoopsyConfig): Promise<DaemonServer> 
   registerContextRoutes(app, contextStore);
   registerPeerRoutes(app, identity, registry);
 
-  // Discovery
+  // Health checker (always enabled so manual peers and sessions get checked)
+  const healthChecker = new HealthChecker(registry, async (peer) => {
+    try {
+      const res = await fetch(`http://${peer.address}:${peer.port}/api/v1/health`, {
+        signal: AbortSignal.timeout(5000),
+      });
+      return res.ok;
+    } catch {
+      return false;
+    }
+  });
+
+  // mDNS discovery (optional — disabled for sessions to avoid conflicts)
   let discovery: MdnsDiscovery | null = null;
-  let healthChecker: HealthChecker | null = null;
 
   if (config.discovery.enabled) {
     discovery = new MdnsDiscovery(identity, registry, {
       onPeerDiscovered: (peer) => {
         app.log.info({ peer: peer.nodeId, address: peer.address }, 'Peer discovered');
       },
-    });
-
-    healthChecker = new HealthChecker(registry, async (peer) => {
-      try {
-        const res = await fetch(`http://${peer.address}:${peer.port}/api/v1/health`, {
-          signal: AbortSignal.timeout(5000),
-        });
-        return res.ok;
-      } catch {
-        return false;
-      }
     });
   }
 
