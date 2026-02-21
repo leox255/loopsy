@@ -1,0 +1,29 @@
+{
+  "name": "@loopsy/discovery",
+  "version": "1.0.0",
+  "description": "mDNS peer discovery and registry for Loopsy",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "clean": "rm -rf dist",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@loopsy/protocol": "workspace:*",
+    "bonjour-service": "^1.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.11",
+    "typescript": "^5.5.0",
+    "vitest": "^2.0.0"
+  }
+}

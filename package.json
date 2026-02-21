@@ -1,0 +1,17 @@
+{
+  "name": "loopsy",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Cross-machine communication protocol for Claude Code",
+  "scripts": {
+    "build": "pnpm -r --filter=@loopsy/protocol build && pnpm -r --filter=@loopsy/discovery build && pnpm -r --filter=!@loopsy/protocol --filter=!@loopsy/discovery build",
+    "test": "pnpm -r test",
+    "clean": "pnpm -r clean",
+    "lint": "pnpm -r lint",
+    "typecheck": "pnpm -r typecheck"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=9.0.0"
+  }
+}

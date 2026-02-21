@@ -1,0 +1,42 @@
+{
+  "name": "@loopsy/daemon",
+  "version": "1.0.0",
+  "description": "Loopsy daemon - Fastify HTTP server for cross-machine communication",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "loopsy-daemon": "dist/main.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "clean": "rm -rf dist",
+    "dev": "tsx src/main.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@loopsy/protocol": "workspace:*",
+    "@loopsy/discovery": "workspace:*",
+    "fastify": "^5.0.0",
+    "@fastify/cors": "^10.0.0",
+    "@fastify/multipart": "^9.0.0",
+    "@fastify/rate-limit": "^10.0.0",
+    "yaml": "^2.4.0",
+    "pino": "^9.0.0",
+    "pino-pretty": "^11.0.0",
+    "undici": "^7.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0",
+    "tsx": "^4.16.0",
+    "vitest": "^2.0.0",
+    "@types/node": "^22.0.0"
+  }
+}
