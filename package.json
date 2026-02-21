@@ -4,7 +4,10 @@
   "private": true,
   "description": "Cross-machine communication protocol for Claude Code",
   "scripts": {
+    "setup": "pnpm install && pnpm build && node packages/cli/dist/index.js init",
     "build": "pnpm -r --filter=@loopsy/protocol build && pnpm -r --filter=@loopsy/discovery build && pnpm -r --filter=!@loopsy/protocol --filter=!@loopsy/discovery build",
+    "loopsy": "node packages/cli/dist/index.js",
+    "start": "node packages/daemon/dist/main.js",
     "test": "pnpm -r test",
     "clean": "pnpm -r clean",
     "lint": "pnpm -r lint",
