@@ -169,6 +169,54 @@ server.tool(
 );
 
 server.tool(
+  'loopsy_context_list',
+  'List context entries, optionally filtered by key prefix. Use to scan for inbox messages (e.g. prefix "inbox:leo:").',
+  {
+    prefix: z.string().optional().describe('Key prefix to filter by (e.g. "inbox:leo:")'),
+    peerAddress: z.string().optional().describe('Peer address (omit for local)'),
+    peerPort: z.number().optional().describe('Peer port'),
+    peerApiKey: z.string().optional().describe('Peer API key'),
+  },
+  async ({ prefix, peerAddress, peerPort, peerApiKey }) => {
+    try {
+      let result;
+      if (peerAddress && peerApiKey) {
+        result = await client.listContextFromPeer(peerAddress, peerPort ?? 19532, peerApiKey, prefix);
+      } else {
+        result = await client.listContext(prefix);
+      }
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    } catch (err: any) {
+      return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+    }
+  },
+);
+
+server.tool(
+  'loopsy_context_delete',
+  'Delete a context entry by key on a remote peer or locally. Use to clean up processed inbox messages.',
+  {
+    key: z.string().describe('Context key to delete'),
+    peerAddress: z.string().optional().describe('Peer address (omit for local)'),
+    peerPort: z.number().optional().describe('Peer port'),
+    peerApiKey: z.string().optional().describe('Peer API key'),
+  },
+  async ({ key, peerAddress, peerPort, peerApiKey }) => {
+    try {
+      let result;
+      if (peerAddress && peerApiKey) {
+        result = await client.deleteContextFromPeer(peerAddress, peerPort ?? 19532, peerApiKey, key);
+      } else {
+        result = await client.deleteContext(key);
+      }
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    } catch (err: any) {
+      return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+    }
+  },
+);
+
+server.tool(
   'loopsy_peer_status',
   'Get detailed status information for a specific Loopsy peer',
   {

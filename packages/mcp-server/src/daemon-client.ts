@@ -91,8 +91,9 @@ export class DaemonClient {
     return this.request(`/context/${encodeURIComponent(key)}`);
   }
 
-  async listContext() {
-    return this.request<{ entries: any[] }>('/context');
+  async listContext(prefix?: string) {
+    const query = prefix ? `?prefix=${encodeURIComponent(prefix)}` : '';
+    return this.request<{ entries: any[] }>(`/context${query}`);
   }
 
   async deleteContext(key: string) {
@@ -108,6 +109,30 @@ export class DaemonClient {
         Authorization: `Bearer ${peerApiKey}`,
       },
       body: JSON.stringify({ value, ttl }),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({ error: { message: res.statusText } })) as any;
+      throw new Error(body.error?.message ?? `HTTP ${res.status}`);
+    }
+    return res.json();
+  }
+
+  async listContextFromPeer(peerAddress: string, peerPort: number, peerApiKey: string, prefix?: string) {
+    const query = prefix ? `?prefix=${encodeURIComponent(prefix)}` : '';
+    const res = await fetch(`http://${peerAddress}:${peerPort}/api/v1/context${query}`, {
+      headers: { Authorization: `Bearer ${peerApiKey}` },
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({ error: { message: res.statusText } })) as any;
+      throw new Error(body.error?.message ?? `HTTP ${res.status}`);
+    }
+    return res.json();
+  }
+
+  async deleteContextFromPeer(peerAddress: string, peerPort: number, peerApiKey: string, key: string) {
+    const res = await fetch(`http://${peerAddress}:${peerPort}/api/v1/context/${encodeURIComponent(key)}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${peerApiKey}` },
     });
     if (!res.ok) {
       const body = await res.json().catch(() => ({ error: { message: res.statusText } })) as any;

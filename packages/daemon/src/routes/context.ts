@@ -46,7 +46,8 @@ export function registerContextRoutes(app: FastifyInstance, contextStore: Contex
     return { success: true, key };
   });
 
-  app.get('/api/v1/context', async () => {
-    return { entries: contextStore.list() };
+  app.get('/api/v1/context', async (request) => {
+    const { prefix } = request.query as { prefix?: string };
+    return { entries: contextStore.list(prefix) };
   });
 }

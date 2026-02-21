@@ -83,13 +83,13 @@ export class ContextStore {
     return this.entries.delete(key);
   }
 
-  list(): ContextEntry[] {
+  list(prefix?: string): ContextEntry[] {
     const now = Date.now();
     const result: ContextEntry[] = [];
     for (const [key, entry] of this.entries) {
       if (entry.expiresAt && entry.expiresAt <= now) {
         this.entries.delete(key);
-      } else {
+      } else if (!prefix || key.startsWith(prefix)) {
         result.push(entry);
       }
     }
