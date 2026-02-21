@@ -100,6 +100,24 @@ export const ContextKeySchema = z.object({
   key: z.string().min(1).max(256),
 });
 
+// --- AI Task schemas ---
+
+export const AiTaskParamsSchema = z.object({
+  prompt: z.string().min(1),
+  cwd: z.string().optional(),
+  permissionMode: z.enum(['default', 'acceptEdits', 'bypassPermissions', 'dontAsk']).optional().default('default'),
+  model: z.string().optional(),
+  maxBudgetUsd: z.number().positive().optional(),
+  allowedTools: z.array(z.string()).optional(),
+  disallowedTools: z.array(z.string()).optional(),
+  additionalArgs: z.array(z.string()).optional(),
+});
+
+export const AiTaskApprovalResponseSchema = z.object({
+  requestId: z.string().min(1),
+  approved: z.boolean(),
+});
+
 export const PeerAddSchema = z.object({
   address: z.string().min(1),
   port: z.number().int().min(1).max(65535),

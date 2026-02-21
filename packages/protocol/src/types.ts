@@ -204,3 +204,62 @@ export interface MessageEnvelope {
   type: MessageType;
   body: string;
 }
+
+// ── AI Task Dispatch ──
+
+/** AI task lifecycle status */
+export type AiTaskStatus = 'pending' | 'running' | 'waiting_approval' | 'completed' | 'failed' | 'cancelled';
+
+/** Permission modes for the Claude CLI */
+export type ClaudePermissionMode = 'default' | 'acceptEdits' | 'bypassPermissions' | 'dontAsk';
+
+/** Parameters to dispatch an AI task */
+export interface AiTaskParams {
+  prompt: string;
+  cwd?: string;
+  permissionMode?: ClaudePermissionMode;
+  model?: string;
+  maxBudgetUsd?: number;
+  allowedTools?: string[];
+  disallowedTools?: string[];
+  additionalArgs?: string[];
+}
+
+/** AI task info tracked by the daemon */
+export interface AiTaskInfo {
+  taskId: string;
+  prompt: string;
+  status: AiTaskStatus;
+  startedAt: number;
+  updatedAt: number;
+  completedAt?: number;
+  fromNodeId: string;
+  pid?: number;
+  exitCode?: number | null;
+  error?: string;
+  model?: string;
+  pendingApproval?: AiTaskApprovalRequest;
+}
+
+/** A permission request from Claude needing human approval */
+export interface AiTaskApprovalRequest {
+  toolName: string;
+  toolInput: unknown;
+  requestId: string;
+  timestamp: number;
+  description?: string;
+}
+
+/** Human's approval/denial response */
+export interface AiTaskApprovalResponse {
+  requestId: string;
+  approved: boolean;
+}
+
+/** SSE event from an AI task stream */
+export interface AiTaskStreamEvent {
+  type: 'text' | 'thinking' | 'tool_use' | 'tool_result' | 'permission_request' | 'status' | 'error' | 'result' | 'exit';
+  taskId: string;
+  timestamp: number;
+  data: unknown;
+}

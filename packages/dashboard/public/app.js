@@ -98,6 +98,7 @@ async function init() {
     import('/views/context.js'),
     import('/views/messages.js'),
     import('/views/peers.js'),
+    import('/views/ai-tasks.js'),
   ]);
 
   // Nav click handlers

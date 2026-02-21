@@ -63,3 +63,12 @@ export const API_PREFIX = '/api/v1';
 
 /** Sessions subdirectory */
 export const SESSIONS_DIR = 'sessions';
+
+/** Max concurrent AI tasks per daemon */
+export const MAX_CONCURRENT_AI_TASKS = 3;
+
+/** Default AI task timeout (30 minutes) */
+export const DEFAULT_AI_TASK_TIMEOUT = 1_800_000;
+
+/** Max event buffer per AI task (for reconnecting clients) */
+export const AI_TASK_EVENT_BUFFER_SIZE = 500;

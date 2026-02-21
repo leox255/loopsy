@@ -13,6 +13,7 @@ import { registerSseRoutes } from './routes/sse.js';
 import { registerStatusRoutes } from './routes/status.js';
 import { registerMessageRoutes } from './routes/messages.js';
 import { registerPeersAllRoute } from './routes/peers-all.js';
+import { registerAiTaskRoutes } from './routes/ai-tasks.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_DASHBOARD_PORT = 19540;
@@ -64,6 +65,7 @@ async function main() {
   registerStatusRoutes(app, config.apiKey, config.allowedKeys);
   registerMessageRoutes(app, config.apiKey, config.allowedKeys);
   registerPeersAllRoute(app, config.apiKey, config.allowedKeys);
+  registerAiTaskRoutes(app, config.apiKey, config.allowedKeys);
 
   await app.listen({ port, host: '0.0.0.0' });
 

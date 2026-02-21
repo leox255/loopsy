@@ -653,6 +653,92 @@ select option { background: var(--bg-base); color: var(--text-primary); }
 .text-sm { font-size: 0.75rem; }
 .text-xs { font-size: 0.65rem; }
 
+/* ═══ AI Tasks ═══ */
+
+.ai-terminal {
+  background: var(--bg-void);
+  border: 1px solid var(--border-dim);
+  border-radius: 8px;
+  padding: 0.75rem;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  line-height: 1.5;
+  max-height: 50vh;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.ai-line { padding: 1px 0; }
+.ai-stdout { color: var(--green); }
+.ai-thinking { color: var(--text-muted); font-style: italic; }
+.ai-tool-use { color: var(--cyan); }
+.ai-tool-result { color: var(--text-secondary); padding-left: 1rem; border-left: 2px solid var(--border-dim); margin: 2px 0; }
+.ai-stderr { color: var(--red); }
+.ai-system { color: var(--text-muted); font-style: italic; }
+.ai-result { color: var(--green); border: 1px solid var(--green)40; border-radius: 4px; padding: 0.5rem; margin: 4px 0; }
+
+.approval-banner {
+  background: var(--bg-elevated);
+  border: 2px solid var(--amber);
+  border-radius: 8px;
+  padding: 1rem;
+  margin-top: 0.75rem;
+  animation: approval-glow 2s ease-in-out infinite alternate;
+}
+@keyframes approval-glow {
+  from { box-shadow: 0 0 5px #ffb80030; }
+  to { box-shadow: 0 0 20px #ffb80060, 0 0 40px #ffb80020; }
+}
+.approval-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 0.5rem;
+}
+.approval-desc {
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  margin-bottom: 0.5rem;
+}
+.approval-input {
+  background: var(--bg-void);
+  border: 1px solid var(--border-dim);
+  border-radius: 4px;
+  padding: 0.5rem;
+  margin-bottom: 0.75rem;
+  max-height: 200px;
+  overflow-y: auto;
+}
+.approval-input pre {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.approval-actions {
+  display: flex;
+  gap: 0.75rem;
+}
+.approval-actions .btn {
+  flex: 1;
+  padding: 0.6rem;
+  font-size: 0.8rem;
+}
+
+.needs-attention {
+  border-left: 3px solid var(--amber) !important;
+}
+
+.pulse {
+  animation: pulse-badge 1.5s ease-in-out infinite;
+}
+@keyframes pulse-badge {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
 /* ═══ Scrollbar ═══ */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: var(--bg-void); }

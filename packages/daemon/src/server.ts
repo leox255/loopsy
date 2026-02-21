@@ -12,9 +12,11 @@ import { registerExecuteRoutes } from './routes/execute.js';
 import { registerTransferRoutes } from './routes/transfer.js';
 import { registerContextRoutes } from './routes/context.js';
 import { registerPeerRoutes } from './routes/peers.js';
+import { registerAiTaskRoutes } from './routes/ai-tasks.js';
 import { JobManager } from './services/job-manager.js';
 import { ContextStore } from './services/context-store.js';
 import { AuditLogger } from './services/audit-logger.js';
+import { AiTaskManager } from './services/ai-task-manager.js';
 
 export interface DaemonServer {
   start(): Promise<void>;
@@ -33,7 +35,7 @@ export async function createDaemon(config: LoopsyConfig): Promise<DaemonServer> 
     platform: platform(),
     version: PROTOCOL_VERSION,
     port: config.server.port,
-    capabilities: ['execute', 'transfer', 'context'],
+    capabilities: ['execute', 'transfer', 'context', 'ai-tasks'],
   };
 
   // Initialize services
@@ -50,6 +52,8 @@ export async function createDaemon(config: LoopsyConfig): Promise<DaemonServer> 
     denylist: config.execution.denylist,
     allowlist: config.execution.allowlist,
   });
+
+  const aiTaskManager = new AiTaskManager();
 
   const auditLogger = new AuditLogger(dataDir);
   await auditLogger.init();
@@ -89,6 +93,7 @@ export async function createDaemon(config: LoopsyConfig): Promise<DaemonServer> 
   registerTransferRoutes(app, config);
   registerContextRoutes(app, contextStore);
   registerPeerRoutes(app, identity, registry);
+  registerAiTaskRoutes(app, aiTaskManager);
 
   // Health checker (always enabled so manual peers and sessions get checked)
   const healthChecker = new HealthChecker(registry, async (peer) => {
@@ -145,6 +150,7 @@ export async function createDaemon(config: LoopsyConfig): Promise<DaemonServer> 
       healthChecker?.stop();
       discovery?.stop();
       jobManager.killAll();
+      aiTaskManager.cancelAll();
       contextStore.stopExpiryCheck();
       await contextStore.save();
       await registry.save();
