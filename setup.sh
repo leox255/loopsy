@@ -28,14 +28,21 @@ pnpm install
 echo "Building packages..."
 pnpm build
 
+echo "Installing loopsy command globally..."
+# Ensure pnpm global bin dir exists
+pnpm setup 2>/dev/null || true
+export PNPM_HOME="${PNPM_HOME:-$HOME/Library/pnpm}"
+export PATH="$PNPM_HOME:$PATH"
+(cd packages/cli && pnpm link --global 2>/dev/null) || npm link packages/cli 2>/dev/null || true
+
 echo "Initializing Loopsy..."
 node packages/cli/dist/index.js init
 
 echo ""
 echo "=== Setup complete! ==="
 echo ""
-echo "Start the daemon with:"
-echo "  pnpm loopsy start"
+echo "Next: connect to another machine:"
+echo "  loopsy connect"
 echo ""
-echo "Or run it directly:"
-echo "  node packages/daemon/dist/main.js"
+echo "Or start the daemon manually:"
+echo "  loopsy start"

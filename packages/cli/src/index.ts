@@ -10,10 +10,12 @@ import { sendCommand, pullCommand } from './commands/transfer.js';
 import { contextCommand } from './commands/context.js';
 import { keyCommand } from './commands/key.js';
 import { logsCommand } from './commands/logs.js';
+import { connectCommand } from './commands/connect.js';
 
 yargs(hideBin(process.argv))
   .scriptName('loopsy')
   .command('init', 'Initialize Loopsy config and generate API key', {}, initCommand)
+  .command('connect', 'Interactive wizard to connect to another machine', {}, connectCommand)
   .command('start', 'Start the Loopsy daemon', {}, startCommand)
   .command('stop', 'Stop the Loopsy daemon', {}, stopCommand)
   .command('status', 'Show daemon status', {}, statusCommand)

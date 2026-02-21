@@ -29,14 +29,26 @@ pnpm install
 Write-Host "Building packages..."
 pnpm build
 
+Write-Host "Installing loopsy command globally..."
+try { pnpm setup 2>$null } catch {}
+$env:PNPM_HOME = [System.IO.Path]::Combine($env:LOCALAPPDATA, "pnpm")
+$env:PATH = "$env:PNPM_HOME;$env:PATH"
+Push-Location packages/cli
+try {
+    pnpm link --global 2>$null
+} catch {
+    try { npm link 2>$null } catch {}
+}
+Pop-Location
+
 Write-Host "Initializing Loopsy..."
 node packages/cli/dist/index.js init
 
 Write-Host ""
 Write-Host "=== Setup complete! ===" -ForegroundColor Green
 Write-Host ""
-Write-Host "Start the daemon with:"
-Write-Host "  pnpm loopsy start" -ForegroundColor Yellow
+Write-Host "Next: connect to another machine:" -ForegroundColor Yellow
+Write-Host "  loopsy connect" -ForegroundColor White
 Write-Host ""
-Write-Host "Or run it directly:"
-Write-Host "  node packages\daemon\dist\main.js" -ForegroundColor Yellow
+Write-Host "Or start the daemon manually:" -ForegroundColor Yellow
+Write-Host "  loopsy start" -ForegroundColor White
