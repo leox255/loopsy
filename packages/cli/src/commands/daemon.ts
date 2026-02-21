@@ -1,10 +1,12 @@
 import { spawn } from 'node:child_process';
 import { readFile, writeFile, unlink } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { CONFIG_DIR } from '@loopsy/protocol';
 import { daemonRequest } from '../utils.js';
 
+const __dirname = dirname(fileURLToPath(import.meta.url));
 const PID_FILE = join(homedir(), CONFIG_DIR, 'daemon.pid');
 
 export async function startCommand() {
@@ -18,11 +20,10 @@ export async function startCommand() {
     // Not running, start it
   }
 
-  // Find the daemon entry point
-  const daemonPath = join(import.meta.url, '..', '..', '..', '..', 'daemon', 'dist', 'main.js');
-  const resolved = new URL(daemonPath).pathname;
+  // Find the daemon entry point (cli/dist/commands/ -> daemon/dist/main.js)
+  const daemonPath = join(__dirname, '..', '..', '..', 'daemon', 'dist', 'main.js');
 
-  const child = spawn('node', [resolved], {
+  const child = spawn('node', [daemonPath], {
     detached: true,
     stdio: 'ignore',
   });
