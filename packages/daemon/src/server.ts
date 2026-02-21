@@ -29,7 +29,7 @@ export async function createDaemon(config: LoopsyConfig): Promise<DaemonServer> 
   const nodeId = randomUUID();
   const identity: LoopsyNodeIdentity = {
     nodeId,
-    hostname: hostname(),
+    hostname: config.server.hostname || hostname(),
     platform: platform(),
     version: PROTOCOL_VERSION,
     port: config.server.port,

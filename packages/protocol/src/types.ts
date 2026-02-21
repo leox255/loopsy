@@ -135,6 +135,7 @@ export interface LoopsyConfig {
   server: {
     port: number;
     host: string;
+    hostname?: string;
   };
   auth: {
     apiKey: string;
