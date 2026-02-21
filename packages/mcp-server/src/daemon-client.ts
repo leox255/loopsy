@@ -15,12 +15,15 @@ import {
 } from '@loopsy/protocol';
 
 /**
- * Read the API key from ~/.loopsy/config.yaml.
+ * Read the API key from config.yaml.
+ * Uses LOOPSY_DATA_DIR env var if set (for session support),
+ * otherwise falls back to ~/.loopsy/config.yaml.
  * Falls back to LOOPSY_API_KEY env var, then empty string.
  */
 async function loadApiKeyFromConfig(): Promise<{ apiKey: string; port: number }> {
   try {
-    const configPath = join(homedir(), CONFIG_DIR, CONFIG_FILE);
+    const dataDir = process.env.LOOPSY_DATA_DIR ?? join(homedir(), CONFIG_DIR);
+    const configPath = join(dataDir, CONFIG_FILE);
     const raw = await readFile(configPath, 'utf-8');
     const parsed = parseYaml(raw) as any;
     return {

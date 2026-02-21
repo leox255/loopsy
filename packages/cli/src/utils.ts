@@ -4,15 +4,24 @@ import { homedir } from 'node:os';
 import { parse as parseYaml } from 'yaml';
 import { DEFAULT_PORT, CONFIG_DIR, CONFIG_FILE } from '@loopsy/protocol';
 
-export async function loadApiKey(): Promise<string> {
+export async function loadCliConfig(dataDir?: string): Promise<{ apiKey: string; port: number }> {
   try {
-    const configPath = join(homedir(), CONFIG_DIR, CONFIG_FILE);
+    const dir = dataDir ?? join(homedir(), CONFIG_DIR);
+    const configPath = join(dir, CONFIG_FILE);
     const raw = await readFile(configPath, 'utf-8');
     const config = parseYaml(raw) as any;
-    return config?.auth?.apiKey ?? '';
+    return {
+      apiKey: config?.auth?.apiKey ?? '',
+      port: config?.server?.port ?? DEFAULT_PORT,
+    };
   } catch {
-    return '';
+    return { apiKey: '', port: DEFAULT_PORT };
   }
+}
+
+export async function loadApiKey(): Promise<string> {
+  const { apiKey } = await loadCliConfig();
+  return apiKey;
 }
 
 export function parsePeerAddress(peer: string): { address: string; port: number } {
@@ -23,9 +32,9 @@ export function parsePeerAddress(peer: string): { address: string; port: number 
   };
 }
 
-export async function daemonRequest(path: string, opts: RequestInit = {}): Promise<any> {
-  const apiKey = await loadApiKey();
-  const res = await fetch(`http://127.0.0.1:${DEFAULT_PORT}/api/v1${path}`, {
+export async function daemonRequest(path: string, opts: RequestInit = {}, dataDir?: string): Promise<any> {
+  const { apiKey, port } = await loadCliConfig(dataDir);
+  const res = await fetch(`http://127.0.0.1:${port}/api/v1${path}`, {
     ...opts,
     headers: {
       'Content-Type': 'application/json',

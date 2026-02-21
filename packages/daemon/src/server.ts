@@ -37,10 +37,11 @@ export async function createDaemon(config: LoopsyConfig): Promise<DaemonServer> 
   };
 
   // Initialize services
-  const registry = new PeerRegistry();
+  const dataDir = config.server.dataDir;
+  const registry = new PeerRegistry(dataDir);
   await registry.load();
 
-  const contextStore = new ContextStore();
+  const contextStore = new ContextStore(dataDir);
   await contextStore.load();
   contextStore.startExpiryCheck();
 
@@ -50,7 +51,7 @@ export async function createDaemon(config: LoopsyConfig): Promise<DaemonServer> 
     allowlist: config.execution.allowlist,
   });
 
-  const auditLogger = new AuditLogger();
+  const auditLogger = new AuditLogger(dataDir);
   await auditLogger.init();
 
   // Create Fastify server

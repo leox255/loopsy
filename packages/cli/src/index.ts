@@ -11,6 +11,15 @@ import { contextCommand } from './commands/context.js';
 import { keyCommand } from './commands/key.js';
 import { logsCommand } from './commands/logs.js';
 import { connectCommand } from './commands/connect.js';
+import {
+  sessionCommand,
+  sessionStartCommand,
+  sessionStartFleetCommand,
+  sessionStopCommand,
+  sessionStopAllCommand,
+  sessionListCommand,
+  sessionStatusCommand,
+} from './commands/session.js';
 
 yargs(hideBin(process.argv))
   .scriptName('loopsy')
@@ -99,6 +108,40 @@ yargs(hideBin(process.argv))
     'View daemon logs',
     (yargs) => yargs.option('follow', { type: 'boolean', alias: 'f', default: false }),
     logsCommand,
+  )
+  .command(
+    'session',
+    'Manage daemon sessions',
+    (yargs) =>
+      yargs
+        .command(
+          'start <name>',
+          'Start a named session',
+          (y: any) => y.positional('name', { type: 'string', demandOption: true, describe: 'Session name' }),
+          sessionStartCommand,
+        )
+        .command(
+          'start-fleet',
+          'Start multiple worker sessions',
+          (y: any) => y.option('count', { type: 'number', alias: 'c', default: 3, describe: 'Number of sessions' }),
+          sessionStartFleetCommand,
+        )
+        .command(
+          'stop <name>',
+          'Stop a named session',
+          (y: any) => y.positional('name', { type: 'string', demandOption: true }),
+          sessionStopCommand,
+        )
+        .command('stop-all', 'Stop all sessions', {}, sessionStopAllCommand)
+        .command('list', 'List all sessions', {}, sessionListCommand)
+        .command(
+          'status <name>',
+          'Show status for a session',
+          (y: any) => y.positional('name', { type: 'string', demandOption: true }),
+          sessionStatusCommand,
+        )
+        .demandCommand(1),
+    sessionCommand,
   )
   .demandCommand(1, 'You need at least one command')
   .help()

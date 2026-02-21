@@ -5,15 +5,19 @@ import type { ContextEntry } from '@loopsy/protocol';
 import { CONFIG_DIR, MAX_CONTEXT_ENTRIES, MAX_CONTEXT_VALUE_SIZE } from '@loopsy/protocol';
 import { LoopsyError, LoopsyErrorCode } from '@loopsy/protocol';
 
-const CONTEXT_FILE = join(homedir(), CONFIG_DIR, 'context.json');
-
 export class ContextStore {
   private entries = new Map<string, ContextEntry>();
   private expiryTimer: ReturnType<typeof setInterval> | null = null;
+  private contextFile: string;
+
+  constructor(dataDir?: string) {
+    const dir = dataDir ?? join(homedir(), CONFIG_DIR);
+    this.contextFile = join(dir, 'context.json');
+  }
 
   async load(): Promise<void> {
     try {
-      const data = await readFile(CONTEXT_FILE, 'utf-8');
+      const data = await readFile(this.contextFile, 'utf-8');
       const items: ContextEntry[] = JSON.parse(data);
       for (const entry of items) {
         if (!entry.expiresAt || entry.expiresAt > Date.now()) {
@@ -26,9 +30,9 @@ export class ContextStore {
   }
 
   async save(): Promise<void> {
-    const dir = join(homedir(), CONFIG_DIR);
+    const dir = join(this.contextFile, '..');
     await mkdir(dir, { recursive: true });
-    await writeFile(CONTEXT_FILE, JSON.stringify(Array.from(this.entries.values()), null, 2));
+    await writeFile(this.contextFile, JSON.stringify(Array.from(this.entries.values()), null, 2));
   }
 
   startExpiryCheck(): void {

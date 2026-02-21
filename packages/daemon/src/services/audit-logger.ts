@@ -1,16 +1,19 @@
 import { appendFile, mkdir } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { CONFIG_DIR } from '@loopsy/protocol';
 
-const LOG_DIR = join(homedir(), CONFIG_DIR, 'logs');
-const AUDIT_FILE = join(LOG_DIR, 'audit.jsonl');
-
 export class AuditLogger {
   private ready = false;
+  private auditFile: string;
+
+  constructor(dataDir?: string) {
+    const dir = dataDir ?? join(homedir(), CONFIG_DIR);
+    this.auditFile = join(dir, 'logs', 'audit.jsonl');
+  }
 
   async init(): Promise<void> {
-    await mkdir(LOG_DIR, { recursive: true });
+    await mkdir(dirname(this.auditFile), { recursive: true });
     this.ready = true;
   }
 
@@ -25,6 +28,6 @@ export class AuditLogger {
   }): Promise<void> {
     if (!this.ready) return;
     const line = JSON.stringify({ ...entry, timestamp: new Date().toISOString() }) + '\n';
-    await appendFile(AUDIT_FILE, line).catch(() => {});
+    await appendFile(this.auditFile, line).catch(() => {});
   }
 }

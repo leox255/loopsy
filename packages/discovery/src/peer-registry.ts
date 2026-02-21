@@ -4,14 +4,18 @@ import { homedir } from 'node:os';
 import type { PeerInfo } from '@loopsy/protocol';
 import { CONFIG_DIR } from '@loopsy/protocol';
 
-const PEERS_FILE = join(homedir(), CONFIG_DIR, 'peers.json');
-
 export class PeerRegistry {
   private peers = new Map<string, PeerInfo>();
+  private peersFile: string;
+
+  constructor(dataDir?: string) {
+    const dir = dataDir ?? join(homedir(), CONFIG_DIR);
+    this.peersFile = join(dir, 'peers.json');
+  }
 
   async load(): Promise<void> {
     try {
-      const data = await readFile(PEERS_FILE, 'utf-8');
+      const data = await readFile(this.peersFile, 'utf-8');
       const entries: PeerInfo[] = JSON.parse(data);
       for (const peer of entries) {
         this.peers.set(peer.nodeId, peer);
@@ -22,10 +26,10 @@ export class PeerRegistry {
   }
 
   async save(): Promise<void> {
-    const dir = join(homedir(), CONFIG_DIR);
+    const dir = join(this.peersFile, '..');
     await mkdir(dir, { recursive: true });
     const entries = Array.from(this.peers.values());
-    await writeFile(PEERS_FILE, JSON.stringify(entries, null, 2));
+    await writeFile(this.peersFile, JSON.stringify(entries, null, 2));
   }
 
   get(nodeId: string): PeerInfo | undefined {

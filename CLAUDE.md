@@ -284,6 +284,86 @@ Key learnings from macOS ↔ Windows communication:
 - `loopsy_ack_message` MCP tool returns HTTP 400 in some cases — workaround: use `loopsy_context_set` directly to set the `ack:<hostname>` key on the sender's machine
 - `loopsy_context_delete` may have similar issues — use REST API fallback if needed
 
+## Multi-Session Support
+
+Run multiple daemon sessions per machine, each acting as an independent peer. This enables a fleet of Claude Code instances to collaborate — e.g., 3 sessions on macOS + 3 on Windows = 6 peers.
+
+### Session Architecture
+
+Each session gets its own isolated data directory under `~/.loopsy/sessions/<name>/` containing:
+- `config.yaml` — auto-generated from parent config (unique port, hostname)
+- `context.json` — isolated context store
+- `peers.json` — isolated peer registry
+- `logs/audit.jsonl` — isolated audit log
+- `daemon.pid` — session process ID
+
+Sessions share the parent machine's `auth.apiKey` and `auth.allowedKeys` so all siblings + remote peers can authenticate with each other.
+
+### CLI Commands
+
+```bash
+# Start a single named session
+loopsy session start worker-1
+
+# Start a fleet of N sessions (worker-1, worker-2, ..., worker-N)
+loopsy session start-fleet --count 3
+
+# List all sessions with status
+loopsy session list
+
+# Show detailed status for a session
+loopsy session status worker-1
+
+# Stop a single session
+loopsy session stop worker-1
+
+# Stop all sessions
+loopsy session stop-all
+```
+
+### How Sessions Work
+
+1. **Port allocation**: Each session auto-finds a free port starting from 19533 upward
+2. **Hostname**: Each session gets `<machine_hostname>-<name>` (e.g., `leo-worker-1`)
+3. **Discovery**: Sessions disable mDNS to avoid conflicts. Instead, they use manual peers:
+   - Main daemon (localhost:19532)
+   - All running sibling sessions (localhost:195xx)
+   - Remote peers from parent config
+4. **Cross-registration**: When a session starts, it registers itself with the main daemon and all siblings via `POST /peers`
+
+### MCP Server with Sessions
+
+To connect an MCP server to a specific session, set the `LOOPSY_DATA_DIR` env var:
+
+```bash
+LOOPSY_DATA_DIR=~/.loopsy/sessions/worker-1 node packages/mcp-server/dist/index.js
+```
+
+### Example: 6-Peer Fleet
+
+```bash
+# On macOS (leo):
+loopsy session start-fleet --count 3
+# Creates: leo-worker-1 (19533), leo-worker-2 (19534), leo-worker-3 (19535)
+
+# On Windows (kai):
+loopsy session start-fleet --count 3
+# Creates: kai-worker-1 (19533), kai-worker-2 (19534), kai-worker-3 (19535)
+
+# All 6 sessions + 2 main daemons = 8 peers communicating
+loopsy session list
+```
+
+### Daemon Data Directory Flag
+
+The daemon supports `--data-dir` for custom data directories:
+
+```bash
+node packages/daemon/dist/main.js --data-dir ~/.loopsy/sessions/worker-1
+```
+
+This reads config from and stores state in the specified directory instead of `~/.loopsy/`.
+
 ## Project Structure
 
 - `packages/protocol` - Shared types, schemas, constants

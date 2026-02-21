@@ -6,7 +6,7 @@ import { randomBytes } from 'node:crypto';
 import type { LoopsyConfig } from '@loopsy/protocol';
 import { CONFIG_DIR, CONFIG_FILE, DEFAULT_PORT, MAX_FILE_SIZE, MAX_CONCURRENT_JOBS, DEFAULT_EXEC_TIMEOUT, RATE_LIMITS } from '@loopsy/protocol';
 
-const CONFIG_PATH = join(homedir(), CONFIG_DIR, CONFIG_FILE);
+const DEFAULT_DATA_DIR = join(homedir(), CONFIG_DIR);
 
 export function defaultConfig(): LoopsyConfig {
   return {
@@ -31,13 +31,18 @@ export function defaultConfig(): LoopsyConfig {
   };
 }
 
-export async function loadConfig(): Promise<LoopsyConfig> {
+export async function loadConfig(dataDir?: string): Promise<LoopsyConfig> {
+  const dir = dataDir ?? DEFAULT_DATA_DIR;
+  const configPath = join(dir, CONFIG_FILE);
   const defaults = defaultConfig();
   try {
-    const raw = await readFile(CONFIG_PATH, 'utf-8');
+    const raw = await readFile(configPath, 'utf-8');
     const parsed = parseYaml(raw) as Partial<LoopsyConfig>;
-    return deepMerge(defaults, parsed) as LoopsyConfig;
+    const config = deepMerge(defaults, parsed) as LoopsyConfig;
+    config.server.dataDir = dir;
+    return config;
   } catch {
+    defaults.server.dataDir = dir;
     return defaults;
   }
 }
