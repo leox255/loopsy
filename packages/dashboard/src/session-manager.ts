@@ -128,10 +128,10 @@ export async function startSession(name: string): Promise<SessionInfo> {
       if (port > DEFAULT_PORT + 100) throw new Error('No free port found');
     }
 
-    // Build manual peers
+    // Build manual peers with hostnames
     const manualPeers = [
-      { address: '127.0.0.1', port: parentConfig.server?.port ?? DEFAULT_PORT },
-      ...sessions.filter(s => s.status === 'running').map(s => ({ address: '127.0.0.1', port: s.port })),
+      { address: '127.0.0.1', port: parentConfig.server?.port ?? DEFAULT_PORT, hostname: machineHostname },
+      ...sessions.filter(s => s.status === 'running').map(s => ({ address: '127.0.0.1', port: s.port, hostname: s.hostname })),
       ...(parentConfig.discovery?.manualPeers ?? []),
     ];
 
@@ -166,7 +166,7 @@ export async function startSession(name: string): Promise<SessionInfo> {
         await fetch(`http://127.0.0.1:${sibling.port}/api/v1/peers`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-          body: JSON.stringify({ address: '127.0.0.1', port }),
+          body: JSON.stringify({ address: '127.0.0.1', port, hostname: sessionConfig.server.hostname }),
         });
       } catch {}
     }

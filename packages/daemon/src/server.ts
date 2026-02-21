@@ -117,7 +117,7 @@ export async function createDaemon(config: LoopsyConfig): Promise<DaemonServer> 
   for (const manual of config.discovery.manualPeers) {
     registry.upsert({
       nodeId: `manual-${manual.address}:${manual.port}`,
-      hostname: manual.address,
+      hostname: manual.hostname || manual.address,
       address: manual.address,
       port: manual.port,
       platform: 'unknown',

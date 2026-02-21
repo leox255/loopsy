@@ -48,10 +48,10 @@ export function registerPeerRoutes(
 
   // Add a manual peer
   app.post('/api/v1/peers', async (request) => {
-    const body = request.body as { address: string; port: number; nodeId?: string };
+    const body = request.body as { address: string; port: number; nodeId?: string; hostname?: string };
     const peer: PeerInfo = {
       nodeId: body.nodeId ?? `manual-${body.address}:${body.port}`,
-      hostname: body.address,
+      hostname: body.hostname || body.address,
       address: body.address,
       port: body.port,
       platform: 'unknown',

@@ -166,7 +166,7 @@ export interface LoopsyConfig {
   };
   discovery: {
     enabled: boolean;
-    manualPeers: Array<{ address: string; port: number }>;
+    manualPeers: Array<{ address: string; port: number; hostname?: string }>;
   };
   logging: {
     level: string;

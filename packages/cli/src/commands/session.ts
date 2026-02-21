@@ -34,8 +34,8 @@ async function findFreePort(startPort: number): Promise<number> {
   throw new Error('No free port found in range');
 }
 
-async function getRunningSessionPorts(): Promise<Array<{ name: string; port: number }>> {
-  const sessions: Array<{ name: string; port: number }> = [];
+async function getRunningSessionPorts(): Promise<Array<{ name: string; port: number; hostname: string }>> {
+  const sessions: Array<{ name: string; port: number; hostname: string }> = [];
   try {
     const dirs = await readdir(SESSIONS_PATH);
     for (const name of dirs) {
@@ -45,7 +45,7 @@ async function getRunningSessionPorts(): Promise<Array<{ name: string; port: num
         const pidRaw = await readFile(join(SESSIONS_PATH, name, 'daemon.pid'), 'utf-8');
         const pid = parseInt(pidRaw, 10);
         process.kill(pid, 0); // Check if running
-        sessions.push({ name, port: config.server.port });
+        sessions.push({ name, port: config.server.port, hostname: config.server?.hostname || name });
       } catch {
         // Not running or no config
       }
@@ -84,12 +84,12 @@ export async function sessionStartCommand(argv: any) {
     if (port > DEFAULT_PORT + 100) throw new Error('No free port found');
   }
 
-  // Build sibling manual peers (main daemon + other sessions)
+  // Build sibling manual peers (main daemon + other sessions) with hostnames
   const manualPeers = [
     // Main daemon
-    { address: '127.0.0.1', port: parentConfig.server?.port ?? DEFAULT_PORT },
+    { address: '127.0.0.1', port: parentConfig.server?.port ?? DEFAULT_PORT, hostname: machineHostname },
     // Existing sibling sessions
-    ...runningSessions.map((s) => ({ address: '127.0.0.1', port: s.port })),
+    ...runningSessions.map((s) => ({ address: '127.0.0.1', port: s.port, hostname: s.hostname })),
     // Remote peers from parent config
     ...(parentConfig.discovery?.manualPeers ?? []),
   ];
@@ -144,7 +144,7 @@ export async function sessionStartCommand(argv: any) {
             'Content-Type': 'application/json',
             Authorization: `Bearer ${parentConfig.auth.apiKey}`,
           },
-          body: JSON.stringify({ address: '127.0.0.1', port }),
+          body: JSON.stringify({ address: '127.0.0.1', port, hostname: sessionConfig.server.hostname }),
         });
       } catch {
         // Sibling might not be responding yet

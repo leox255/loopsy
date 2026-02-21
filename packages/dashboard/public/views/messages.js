@@ -72,12 +72,20 @@ async function loadMessages() {
     let entries;
     if (portVal === 'all') {
       const data = await dashboardApi(`/messages/all?tab=${activeTab}`);
-      entries = (data.entries || []).sort((a, b) => b.updatedAt - a.updatedAt);
+      entries = data.entries || [];
     } else {
       const prefix = activeTab === 'inbox' ? 'inbox:' : 'outbox:';
       const data = await api(portVal, `/context?prefix=${encodeURIComponent(prefix)}`);
-      entries = (data.entries || []).sort((a, b) => b.updatedAt - a.updatedAt);
+      entries = data.entries || [];
     }
+
+    // Sort by envelope timestamp (latest first), fall back to updatedAt
+    entries.sort((a, b) => {
+      let tsA = a.updatedAt || 0, tsB = b.updatedAt || 0;
+      try { tsA = JSON.parse(a.value).ts || tsA; } catch {}
+      try { tsB = JSON.parse(b.value).ts || tsB; } catch {}
+      return tsB - tsA;
+    });
 
     if (entries.length === 0) {
       content.innerHTML = `<div class="empty">No ${activeTab} messages</div>`;
