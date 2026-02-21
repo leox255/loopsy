@@ -11,6 +11,8 @@ import { registerProxyRoutes } from './routes/proxy.js';
 import { registerSessionRoutes } from './routes/sessions.js';
 import { registerSseRoutes } from './routes/sse.js';
 import { registerStatusRoutes } from './routes/status.js';
+import { registerMessageRoutes } from './routes/messages.js';
+import { registerPeersAllRoute } from './routes/peers-all.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_DASHBOARD_PORT = 19540;
@@ -60,6 +62,8 @@ async function main() {
   registerSessionRoutes(app);
   registerSseRoutes(app, config.apiKey);
   registerStatusRoutes(app, config.apiKey);
+  registerMessageRoutes(app, config.apiKey, config.allowedKeys);
+  registerPeersAllRoute(app, config.apiKey);
 
   await app.listen({ port, host: '0.0.0.0' });
 

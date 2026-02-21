@@ -7,7 +7,7 @@ function mount(container) {
     <div class="section-header">Command Center</div>
     <div class="stats-row" id="stats-row">
       <div class="stat-card"><div class="stat-value" id="stat-sessions">—</div><div class="stat-label">Sessions</div></div>
-      <div class="stat-card"><div class="stat-value" id="stat-peers">—</div><div class="stat-label">Total Peers</div></div>
+      <div class="stat-card"><div class="stat-value" id="stat-peers">—</div><div class="stat-label">Network Peers</div></div>
       <div class="stat-card"><div class="stat-value" id="stat-context">—</div><div class="stat-label">Context Entries</div></div>
       <div class="stat-card"><div class="stat-value" id="stat-jobs">—</div><div class="stat-label">Active Jobs</div></div>
     </div>
@@ -22,6 +22,9 @@ function mount(container) {
     </div>
 
     <div class="session-grid" id="session-grid"></div>
+
+    <div class="section-header" style="margin-top:1.5rem;margin-bottom:0.75rem">Network Peers</div>
+    <div class="peer-grid" id="network-peer-grid"></div>
   `;
 
   document.getElementById('btn-fleet').addEventListener('click', startFleet);
@@ -38,21 +41,22 @@ function unmount() {
 async function refresh() {
   try {
     const data = await dashboardApi('/status/aggregate');
-    renderStats(data.sessions);
+    renderStats(data.sessions, data.network);
     renderGrid(data.sessions);
+    renderNetworkPeers(data.network);
   } catch (err) {
     document.getElementById('session-grid').innerHTML = `<div class="empty">Failed to load: ${escapeHtml(err.message)}</div>`;
   }
 }
 
-function renderStats(sessions) {
+function renderStats(sessions, network) {
   const running = sessions.filter(s => s.status === 'running' && !s.error);
-  const totalPeers = running.reduce((a, s) => a + (s.peers?.total ?? 0), 0);
+  const uniquePeers = network?.uniqueCount ?? 0;
   const totalCtx = running.reduce((a, s) => a + (s.context?.entries ?? 0), 0);
   const totalJobs = running.reduce((a, s) => a + (s.jobs?.active ?? 0), 0);
 
   document.getElementById('stat-sessions').textContent = running.length;
-  document.getElementById('stat-peers').textContent = totalPeers;
+  document.getElementById('stat-peers').textContent = `${network?.onlineCount ?? 0}/${uniquePeers}`;
   document.getElementById('stat-context').textContent = totalCtx;
   document.getElementById('stat-jobs').textContent = totalJobs;
 }
@@ -93,6 +97,39 @@ function renderGrid(sessions) {
             <span>uptime</span> ${formatUptime(s.uptime)}
           ` : ''}
           ${s.error ? `<br><span class="text-red">unreachable</span>` : ''}
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+function renderNetworkPeers(network) {
+  const grid = document.getElementById('network-peer-grid');
+  if (!grid) return;
+  const peers = network?.peers ?? [];
+
+  if (peers.length === 0) {
+    grid.innerHTML = '<div class="empty">No peers discovered</div>';
+    return;
+  }
+
+  grid.innerHTML = peers.map(p => {
+    const dotClass = p.status === 'online' ? 'online' : p.status === 'offline' ? 'offline' : 'unknown';
+    const platformIcon = p.platform === 'darwin' ? '&#63743;' : p.platform === 'win32' ? '&#8862;' : p.platform === 'linux' ? '&#9881;' : '&#63;';
+
+    return `
+      <div class="peer-card">
+        <div class="flex items-center justify-between mb-1">
+          <div class="flex items-center gap-sm">
+            <span class="status-dot ${dotClass}"></span>
+            <span class="font-mono text-sm" style="font-weight:600">${escapeHtml(p.hostname)}</span>
+          </div>
+          <span style="font-size:1.1rem">${platformIcon}</span>
+        </div>
+        <div class="font-mono text-xs text-muted" style="line-height:1.7">
+          ${escapeHtml(p.address)}:${p.port}<br>
+          version ${escapeHtml(p.version || '?')}<br>
+          last seen ${p.lastSeen ? new Date(p.lastSeen).toLocaleTimeString() : 'never'}
         </div>
       </div>
     `;

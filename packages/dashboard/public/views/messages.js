@@ -47,7 +47,9 @@ async function loadSessions() {
     const all = [];
     if (main && main.status === 'running') all.push(main);
     all.push(...sessions.filter(s => s.status === 'running'));
-    sel.innerHTML = all.map(s => `<option value="${s.port}" data-hostname="${escapeHtml(s.hostname)}">${escapeHtml(s.hostname)} :${s.port}</option>`).join('');
+    sel.innerHTML =
+      '<option value="all">All Sessions</option>' +
+      all.map(s => `<option value="${s.port}" data-hostname="${escapeHtml(s.hostname)}">${escapeHtml(s.hostname)} :${s.port}</option>`).join('');
     sel.addEventListener('change', () => { expandedMsgIdx = null; loadMessages(); });
     renderTab();
   } catch {}
@@ -62,14 +64,20 @@ async function renderTab() {
 }
 
 async function loadMessages() {
-  const port = document.getElementById('msg-session').value;
-  if (!port || activeTab === 'compose') return;
+  const portVal = document.getElementById('msg-session').value;
+  if (!portVal || activeTab === 'compose') return;
 
   const content = document.getElementById('msg-content');
   try {
-    const prefix = activeTab === 'inbox' ? 'inbox:' : 'outbox:';
-    const data = await api(port, `/context?prefix=${encodeURIComponent(prefix)}`);
-    const entries = (data.entries || []).sort((a, b) => b.updatedAt - a.updatedAt);
+    let entries;
+    if (portVal === 'all') {
+      const data = await dashboardApi(`/messages/all?tab=${activeTab}`);
+      entries = (data.entries || []).sort((a, b) => b.updatedAt - a.updatedAt);
+    } else {
+      const prefix = activeTab === 'inbox' ? 'inbox:' : 'outbox:';
+      const data = await api(portVal, `/context?prefix=${encodeURIComponent(prefix)}`);
+      entries = (data.entries || []).sort((a, b) => b.updatedAt - a.updatedAt);
+    }
 
     if (entries.length === 0) {
       content.innerHTML = `<div class="empty">No ${activeTab} messages</div>`;
@@ -113,8 +121,14 @@ function renderCompose() {
   content.innerHTML = `
     <div class="form-row">
       <div class="form-group">
-        <div class="form-label">Peer Hostname</div>
-        <input class="input" id="compose-peer" placeholder="e.g. kai">
+        <div class="form-label">Send From</div>
+        <select class="input" id="compose-from"></select>
+      </div>
+      <div class="form-group">
+        <div class="form-label">Send To</div>
+        <select class="input" id="compose-peer">
+          <option value="">Loading peers...</option>
+        </select>
       </div>
       <div class="form-group">
         <div class="form-label">Type</div>
@@ -136,49 +150,60 @@ function renderCompose() {
     <div id="compose-status" class="mt-1 text-sm"></div>
   `;
 
+  // Populate "from" dropdown with specific sessions (no "all")
+  const msgSel = document.getElementById('msg-session');
+  const fromSel = document.getElementById('compose-from');
+  fromSel.innerHTML = Array.from(msgSel.options)
+    .filter(o => o.value !== 'all')
+    .map(o => `<option value="${o.value}" data-hostname="${o.dataset?.hostname || ''}">${o.text}</option>`)
+    .join('');
+
+  loadPeersForCompose();
   document.getElementById('btn-send').addEventListener('click', sendMessage);
 }
 
+async function loadPeersForCompose() {
+  const sel = document.getElementById('compose-peer');
+  if (!sel) return;
+  try {
+    const data = await dashboardApi('/peers/all');
+    const peers = (data.peers || []).filter(p => p.status === 'online');
+    if (peers.length === 0) {
+      sel.innerHTML = '<option value="">No online peers</option>';
+    } else {
+      sel.innerHTML = peers.map(p =>
+        `<option value="${escapeHtml(p.hostname)}">${escapeHtml(p.hostname)} (${escapeHtml(p.address)}:${p.port})</option>`
+      ).join('');
+    }
+  } catch {
+    sel.innerHTML = '<option value="">Failed to load peers</option>';
+  }
+}
+
 async function sendMessage() {
-  const port = document.getElementById('msg-session').value;
-  const peerHostname = document.getElementById('compose-peer').value.trim();
+  const fromPort = document.getElementById('compose-from').value;
+  const toHostname = document.getElementById('compose-peer').value;
   const type = document.getElementById('compose-type').value;
   const body = document.getElementById('compose-body').value.trim();
   const statusEl = document.getElementById('compose-status');
 
-  if (!port || !peerHostname || !body) {
+  if (!fromPort || !toHostname || !body) {
     statusEl.innerHTML = '<span class="text-red">Fill in all fields</span>';
     return;
   }
 
-  // Get the session's hostname for 'from' field
-  const sel = document.getElementById('msg-session');
-  const opt = sel.options[sel.selectedIndex];
-  const myHostname = opt?.dataset?.hostname || 'unknown';
-
-  // Create message envelope
-  const id = `${Date.now()}-${myHostname}-${Math.random().toString(16).slice(2, 6)}`;
-  const envelope = { from: myHostname, to: peerHostname, ts: Date.now(), id, type, body };
-  const value = JSON.stringify(envelope);
-  const inboxKey = `inbox:${peerHostname}:${id}`;
-
-  // We need to find the peer's port — check context for peer info, or try direct
-  // For now, store in outbox locally and set inbox on same session (local messaging)
+  statusEl.innerHTML = '<span class="text-muted">Sending...</span>';
   try {
-    // Store outbox
-    await api(port, `/context/${encodeURIComponent('outbox:' + id)}`, {
-      method: 'PUT',
-      body: JSON.stringify({ value, ttl: 3600 }),
+    const result = await dashboardApi('/messages/send', {
+      method: 'POST',
+      body: JSON.stringify({ fromPort: parseInt(fromPort), toHostname, body, type }),
     });
-
-    // Try to set inbox on same port (works for local sessions)
-    await api(port, `/context/${encodeURIComponent(inboxKey)}`, {
-      method: 'PUT',
-      body: JSON.stringify({ value, ttl: 3600 }),
-    });
-
-    statusEl.innerHTML = `<span class="text-green">Sent! ID: ${escapeHtml(id)}</span>`;
-    document.getElementById('compose-body').value = '';
+    if (result.success) {
+      statusEl.innerHTML = `<span class="text-green">Sent! ID: ${escapeHtml(result.id)}</span>`;
+      document.getElementById('compose-body').value = '';
+    } else {
+      statusEl.innerHTML = `<span class="text-red">${escapeHtml(result.error || 'Unknown error')}</span>`;
+    }
   } catch (err) {
     statusEl.innerHTML = `<span class="text-red">Failed: ${escapeHtml(err.message)}</span>`;
   }
@@ -192,11 +217,9 @@ window.__toggleMsg = (idx) => {
   const entry = window.__msgEntries?.[idx];
   if (!entry) return;
 
-  // If clicking the already-expanded message, collapse it
   if (expandedMsgIdx === idx) {
     expandedMsgIdx = null;
   } else {
-    // Collapse previous if any
     if (expandedMsgIdx !== null) {
       const prevEl = document.getElementById(`msg-body-${expandedMsgIdx}`);
       const prevEntry = window.__msgEntries?.[expandedMsgIdx];
@@ -207,7 +230,6 @@ window.__toggleMsg = (idx) => {
         prevEl.textContent = truncate(prevBody, 80);
       }
     }
-    // Expand the clicked one
     expandedMsgIdx = idx;
   }
 

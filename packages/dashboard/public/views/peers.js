@@ -44,19 +44,27 @@ async function loadSessions() {
     const all = [];
     if (main && main.status === 'running') all.push(main);
     all.push(...sessions.filter(s => s.status === 'running'));
-    sel.innerHTML = all.map(s => `<option value="${s.port}">${escapeHtml(s.hostname)} :${s.port}</option>`).join('');
+    sel.innerHTML =
+      '<option value="all">All Sessions</option>' +
+      all.map(s => `<option value="${s.port}">${escapeHtml(s.hostname)} :${s.port}</option>`).join('');
     loadPeers();
   } catch {}
 }
 
 async function loadPeers() {
-  const port = document.getElementById('peers-session').value;
-  if (!port) return;
-
+  const portVal = document.getElementById('peers-session').value;
   const grid = document.getElementById('peer-grid');
+
   try {
-    const data = await api(port, '/peers');
-    const peers = data.peers || [];
+    let peers;
+    if (portVal === 'all') {
+      const data = await dashboardApi('/peers/all');
+      peers = data.peers || [];
+    } else {
+      if (!portVal) return;
+      const data = await api(portVal, '/peers');
+      peers = data.peers || [];
+    }
 
     if (peers.length === 0) {
       grid.innerHTML = '<div class="empty">No peers discovered</div>';
@@ -92,14 +100,19 @@ async function loadPeers() {
 }
 
 async function addPeer() {
-  const port = document.getElementById('peers-session').value;
+  const portVal = document.getElementById('peers-session').value;
+  if (portVal === 'all') {
+    alert('Select a specific session to add a peer');
+    return;
+  }
+
   const address = document.getElementById('peer-address').value.trim();
   const peerPort = parseInt(document.getElementById('peer-port').value) || 19532;
 
-  if (!port || !address) return;
+  if (!portVal || !address) return;
 
   try {
-    await api(port, '/peers', {
+    await api(portVal, '/peers', {
       method: 'POST',
       body: JSON.stringify({ address, port: peerPort }),
     });
