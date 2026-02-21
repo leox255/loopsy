@@ -26,6 +26,12 @@ When the Loopsy MCP server is running, you have these tools:
 - `loopsy_context_get` - Retrieve shared state from a peer
 - `loopsy_peer_status` - Check a peer's health
 - `loopsy_broadcast_context` - Set context on ALL peers
+- `loopsy_context_list` - List context entries with optional prefix filter
+- `loopsy_context_delete` - Delete a context entry by key
+- `loopsy_send_message` - Send a protocol-compliant message to a peer (handles envelope, inbox key, outbox copy, TTL)
+- `loopsy_check_inbox` - Check your inbox for new messages
+- `loopsy_ack_message` - Acknowledge a received message (see Known Issues)
+- `loopsy_check_ack` - Check if a peer has acknowledged your messages
 
 ## Messaging Protocol v1
 
@@ -168,6 +174,115 @@ DELETE http://localhost:19532/api/v1/context/inbox:leo:1771732800000-kai-a3f2
 - **Peer auth**: Use the peer's API key (from `auth.allowedKeys` in your config) in the Authorization header when writing to their machine
 - **Scalability**: This protocol works the same whether there are 2 peers or 20
 - **MCP tools**: If MCP tools (`loopsy_context_set`, etc.) are working, use them. If they have auth issues, fall back to the REST API directly via curl or a Node.js script
+
+## Task Queue Protocol v1
+
+Enables one Claude Code instance to delegate work to another machine and poll for results. Validated bidirectionally between macOS and Windows.
+
+### Context Key Pattern
+
+| Pattern | Stored On | Purpose |
+|---|---|---|
+| `task:<id>` | Assignee's machine | Task definition and status |
+
+### Task ID Format
+
+Use simple sequential IDs (`001`, `002`, ...) or timestamp-based IDs for uniqueness.
+
+### Task Payload
+
+```json
+{
+  "id": "001",
+  "from": "leo",
+  "assignee": "kai",
+  "description": "Gather system metrics and post as context key metrics:leo on leo's machine",
+  "status": "pending",
+  "result": null
+}
+```
+
+**Status lifecycle:** `pending` → `running` → `done` | `failed`
+
+### How to Create a Task
+
+1. **Create the JSON payload** with id, from, assignee, description, status="pending", result=null
+2. **POST to assignee's machine**: `loopsy_context_set` with key `task:<id>` on the assignee's machine
+3. **Send a message** to the assignee notifying them of the new task
+
+### How to Process a Task
+
+1. **Check for tasks**: `loopsy_context_list` with prefix `task:` on your machine, or `loopsy_context_get` for a specific task
+2. **Claim**: Update the task's status to `"running"` via `loopsy_context_set`
+3. **Execute**: Perform the work described in the task
+4. **Complete**: Update status to `"done"` and populate `result` field
+5. **Notify**: Send a message back to the creator confirming completion
+
+### How to Poll for Results
+
+1. **Poll**: `loopsy_context_get` with key `task:<id>` on the assignee's machine
+2. **Check status**: If `"done"`, read the `result` field
+3. **Poll interval**: Every 5-10 seconds for active tasks
+
+### Example: Full Task Cycle
+
+**Leo creates task for Kai:**
+```
+loopsy_context_set on kai's machine:
+  key: "task:001"
+  value: {"id":"001","from":"leo","assignee":"kai","description":"List top 5 processes by memory","status":"pending","result":null}
+  ttl: 3600
+```
+
+**Kai claims and completes:**
+```
+# 1. Kai updates status to running
+loopsy_context_set key="task:001" value={...,"status":"running",...}
+
+# 2. Kai does the work, then updates with result
+loopsy_context_set key="task:001" value={...,"status":"done","result":"MsMpEng.exe 431MB, node.exe 393MB, ..."}
+```
+
+**Leo polls and gets result:**
+```
+loopsy_context_get on kai's machine key="task:001"
+→ status: "done", result: "MsMpEng.exe 431MB, ..."
+```
+
+## Distributed Operations
+
+Loopsy enables coordinated work across machines. Here are validated patterns:
+
+### Distributed Grep
+
+Search across all machines' codebases and combine results.
+
+1. **Requester greps locally** and stores results as `dgrep-result:<id>:<hostname>` on their own machine
+2. **Requester asks peer** to grep and post results as `dgrep-result:<id>:<peer_hostname>` on the requester's machine
+3. **Alternative**: Use `loopsy_execute` to run grep on the peer's machine remotely
+4. **Requester reads both** result keys and combines into a unified report
+
+### Remote Command Execution
+
+Use `loopsy_execute` to run commands on peer machines. The command runs in the daemon's shell environment:
+- **macOS/Linux**: Standard shell (zsh/bash)
+- **Windows with Git Bash**: Commands use Unix-style paths (`/c/Users/...` not `C:\Users\...`)
+- **Denylist**: Commands in `execution.denylist` config are blocked (rm, shutdown, etc.)
+
+## Cross-Platform Notes
+
+Key learnings from macOS ↔ Windows communication:
+
+- **Windows paths with Git Bash**: The daemon runs in Git Bash, so use `/c/Users/...` not `C:\Users\...` when using `loopsy_execute`
+- **File transfer paths**: Both source and destination must be within `transfer.allowedPaths` in the respective machine's config. Check with `loopsy_peer_status` or ask the peer
+- **MCP auth**: The MCP server auto-loads the API key from `~/.loopsy/config.yaml` — no env vars needed
+- **Peer discovery**: Use `loopsy_list_peers` then `loopsy_peer_status` to get the peer's configured hostname (may differ from mDNS hostname)
+- **Shell differences**: When running commands remotely, be aware of the target machine's shell. Use `pwd` to discover the working directory first
+
+## Known Issues
+
+- `loopsy_ack_message` MCP tool returns HTTP 400 in some cases — workaround: use `loopsy_context_set` directly to set the `ack:<hostname>` key on the sender's machine
+- `loopsy_context_delete` may have similar issues — use REST API fallback if needed
 
 ## Project Structure
 
