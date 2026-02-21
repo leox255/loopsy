@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { listSessions } from '../session-manager.js';
+import { fetchAndDeduplicatePeers } from './peer-utils.js';
 
 const ALLOWED_PORT_MIN = 19532;
 const ALLOWED_PORT_MAX = 19640;
@@ -89,21 +90,15 @@ export function registerMessageRoutes(
       }
     } catch {}
 
-    // Find target peer
+    // Find target peer using deduplicated peer list (resolves 127.0.0.1 hostnames)
     let peerAddress: string | null = null;
     let peerPort: number | null = null;
     try {
-      const peersRes = await fetch(`http://127.0.0.1:${fromPort}/api/v1/peers`, {
-        headers: { Authorization: `Bearer ${apiKey}` },
-        signal: AbortSignal.timeout(3000),
-      });
-      if (peersRes.ok) {
-        const peersData = (await peersRes.json()) as { peers?: any[] };
-        const peer = (peersData.peers || []).find((p: any) => p.hostname === toHostname);
-        if (peer) {
-          peerAddress = peer.address;
-          peerPort = peer.port;
-        }
+      const allPeers = await fetchAndDeduplicatePeers(apiKey);
+      const peer = allPeers.find((p) => p.hostname === toHostname);
+      if (peer) {
+        peerAddress = peer.address;
+        peerPort = peer.port;
       }
     } catch {}
 
