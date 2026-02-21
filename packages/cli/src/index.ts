@@ -20,6 +20,7 @@ import {
   sessionListCommand,
   sessionStatusCommand,
 } from './commands/session.js';
+import { dashboardCommand } from './commands/dashboard.js';
 
 yargs(hideBin(process.argv))
   .scriptName('loopsy')
@@ -142,6 +143,12 @@ yargs(hideBin(process.argv))
         )
         .demandCommand(1),
     sessionCommand,
+  )
+  .command(
+    'dashboard',
+    'Start the web dashboard for monitoring and control',
+    (yargs) => yargs.option('port', { type: 'number', alias: 'p', default: 19540, describe: 'Dashboard port' }),
+    dashboardCommand,
   )
   .demandCommand(1, 'You need at least one command')
   .help()

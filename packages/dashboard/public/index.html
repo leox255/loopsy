@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="theme-color" content="#050508">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>Loopsy // Dashboard</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="app">
+    <!-- Header -->
+    <header class="header">
+      <div class="logo">LOOPSY <span style="color:var(--text-muted)">//</span> DASHBOARD</div>
+      <div class="header-meta" id="header-time"></div>
+    </header>
+
+    <!-- Sidebar nav (desktop) -->
+    <nav class="nav" id="sidebar-nav">
+      <div class="nav-item active" data-view="overview">
+        <span class="nav-icon">&#9632;</span> Overview
+      </div>
+      <div class="nav-item" data-view="terminal">
+        <span class="nav-icon">&#9654;</span> Terminal
+      </div>
+      <div class="nav-item" data-view="context">
+        <span class="nav-icon">&#8942;</span> Context
+      </div>
+      <div class="nav-item" data-view="messages">
+        <span class="nav-icon">&#9993;</span> Messages
+      </div>
+      <div class="nav-item" data-view="peers">
+        <span class="nav-icon">&#8644;</span> Peers
+      </div>
+    </nav>
+
+    <!-- Main content -->
+    <main class="main" id="main"></main>
+  </div>
+
+  <!-- Mobile bottom nav -->
+  <nav class="mobile-nav" id="mobile-nav">
+    <div class="mobile-nav-item active" data-view="overview">
+      <span class="mobile-nav-icon">&#9632;</span>
+      Overview
+    </div>
+    <div class="mobile-nav-item" data-view="terminal">
+      <span class="mobile-nav-icon">&#9654;</span>
+      Terminal
+    </div>
+    <div class="mobile-nav-item" data-view="context">
+      <span class="mobile-nav-icon">&#8942;</span>
+      Context
+    </div>
+    <div class="mobile-nav-item" data-view="messages">
+      <span class="mobile-nav-icon">&#9993;</span>
+      Messages
+    </div>
+    <div class="mobile-nav-item" data-view="peers">
+      <span class="mobile-nav-icon">&#8644;</span>
+      Peers
+    </div>
+  </nav>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
