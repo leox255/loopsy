@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { listSessions } from '../session-manager.js';
 import { fetchAndDeduplicatePeers } from './peer-utils.js';
 
-export function registerStatusRoutes(app: FastifyInstance, apiKey: string) {
+export function registerStatusRoutes(app: FastifyInstance, apiKey: string, allowedKeys?: Record<string, string>) {
   app.get('/dashboard/api/status/aggregate', async () => {
     const { main, sessions } = await listSessions();
     const allSessions = main ? [main, ...sessions] : sessions;
@@ -21,7 +21,7 @@ export function registerStatusRoutes(app: FastifyInstance, apiKey: string) {
           return { ...session, ...(data as object) };
         }),
       ),
-      fetchAndDeduplicatePeers(apiKey).catch(() => []),
+      fetchAndDeduplicatePeers(apiKey, allowedKeys).catch(() => []),
     ]);
 
     const enriched = statusResults.map((r, i) =>

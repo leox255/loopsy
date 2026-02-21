@@ -94,7 +94,7 @@ export function registerMessageRoutes(
     let peerAddress: string | null = null;
     let peerPort: number | null = null;
     try {
-      const allPeers = await fetchAndDeduplicatePeers(apiKey);
+      const allPeers = await fetchAndDeduplicatePeers(apiKey, allowedKeys);
       const peer = allPeers.find((p) => p.hostname === toHostname);
       if (peer) {
         peerAddress = peer.address;

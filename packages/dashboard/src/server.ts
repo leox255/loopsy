@@ -61,9 +61,9 @@ async function main() {
   registerProxyRoutes(app, config.apiKey);
   registerSessionRoutes(app);
   registerSseRoutes(app, config.apiKey);
-  registerStatusRoutes(app, config.apiKey);
+  registerStatusRoutes(app, config.apiKey, config.allowedKeys);
   registerMessageRoutes(app, config.apiKey, config.allowedKeys);
-  registerPeersAllRoute(app, config.apiKey);
+  registerPeersAllRoute(app, config.apiKey, config.allowedKeys);
 
   await app.listen({ port, host: '0.0.0.0' });
 
