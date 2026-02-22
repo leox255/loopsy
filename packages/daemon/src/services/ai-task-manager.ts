@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { realpathSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { tmpdir, homedir } from 'node:os';
 import * as pty from 'node-pty';
 import { which } from '../utils/which.js';
 import type {
@@ -98,6 +98,9 @@ export class AiTaskManager {
 
     if (params.permissionMode) {
       args.push('--permission-mode', params.permissionMode);
+      if (params.permissionMode === 'bypassPermissions') {
+        args.push('--dangerously-skip-permissions');
+      }
     }
     if (params.model) {
       args.push('--model', params.model);
@@ -130,34 +133,47 @@ export class AiTaskManager {
     env.LOOPSY_DAEMON_PORT = String(this.daemonPort);
     env.LOOPSY_API_KEY = this.apiKey;
 
-    // Create a per-task temp directory with .claude/settings.local.json
-    // containing the PreToolUse hook config with task-specific args baked in.
-    // This ensures the hook receives the task ID even though Claude Code
-    // doesn't propagate parent env vars to hook subprocesses.
-    const hookScriptPath = this.getHookScriptPath();
-    const taskCwd = params.cwd || process.cwd();
+    const isBypass = params.permissionMode === 'bypassPermissions';
+    const taskCwd = params.cwd || homedir();
     const taskTmpDir = join(tmpdir(), `loopsy-task-${taskId}`);
-    const claudeSettingsDir = join(taskTmpDir, '.claude');
-    mkdirSync(claudeSettingsDir, { recursive: true });
-    writeFileSync(join(claudeSettingsDir, 'settings.local.json'), JSON.stringify({
-      hooks: {
-        PreToolUse: [{
-          matcher: '',
-          hooks: [{
-            type: 'command',
-            command: `node ${hookScriptPath} ${taskId} ${this.daemonPort} ${this.apiKey}`,
-            timeout: 300,
-          }],
-        }],
-      },
-    }, null, 2));
-    // Also write a CLAUDE.md that tells Claude the actual working directory
-    writeFileSync(join(taskTmpDir, 'CLAUDE.md'),
-      `Your actual working directory is: ${taskCwd}\n` +
-      `Always use absolute paths rooted at ${taskCwd} for all file operations.\n`);
+    let spawnCwd: string;
 
-    // Grant access to the actual working directory
-    args.push('--add-dir', taskCwd);
+    if (isBypass) {
+      // Bypass mode: no hook needed — run directly in the actual cwd.
+      // The hook would register permission requests that nobody approves,
+      // causing a deadlock. Skip it entirely.
+      mkdirSync(taskTmpDir, { recursive: true }); // still needed for cleanup tracking
+      spawnCwd = taskCwd;
+    } else {
+      // Hook mode: cwd = taskTmpDir so Claude discovers .claude/settings.local.json
+      // containing the PreToolUse hook config with task-specific args baked in.
+      const hookScriptPath = this.getHookScriptPath();
+      const claudeSettingsDir = join(taskTmpDir, '.claude');
+      mkdirSync(claudeSettingsDir, { recursive: true });
+      writeFileSync(join(claudeSettingsDir, 'settings.local.json'), JSON.stringify({
+        hooks: {
+          PreToolUse: [{
+            matcher: '',
+            hooks: [{
+              type: 'command',
+              command: `node ${hookScriptPath} ${taskId} ${this.daemonPort} ${this.apiKey}`,
+              timeout: 300,
+            }],
+          }],
+        },
+      }, null, 2));
+      // Write a CLAUDE.md that tells Claude the actual working directory
+      writeFileSync(join(taskTmpDir, 'CLAUDE.md'),
+        `Your actual working directory is: ${taskCwd}\n` +
+        `Always use absolute paths rooted at ${taskCwd} for all file operations.\n`);
+
+      // Grant access to the actual cwd and user's home directory
+      args.push('--add-dir', taskCwd);
+      if (homedir() !== taskCwd) {
+        args.push('--add-dir', homedir());
+      }
+      spawnCwd = taskTmpDir;
+    }
 
     // Use node-pty to spawn with a pseudo-TTY
     // Claude CLI (Bun runtime) buffers stdout when connected to a pipe;
@@ -181,7 +197,7 @@ export class AiTaskManager {
       name: 'xterm-256color',
       cols: process.platform === 'win32' ? 9999 : 32000, // ConPTY needs wide cols to avoid JSON line wrapping
       rows: 50,
-      cwd: taskTmpDir,
+      cwd: spawnCwd,
       env,
     });
 
