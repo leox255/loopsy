@@ -17,6 +17,8 @@ import { JobManager } from './services/job-manager.js';
 import { ContextStore } from './services/context-store.js';
 import { AuditLogger } from './services/audit-logger.js';
 import { AiTaskManager } from './services/ai-task-manager.js';
+import { TlsManager } from './services/tls-manager.js';
+import { registerPairRoutes } from './routes/pair.js';
 
 export interface DaemonServer {
   start(): Promise<void>;
@@ -61,13 +63,25 @@ export async function createDaemon(config: LoopsyConfig): Promise<DaemonServer> 
   const auditLogger = new AuditLogger(dataDir);
   await auditLogger.init();
 
-  // Create Fastify server
+  // TLS setup
+  const tlsManager = new TlsManager(dataDir);
+  let httpsOpts: { key: string; cert: string } | null = null;
+  let tlsFingerprint: string | undefined;
+
+  if (config.tls?.enabled) {
+    const tls = await tlsManager.ensureCerts(identity.hostname);
+    httpsOpts = { key: tls.key, cert: tls.cert };
+    tlsFingerprint = tls.fingerprint;
+  }
+
+  // Create Fastify server (HTTPS if TLS enabled, HTTP otherwise)
   const app = Fastify({
     logger: {
       level: config.logging.level,
     },
     requestIdHeader: 'x-request-id',
     genReqId: () => randomUUID(),
+    ...(httpsOpts ? { https: httpsOpts } : {}),
   });
 
   await app.register(fastifyCors, { origin: true });
@@ -97,17 +111,30 @@ export async function createDaemon(config: LoopsyConfig): Promise<DaemonServer> 
   registerContextRoutes(app, contextStore);
   registerPeerRoutes(app, identity, registry);
   registerAiTaskRoutes(app, aiTaskManager);
+  registerPairRoutes(app, {
+    hostname: identity.hostname,
+    apiKey: config.auth.apiKey,
+    tlsManager,
+    dataDir,
+  });
 
   // Health checker (always enabled so manual peers and sessions get checked)
+  // Try HTTPS first if TLS is enabled, fall back to HTTP
   const healthChecker = new HealthChecker(registry, async (peer) => {
-    try {
-      const res = await fetch(`http://${peer.address}:${peer.port}/api/v1/health`, {
-        signal: AbortSignal.timeout(5000),
-      });
-      return res.ok;
-    } catch {
-      return false;
+    const protocols = config.tls?.enabled ? ['https', 'http'] : ['http'];
+    for (const proto of protocols) {
+      try {
+        const res = await fetch(`${proto}://${peer.address}:${peer.port}/api/v1/health`, {
+          signal: AbortSignal.timeout(5000),
+          // @ts-ignore — Node fetch accepts rejectUnauthorized for self-signed certs
+          ...(proto === 'https' ? { dispatcher: undefined } : {}),
+        });
+        if (res.ok) return true;
+      } catch {
+        // Try next protocol
+      }
     }
+    return false;
   });
 
   // mDNS discovery (optional — disabled for sessions to avoid conflicts)
@@ -142,7 +169,11 @@ export async function createDaemon(config: LoopsyConfig): Promise<DaemonServer> 
   return {
     async start() {
       await app.listen({ port: config.server.port, host: config.server.host });
-      app.log.info({ nodeId: identity.nodeId, port: config.server.port }, 'Loopsy daemon started');
+      const proto = httpsOpts ? 'https' : 'http';
+      app.log.info(
+        { nodeId: identity.nodeId, port: config.server.port, tls: !!httpsOpts, fingerprint: tlsFingerprint },
+        `Loopsy daemon started (${proto})`,
+      );
 
       discovery?.start();
       healthChecker?.start();
@@ -161,7 +192,8 @@ export async function createDaemon(config: LoopsyConfig): Promise<DaemonServer> 
     },
 
     getAddress() {
-      return `http://${config.server.host === '0.0.0.0' ? '127.0.0.1' : config.server.host}:${config.server.port}`;
+      const proto = httpsOpts ? 'https' : 'http';
+      return `${proto}://${config.server.host === '0.0.0.0' ? '127.0.0.1' : config.server.host}:${config.server.port}`;
     },
   };
 }

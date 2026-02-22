@@ -21,6 +21,10 @@ import {
   sessionStatusCommand,
 } from './commands/session.js';
 import { dashboardCommand } from './commands/dashboard.js';
+import { enableCommand, disableCommand, serviceStatusCommand } from './commands/service.js';
+import { mcpAddCommand, mcpRemoveCommand, mcpStatusCommand } from './commands/mcp.js';
+import { pairCommand } from './commands/pair.js';
+import { doctorCommand } from './commands/doctor.js';
 
 yargs(hideBin(process.argv))
   .scriptName('loopsy')
@@ -150,6 +154,28 @@ yargs(hideBin(process.argv))
     (yargs) => yargs.option('port', { type: 'number', alias: 'p', default: 19540, describe: 'Dashboard port' }),
     dashboardCommand,
   )
+  .command(
+    'pair [address]',
+    'Pair with another machine (run without address to wait, or with address to connect)',
+    (yargs) =>
+      yargs.positional('address', { type: 'string', describe: 'Peer address (host or host:port)' }),
+    pairCommand,
+  )
+  .command('enable', 'Register daemon as a system service (auto-start on login)', {}, enableCommand)
+  .command('disable', 'Unregister daemon from system service', {}, disableCommand)
+  .command('service-status', 'Check system service registration status', {}, serviceStatusCommand)
+  .command(
+    'mcp',
+    'Manage MCP server registration with Claude Code',
+    (yargs) =>
+      yargs
+        .command('add', 'Register MCP server with Claude Code', {}, mcpAddCommand)
+        .command('remove', 'Unregister MCP server from Claude Code', {}, mcpRemoveCommand)
+        .command('status', 'Check MCP server registration', {}, mcpStatusCommand)
+        .demandCommand(1),
+    () => {},
+  )
+  .command('doctor', 'Run health checks on your Loopsy installation', {}, doctorCommand)
   .demandCommand(1, 'You need at least one command')
   .help()
   .version('1.0.0')

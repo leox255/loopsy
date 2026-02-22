@@ -142,12 +142,7 @@ export interface LoopsyConfig {
     apiKey: string;
     allowedKeys: Record<string, string>;
   };
-  tls?: {
-    enabled: boolean;
-    cert?: string;
-    key?: string;
-    ca?: string;
-  };
+  tls?: TlsConfig;
   execution: {
     denylist: string[];
     allowlist?: string[];
@@ -282,4 +277,56 @@ export interface AiTaskStreamEvent {
   taskId: string;
   timestamp: number;
   data: unknown;
+}
+
+// ── TLS & Pairing ──
+
+/** TLS configuration in config.yaml */
+export interface TlsConfig {
+  enabled: boolean;
+  certPath?: string;
+  keyPath?: string;
+  /** Map of peer hostname → SHA-256 cert fingerprint (hex) for pinning */
+  pinnedCerts?: Record<string, string>;
+}
+
+/** Info about a peer's TLS certificate */
+export interface PeerCertInfo {
+  fingerprint: string;  // SHA-256 hex
+  hostname: string;
+  validFrom: string;
+  validTo: string;
+}
+
+/** Pairing session state (server side) */
+export interface PairingSession {
+  inviteCode: string;
+  publicKey: string;      // ECDH public key (base64)
+  expiresAt: number;
+  state: 'waiting' | 'key_exchanged' | 'completed' | 'expired';
+  peerPublicKey?: string;
+  sas?: string;           // Short Authentication String (6 digits)
+}
+
+/** Pairing initiation request from peer */
+export interface PairingInitRequest {
+  publicKey: string;     // ECDH public key (base64)
+  inviteCode: string;
+  hostname: string;
+  apiKey: string;        // The peer's API key to add to allowedKeys
+  certFingerprint?: string;
+}
+
+/** Pairing initiation response */
+export interface PairingInitResponse {
+  publicKey: string;
+  hostname: string;
+  apiKey: string;
+  certFingerprint?: string;
+  sas: string;           // 6-digit SAS for verification
+}
+
+/** Pairing confirmation request */
+export interface PairingConfirmRequest {
+  confirmed: boolean;
 }

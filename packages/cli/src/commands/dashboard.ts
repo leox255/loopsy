@@ -1,14 +1,10 @@
 import { spawn } from 'node:child_process';
-import { resolve, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
+import { dashboardServerPath } from '../package-root.js';
 
 export async function dashboardCommand(argv: any) {
   const port = argv.port || 19540;
 
-  // Resolve the dashboard server entry point
-  const serverPath = resolve(__dirname, '..', '..', '..', 'dashboard', 'dist', 'server.js');
+  const serverPath = dashboardServerPath();
 
   const child = spawn('node', [serverPath, '--port', String(port)], {
     stdio: 'inherit',

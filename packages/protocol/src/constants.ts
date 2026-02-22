@@ -72,3 +72,19 @@ export const DEFAULT_AI_TASK_TIMEOUT = 1_800_000;
 
 /** Max event buffer per AI task (for reconnecting clients) */
 export const AI_TASK_EVENT_BUFFER_SIZE = 500;
+
+/** TLS certificate directory under CONFIG_DIR */
+export const TLS_DIR = 'tls';
+
+/** TLS certificate file names */
+export const TLS_CERT_FILE = 'cert.pem';
+export const TLS_KEY_FILE = 'key.pem';
+
+/** Pairing invite code length */
+export const PAIRING_CODE_LENGTH = 6;
+
+/** Pairing session timeout (5 minutes) */
+export const PAIRING_TIMEOUT = 300_000;
+
+/** Pairing endpoint path */
+export const PAIRING_PATH = '/api/v1/pair';

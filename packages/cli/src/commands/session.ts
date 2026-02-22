@@ -1,13 +1,11 @@
 import { spawn } from 'node:child_process';
 import { readFile, writeFile, mkdir, readdir, unlink } from 'node:fs/promises';
-import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import { homedir, hostname as osHostname } from 'node:os';
 import { parse as parseYaml, stringify as toYaml } from 'yaml';
 import { createServer } from 'node:net';
 import { CONFIG_DIR, CONFIG_FILE, SESSIONS_DIR, DEFAULT_PORT } from '@loopsy/protocol';
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
+import { daemonMainPath } from '../package-root.js';
 const LOOPSY_DIR = join(homedir(), CONFIG_DIR);
 const SESSIONS_PATH = join(LOOPSY_DIR, SESSIONS_DIR);
 
@@ -120,7 +118,7 @@ export async function sessionStartCommand(argv: any) {
   await writeFile(join(sessionDir, CONFIG_FILE), toYaml(sessionConfig));
 
   // Spawn daemon with --data-dir
-  const daemonPath = join(__dirname, '..', '..', '..', 'daemon', 'dist', 'main.js');
+  const daemonPath = daemonMainPath();
   const child = spawn('node', [daemonPath, '--data-dir', sessionDir], {
     detached: true,
     stdio: 'ignore',
