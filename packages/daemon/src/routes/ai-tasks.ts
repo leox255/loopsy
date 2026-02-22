@@ -157,12 +157,17 @@ export function registerAiTaskRoutes(app: FastifyInstance, aiTaskManager: AiTask
     return { events, count: events.length };
   });
 
-  // Cancel a task
+  // Cancel a running task
   app.delete<{ Params: { taskId: string } }>('/api/v1/ai-tasks/:taskId', async (request, reply) => {
     const success = aiTaskManager.cancel(request.params.taskId);
     if (!success) {
-      reply.code(404);
-      return { error: 'Task not found or already completed' };
+      // Maybe it's a completed task — try deleting from recent
+      const deleted = aiTaskManager.deleteTask(request.params.taskId);
+      if (!deleted) {
+        reply.code(404);
+        return { error: 'Task not found' };
+      }
+      return { success: true, taskId: request.params.taskId, deleted: true };
     }
     return { success: true, taskId: request.params.taskId };
   });

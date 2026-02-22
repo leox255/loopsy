@@ -705,6 +705,13 @@ select option { background: var(--bg-base); color: var(--text-primary); }
 .ai-stderr { color: var(--red); }
 .ai-system { color: var(--text-muted); font-style: italic; }
 .ai-result { color: var(--green); border: 1px solid rgba(0,255,136,0.25); border-radius: 4px; padding: 0.5rem; margin: 4px 0; background: rgba(0,255,136,0.03); }
+.ai-line code { background: rgba(255,255,255,0.06); padding: 0.1em 0.35em; border-radius: 3px; font-size: 0.95em; }
+.ai-line pre { background: rgba(255,255,255,0.04); border: 1px solid var(--border-dim); border-radius: 4px; padding: 0.5em; margin: 0.3em 0; overflow-x: auto; }
+.ai-line pre code { background: none; padding: 0; }
+.ai-line strong { color: var(--text-primary); }
+.followup-bar { display: flex; flex-direction: column; gap: 0.5rem; margin-top: 0.75rem; }
+.followup-bar textarea { width: 100%; min-height: 2.5rem; resize: vertical; box-sizing: border-box; }
+.followup-actions { display: flex; justify-content: flex-end; }
 
 .approval-banner {
   background: var(--bg-elevated);

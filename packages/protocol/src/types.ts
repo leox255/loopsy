@@ -223,6 +223,7 @@ export interface AiTaskParams {
   allowedTools?: string[];
   disallowedTools?: string[];
   additionalArgs?: string[];
+  resumeSessionId?: string;
 }
 
 /** AI task info tracked by the daemon */
@@ -239,6 +240,7 @@ export interface AiTaskInfo {
   error?: string;
   model?: string;
   pendingApproval?: AiTaskApprovalRequest;
+  sessionId?: string;
 }
 
 /** A permission request from Claude needing human approval */

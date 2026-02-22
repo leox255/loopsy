@@ -111,6 +111,7 @@ export const AiTaskParamsSchema = z.object({
   allowedTools: z.array(z.string()).optional(),
   disallowedTools: z.array(z.string()).optional(),
   additionalArgs: z.array(z.string()).optional(),
+  resumeSessionId: z.string().optional(),
 });
 
 export const AiTaskApprovalResponseSchema = z.object({

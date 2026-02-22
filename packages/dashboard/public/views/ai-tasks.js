@@ -4,6 +4,7 @@ let refreshTimer = null;
 let selectedTask = null; // { taskId, port, address }
 let eventSource = null;
 let taskFinished = false; // true once we receive an exit event
+let lastSessionId = null; // captured from result event for follow-ups
 
 function mount(container) {
   container.innerHTML = `
@@ -243,6 +244,7 @@ async function renderTaskStream() {
     </div>
     <div class="ai-terminal" id="ai-output"></div>
     <div id="ai-approval" style="display:none"></div>
+    <div id="ai-followup" style="display:none"></div>
   `;
 
   document.getElementById('btn-back-tasks').addEventListener('click', () => {
@@ -268,6 +270,7 @@ async function renderTaskStream() {
     }
   } catch {}
 
+  lastSessionId = null;
   connectStream(taskId, port, selectedTask.address);
 }
 
@@ -372,13 +375,14 @@ function handleStreamEvent(event) {
       break;
     case 'result': {
       const parts = [];
-      if (data?.text) parts.push(data.text);
       if (data?.cost) {
-        parts.push(`\nCost: $${data.cost.input || '?'} in + $${data.cost.output || '?'} out`);
+        parts.push(`Cost: $${data.cost.input || '?'} in + $${data.cost.output || '?'} out`);
       }
-      if (data?.duration) parts.push(`Duration: ${data.duration}`);
-      appendLine('result', parts.join('\n'), true);
+      if (data?.duration) parts.push(`Duration: ${formatDuration(data.duration)}`);
+      if (data?.sessionId) lastSessionId = data.sessionId;
+      if (parts.length > 0) appendLine('result', parts.join('  \u00b7  '));
       updateStatusBadge('completed');
+      showFollowUpInput();
       break;
     }
     case 'exit':
@@ -390,6 +394,8 @@ function handleStreamEvent(event) {
       // Hide any stale approval banner
       const approvalEl = document.getElementById('ai-approval');
       if (approvalEl) { approvalEl.style.display = 'none'; approvalEl.innerHTML = ''; }
+      // Show follow-up input for completed tasks
+      if (data?.exitCode === 0) showFollowUpInput();
       closeStream();
       break;
     default:
@@ -475,16 +481,109 @@ function closeStream() {
   }
 }
 
+// ── Follow-up Input ──
+
+function showFollowUpInput() {
+  if (!selectedTask) return;
+  const el = document.getElementById('ai-followup');
+  if (!el) return;
+  el.style.display = 'block';
+  el.innerHTML = `
+    <div class="followup-bar">
+      <textarea class="textarea input" id="followup-prompt" rows="2" placeholder="Send a follow-up message..."></textarea>
+      <div class="followup-actions"><button class="btn btn-primary btn-sm" id="btn-followup">Send</button></div>
+    </div>
+  `;
+  document.getElementById('btn-followup').addEventListener('click', sendFollowUp);
+  document.getElementById('followup-prompt').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendFollowUp(); }
+  });
+  el.scrollIntoView({ behavior: 'smooth' });
+}
+
+async function sendFollowUp() {
+  if (!selectedTask) return;
+  const promptEl = document.getElementById('followup-prompt');
+  const prompt = promptEl?.value?.trim();
+  if (!prompt) return;
+
+  const { port, address } = selectedTask;
+  const btnEl = document.getElementById('btn-followup');
+  if (btnEl) btnEl.disabled = true;
+
+  try {
+    const body = {
+      targetPort: port,
+      targetAddress: address,
+      prompt,
+      permissionMode: 'default',
+    };
+    if (lastSessionId) body.resumeSessionId = lastSessionId;
+
+    const result = await dashboardApi('/ai-tasks/dispatch', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+
+    if (result.taskId) {
+      // Hide follow-up bar, switch to new task stream
+      const el = document.getElementById('ai-followup');
+      if (el) { el.style.display = 'none'; el.innerHTML = ''; }
+      selectedTask = { taskId: result.taskId, port, address };
+      appendLine('system', `Follow-up dispatched: ${result.taskId.slice(0, 8)}...`);
+      taskFinished = false;
+      connectStream(result.taskId, port, address);
+    }
+  } catch (err) {
+    appendLine('stderr', `Follow-up failed: ${err.message}`);
+    if (btnEl) btnEl.disabled = false;
+  }
+}
+
+function formatDuration(ms) {
+  if (!ms || ms < 0) return '—';
+  const s = Math.floor(ms / 1000);
+  const m = Math.floor(s / 60);
+  const h = Math.floor(m / 60);
+  if (h > 0) return `${h}h ${m % 60}m ${s % 60}s`;
+  if (m > 0) return `${m}m ${s % 60}s`;
+  return `${s}s`;
+}
+
 // ── Terminal Helpers ──
+
+function renderMarkdown(text) {
+  // Escape HTML first, then apply markdown transformations
+  let html = escapeHtml(text);
+  // Code blocks (``` ... ```)
+  html = html.replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>');
+  // Inline code
+  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+  // Bold (**text** or __text__)
+  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  html = html.replace(/__(.+?)__/g, '<strong>$1</strong>');
+  // Italic (*text* or _text_) — but not inside words with underscores
+  html = html.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+  // Headers (# text)
+  html = html.replace(/^### (.+)$/gm, '<strong style="font-size:1em">$1</strong>');
+  html = html.replace(/^## (.+)$/gm, '<strong style="font-size:1.05em">$1</strong>');
+  html = html.replace(/^# (.+)$/gm, '<strong style="font-size:1.1em">$1</strong>');
+  // Bullet lists
+  html = html.replace(/^[-*] (.+)$/gm, '&bull; $1');
+  // Numbered lists
+  html = html.replace(/^\d+\. (.+)$/gm, '&middot; $1');
+  // Line breaks
+  html = html.replace(/\n/g, '<br>');
+  return html;
+}
 
 function appendLine(cls, text, isResult = false) {
   const output = document.getElementById('ai-output');
   if (!output) return;
   const line = document.createElement('div');
   line.className = `ai-line ai-${cls}`;
-  if (isResult) {
-    // For result blocks, preserve newlines as HTML
-    line.textContent = text;
+  if (isResult || cls === 'stdout') {
+    line.innerHTML = renderMarkdown(text);
     line.style.whiteSpace = 'pre-wrap';
   } else {
     line.textContent = text;

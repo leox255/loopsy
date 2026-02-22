@@ -94,7 +94,12 @@ export class AiTaskManager {
     const now = Date.now();
 
     // Build CLI args
-    const args = ['-p', params.prompt, '--output-format', 'stream-json', '--verbose', '--no-session-persistence'];
+    const args = ['-p', params.prompt, '--output-format', 'stream-json', '--verbose'];
+
+    // Resume an existing conversation if sessionId provided
+    if (params.resumeSessionId) {
+      args.push('--resume', params.resumeSessionId);
+    }
 
     if (params.permissionMode && params.permissionMode !== 'default') {
       args.push('--permission-mode', params.permissionMode);
@@ -277,10 +282,9 @@ export class AiTaskManager {
       }
       this.emit(task, { type: 'exit', taskId, timestamp: Date.now(), data: { exitCode, signal } });
 
-      // Move to recent tasks (preserve event buffer) and clean up
+      // Move to completed tasks (preserve event buffer) — kept until explicitly deleted
       this.recentTasks.set(taskId, { info: { ...info }, eventBuffer: [...task.eventBuffer] });
       this.tasks.delete(taskId);
-      setTimeout(() => this.recentTasks.delete(taskId), 300_000); // keep 5 min
 
       // Clean up per-task temp directory
       try { rmSync(taskTmpDir, { recursive: true, force: true }); } catch {}
@@ -438,6 +442,15 @@ export class AiTaskManager {
     }
   }
 
+  deleteTask(taskId: string): boolean {
+    // Delete a completed/failed task from the recent tasks store
+    if (this.recentTasks.has(taskId)) {
+      this.recentTasks.delete(taskId);
+      return true;
+    }
+    return false;
+  }
+
   /**
    * Get the absolute path to the permission hook script.
    * Used by external callers (e.g. hook installer).
@@ -489,7 +502,11 @@ export class AiTaskManager {
       // a second event from stream-json would create duplicate approval
       // banners with mismatched requestIds, causing approvals to fail.
     } else if (cliType === 'result') {
-      this.emit(task, { type: 'result', taskId, timestamp: ts, data: { text: parsed.result, cost: parsed.total_cost_usd, duration: parsed.duration_ms } });
+      // Capture session ID for follow-up conversations
+      if (parsed.session_id) {
+        task.info.sessionId = parsed.session_id;
+      }
+      this.emit(task, { type: 'result', taskId, timestamp: ts, data: { text: parsed.result, cost: parsed.total_cost_usd, duration: parsed.duration_ms, sessionId: parsed.session_id } });
     } else if (cliType === 'error') {
       task.info.error = parsed.message || parsed.error || JSON.stringify(parsed);
       this.emit(task, { type: 'error', taskId, timestamp: ts, data: parsed.message || parsed.error || parsed });
