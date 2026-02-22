@@ -1,7 +1,7 @@
 import { createECDH, createHash } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { homedir, hostname as osHostname } from 'node:os';
+import { homedir, hostname as osHostname, networkInterfaces } from 'node:os';
 import { createInterface } from 'node:readline';
 import { parse as parseYaml, stringify as toYaml } from 'yaml';
 import { CONFIG_DIR, CONFIG_FILE, DEFAULT_PORT } from '@loopsy/protocol';
@@ -39,11 +39,20 @@ async function pairAsWaiter() {
   const result = await daemonRequest('/pair/start', { method: 'POST' });
   const expiresIn = Math.round((result.expiresAt - Date.now()) / 1000);
 
+  // Show local IP addresses for easy pairing
+  const localIps = getLocalIps();
+
   console.log(`Invite code: ${result.inviteCode}`);
   console.log(`Expires in ${expiresIn} seconds`);
   console.log('');
   console.log('On the other machine, run:');
-  console.log(`  loopsy pair <this-machine-ip>`);
+  if (localIps.length > 0) {
+    for (const ip of localIps) {
+      console.log(`  loopsy pair ${ip}`);
+    }
+  } else {
+    console.log(`  loopsy pair <this-machine-ip>`);
+  }
   console.log('');
 
   // Poll for status changes
@@ -183,7 +192,9 @@ async function pairAsInitiator(target: string) {
   });
 
   if (!confirmResp.ok) {
-    console.error('Peer rejected the confirmation');
+    const errBody = await confirmResp.json().catch(() => ({})) as any;
+    console.error(`Pairing confirmation failed: ${errBody.error || `HTTP ${confirmResp.status}`}`);
+    console.error('The other machine may have already cancelled the session, or the session expired.');
     return;
   }
 
@@ -236,4 +247,19 @@ async function addManualPeer(address: string, port: number, hostname: string) {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Get non-loopback IPv4 addresses for display */
+function getLocalIps(): string[] {
+  const ips: string[] = [];
+  const interfaces = networkInterfaces();
+  for (const addrs of Object.values(interfaces)) {
+    if (!addrs) continue;
+    for (const addr of addrs) {
+      if (addr.family === 'IPv4' && !addr.internal) {
+        ips.push(addr.address);
+      }
+    }
+  }
+  return ips;
 }

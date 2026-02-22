@@ -1,6 +1,6 @@
 {
   "name": "loopsy",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "private": true,
   "description": "Cross-machine communication for AI coding agents",
   "scripts": {

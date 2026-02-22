@@ -114,8 +114,23 @@ export function registerPairRoutes(app: FastifyInstance, ctx: PairContext) {
   });
 
   // POST /api/v1/pair/confirm — Both sides confirm the SAS matches
+  // This is called by both the waiter (Machine A, via daemon request) and the
+  // initiator (Machine B, via direct HTTP). Accept confirm on already-completed
+  // sessions to avoid a race condition where the first confirmer clears state
+  // before the second can confirm.
+  let completedPeerName: string | null = null;
+  let completedAt: number = 0;
+
   app.post('/api/v1/pair/confirm', async (request, reply) => {
     const body = request.body as PairingConfirmRequest;
+
+    // Accept confirm on recently-completed sessions (race condition fix)
+    if ((!session || session.state === 'completed') && completedPeerName && body.confirmed) {
+      // Session was already confirmed by the other side — return success
+      if (Date.now() - completedAt < 60_000) {
+        return { success: true, message: `Paired with ${completedPeerName}` };
+      }
+    }
 
     if (!session || session.state !== 'key_exchanged') {
       return reply.status(404).send({ error: 'No pairing session awaiting confirmation' });
@@ -126,6 +141,7 @@ export function registerPairRoutes(app: FastifyInstance, ctx: PairContext) {
       session = null;
       sessionEcdh = null;
       pendingPeer = null;
+      completedPeerName = null;
       return { success: false, message: 'Pairing cancelled' };
     }
 
@@ -137,15 +153,16 @@ export function registerPairRoutes(app: FastifyInstance, ctx: PairContext) {
     await addPeerToConfig(pendingPeer.hostname, pendingPeer.apiKey, pendingPeer.certFingerprint, ctx.dataDir);
 
     session.state = 'completed';
-    const completedPeer = pendingPeer.hostname;
+    completedPeerName = pendingPeer.hostname;
+    completedAt = Date.now();
 
-    // Cleanup
+    // Cleanup session but keep completedPeerName for late confirmers
     session = null;
     sessionEcdh = null;
     pendingPeer = null;
     if (sessionTimeout) clearTimeout(sessionTimeout);
 
-    return { success: true, message: `Paired with ${completedPeer}` };
+    return { success: true, message: `Paired with ${completedPeerName}` };
   });
 
   // GET /api/v1/pair/status — Check current pairing session state
