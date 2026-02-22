@@ -136,7 +136,7 @@ export class AiTaskManager {
 
   /** Build CLI args for Codex CLI */
   private buildCodexArgs(params: AiTaskParams): string[] {
-    const args = ['exec', params.prompt, '--json'];
+    const args = ['exec', params.prompt, '--json', '--skip-git-repo-check'];
 
     if (params.permissionMode === 'bypassPermissions' || params.permissionMode === 'acceptEdits') {
       args.push('--full-auto');
