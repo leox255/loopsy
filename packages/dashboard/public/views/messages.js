@@ -2,6 +2,7 @@ import { registerView, api, dashboardApi, escapeHtml, formatTime } from '/app.js
 
 let refreshTimer = null;
 let activeTab = 'inbox';
+let expandedMsgIdx = null;
 
 function mount(container) {
   container.innerHTML = `
@@ -25,6 +26,7 @@ function mount(container) {
   document.querySelectorAll('.tab').forEach(t => {
     t.addEventListener('click', () => {
       activeTab = t.dataset.tab;
+      expandedMsgIdx = null;
       document.querySelectorAll('.tab').forEach(x => x.classList.toggle('active', x === t));
       renderTab();
     });
@@ -46,7 +48,7 @@ async function loadSessions() {
     if (main && main.status === 'running') all.push(main);
     all.push(...sessions.filter(s => s.status === 'running'));
     sel.innerHTML = all.map(s => `<option value="${s.port}" data-hostname="${escapeHtml(s.hostname)}">${escapeHtml(s.hostname)} :${s.port}</option>`).join('');
-    sel.addEventListener('change', loadMessages);
+    sel.addEventListener('change', () => { expandedMsgIdx = null; loadMessages(); });
     renderTab();
   } catch {}
 }
@@ -85,6 +87,8 @@ async function loadMessages() {
       } catch {}
 
       const badgeClass = type === 'chat' ? 'badge-cyan' : type === 'request' ? 'badge-amber' : type === 'response' ? 'badge-green' : 'badge-red';
+      const isExpanded = expandedMsgIdx === i;
+      const displayBody = isExpanded ? body : truncate(body, 80);
 
       return `
         <div class="msg-row" onclick="window.__toggleMsg(${i})">
@@ -93,7 +97,7 @@ async function loadMessages() {
             <span class="badge ${badgeClass}">${escapeHtml(type)}</span>
             <span class="msg-time">${formatTime(ts)}</span>
           </div>
-          <div class="msg-body" id="msg-body-${i}">${escapeHtml(truncate(body, 80))}</div>
+          <div class="msg-body${isExpanded ? ' expanded' : ''}" id="msg-body-${i}">${escapeHtml(displayBody)}</div>
         </div>
       `;
     }).join('');
@@ -185,16 +189,32 @@ function truncate(str, len) {
 }
 
 window.__toggleMsg = (idx) => {
-  const el = document.getElementById(`msg-body-${idx}`);
   const entry = window.__msgEntries?.[idx];
-  if (!el || !entry) return;
+  if (!entry) return;
 
-  if (el.classList.contains('expanded')) {
-    el.classList.remove('expanded');
-    let body = entry.value;
-    try { body = JSON.parse(entry.value).body || body; } catch {}
-    el.textContent = truncate(body, 80);
+  // If clicking the already-expanded message, collapse it
+  if (expandedMsgIdx === idx) {
+    expandedMsgIdx = null;
   } else {
+    // Collapse previous if any
+    if (expandedMsgIdx !== null) {
+      const prevEl = document.getElementById(`msg-body-${expandedMsgIdx}`);
+      const prevEntry = window.__msgEntries?.[expandedMsgIdx];
+      if (prevEl && prevEntry) {
+        prevEl.classList.remove('expanded');
+        let prevBody = prevEntry.value;
+        try { prevBody = JSON.parse(prevEntry.value).body || prevBody; } catch {}
+        prevEl.textContent = truncate(prevBody, 80);
+      }
+    }
+    // Expand the clicked one
+    expandedMsgIdx = idx;
+  }
+
+  const el = document.getElementById(`msg-body-${idx}`);
+  if (!el) return;
+
+  if (expandedMsgIdx === idx) {
     el.classList.add('expanded');
     try {
       const env = JSON.parse(entry.value);
@@ -202,6 +222,11 @@ window.__toggleMsg = (idx) => {
     } catch {
       el.textContent = entry.value;
     }
+  } else {
+    el.classList.remove('expanded');
+    let body = entry.value;
+    try { body = JSON.parse(entry.value).body || body; } catch {}
+    el.textContent = truncate(body, 80);
   }
 };
 
