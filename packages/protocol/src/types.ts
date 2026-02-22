@@ -241,6 +241,7 @@ export interface AiTaskInfo {
   pendingApproval?: AiTaskApprovalRequest;
   sessionId?: string;
   agent?: AiAgent;
+  permissionMode?: string;
 }
 
 /** A permission request from Claude needing human approval */

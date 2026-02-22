@@ -207,7 +207,7 @@ async function dispatchTask() {
     if (result.taskId) {
       statusEl.innerHTML = `<span class="text-green">Dispatched! Task: ${escapeHtml(result.taskId.slice(0, 8))}...</span>`;
       // Switch to tasks tab and open the stream
-      selectedTask = { taskId: result.taskId, port: parseInt(port), address };
+      selectedTask = { taskId: result.taskId, port: parseInt(port), address, agent, permissionMode };
       document.querySelectorAll('.tab').forEach(x => x.classList.toggle('active', x.dataset.tab === 'tasks'));
       renderTaskStream();
     } else {
@@ -246,7 +246,7 @@ async function renderTasks() {
       const agentBadge = t.agent ? `<span class="badge badge-muted" style="margin-left:4px;font-size:0.7em">${escapeHtml(t.agent)}</span>` : '';
 
       return `
-        <div class="msg-row${needsAttention ? ' needs-attention' : ''}" onclick="window.__selectTask('${escapeHtml(t.taskId)}', ${t._sourcePort || 19532}, '${escapeHtml(t._sourceAddress || '127.0.0.1')}')">
+        <div class="msg-row${needsAttention ? ' needs-attention' : ''}" onclick="window.__selectTask('${escapeHtml(t.taskId)}', ${t._sourcePort || 19532}, '${escapeHtml(t._sourceAddress || '127.0.0.1')}', '${escapeHtml(t.agent || 'auto')}', '${escapeHtml(t.permissionMode || 'default')}')">
           <div class="msg-header">
             <span class="badge ${badgeClass}${needsAttention ? ' pulse' : ''}">${escapeHtml(t.status)}</span>${agentBadge}
             <span class="msg-from">${escapeHtml(t._sourceHostname || 'unknown')}</span>
@@ -611,7 +611,8 @@ async function sendFollowUp() {
       targetPort: port,
       targetAddress: address,
       prompt: contextPrompt,
-      permissionMode: 'default',
+      permissionMode: selectedTask.permissionMode || 'default',
+      agent: selectedTask.agent || 'auto',
     };
 
     const result = await dashboardApi('/ai-tasks/dispatch', {
@@ -623,7 +624,7 @@ async function sendFollowUp() {
       // Hide follow-up bar, switch to new task stream
       const el = document.getElementById('ai-followup');
       if (el) { el.style.display = 'none'; el.innerHTML = ''; }
-      selectedTask = { taskId: result.taskId, port, address };
+      selectedTask = { taskId: result.taskId, port, address, agent: selectedTask.agent, permissionMode: selectedTask.permissionMode };
       appendLine('system', `Follow-up dispatched: ${result.taskId.slice(0, 8)}...`);
       taskFinished = false;
       connectStream(result.taskId, port, address);
@@ -713,8 +714,8 @@ function statusBadgeClass(status) {
 
 // ── Global handlers ──
 
-window.__selectTask = (taskId, port, address) => {
-  selectedTask = { taskId, port, address: address || '127.0.0.1' };
+window.__selectTask = (taskId, port, address, agent, permissionMode) => {
+  selectedTask = { taskId, port, address: address || '127.0.0.1', agent: agent || 'auto', permissionMode: permissionMode || 'default' };
   renderTaskStream();
 };
 

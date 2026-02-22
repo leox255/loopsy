@@ -265,34 +265,64 @@ export class AiTaskManager {
       spawnCwd = taskCwd;
     }
 
+    // On Windows, write prompt to a temp file to avoid cmd.exe mangling newlines
+    let promptFile: string | undefined;
+    if (process.platform === 'win32' && resolvedAgent === 'claude' && params.prompt.includes('\n')) {
+      promptFile = join(taskTmpDir, 'prompt.txt');
+      writeFileSync(promptFile, params.prompt, 'utf-8');
+      // Replace -p <prompt> with -p pointing to file content via subshell
+      const pIdx = args.indexOf('-p');
+      if (pIdx !== -1) {
+        // Remove the prompt from args — we'll pipe it via stdin instead
+        args.splice(pIdx, 2);
+      }
+    }
+
     // Spawn the process
     let ptyProcess: pty.IPty | undefined;
     let childProcess: ChildProcess | undefined;
     let pid: number | undefined;
 
     if (resolvedAgent === 'claude') {
-      // Claude needs PTY (Bun runtime buffers stdout on pipes)
-      let spawnFile: string;
-      let spawnArgs: string[];
-      if (process.platform === 'win32') {
-        spawnFile = 'cmd.exe';
-        spawnArgs = ['/c', cliPath, ...args];
+      if (process.platform === 'win32' && promptFile) {
+        // Windows with multi-line prompt: use child_process with stdin pipe via shell
+        // Using shell: true lets Node handle the command line quoting properly
+        const escapedArgs = args.map(a => a.includes(' ') ? `"${a}"` : a).join(' ');
+        const cmd = `type "${promptFile}" | "${cliPath}" ${escapedArgs}`;
+        childProcess = spawn(cmd, [], {
+          cwd: spawnCwd,
+          env,
+          stdio: ['ignore', 'pipe', 'pipe'],
+          shell: true,
+        });
+        pid = childProcess.pid;
+      } else if (process.platform === 'win32') {
+        // Windows with simple prompt: use PTY via cmd.exe
+        ptyProcess = pty.spawn('cmd.exe', ['/c', cliPath, ...args], {
+          name: 'xterm-256color',
+          cols: 9999,
+          rows: 50,
+          cwd: spawnCwd,
+          env,
+        });
+        pid = ptyProcess.pid;
       } else {
+        // macOS/Linux: use PTY
+        let spawnFile: string;
         try {
           spawnFile = realpathSync(cliPath);
         } catch {
           spawnFile = cliPath;
         }
-        spawnArgs = args;
+        ptyProcess = pty.spawn(spawnFile, args, {
+          name: 'xterm-256color',
+          cols: 32000,
+          rows: 50,
+          cwd: spawnCwd,
+          env,
+        });
+        pid = ptyProcess.pid;
       }
-      ptyProcess = pty.spawn(spawnFile, spawnArgs, {
-        name: 'xterm-256color',
-        cols: process.platform === 'win32' ? 9999 : 32000,
-        rows: 50,
-        cwd: spawnCwd,
-        env,
-      });
-      pid = ptyProcess.pid;
     } else {
       // Gemini and Codex use child_process.spawn
       childProcess = spawn(cliPath, args, {
@@ -313,6 +343,7 @@ export class AiTaskManager {
       pid,
       model: params.model,
       agent: resolvedAgent,
+      permissionMode: params.permissionMode,
     };
 
     const task: AiTask = {
