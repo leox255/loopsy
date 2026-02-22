@@ -129,7 +129,6 @@ for (const stub of stubs) {
       version: '${version}',
       type: 'module',
       main: stub.main,
-      exports: { '.': { default: stub.main } },
     }, null, 2),
   );
 }
