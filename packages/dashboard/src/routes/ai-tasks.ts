@@ -147,7 +147,6 @@ export function registerAiTaskRoutes(
           `http://${host}:${port}/api/v1/ai-tasks/${encodeURIComponent(taskId)}/stream?since=${since}`,
           {
             headers: { Authorization: `Bearer ${targetKey}` },
-            signal: AbortSignal.timeout(DEFAULT_AI_TASK_TIMEOUT),
           },
         );
 

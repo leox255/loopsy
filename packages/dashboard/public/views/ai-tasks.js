@@ -315,8 +315,18 @@ async function connectStream(taskId, port, address) {
   };
 
   eventSource.onerror = () => {
-    appendLine('system', '[Connection closed]');
     closeStream();
+    // Auto-reconnect if the task is still running
+    if (!taskFinished && selectedTask) {
+      appendLine('system', '[Reconnecting...]');
+      setTimeout(() => {
+        if (!taskFinished && selectedTask && selectedTask.taskId === taskId) {
+          connectStream(taskId, port, address);
+        }
+      }, 2000);
+    } else {
+      appendLine('system', '[Connection closed]');
+    }
   };
 }
 
