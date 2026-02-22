@@ -71,12 +71,17 @@ export class DaemonClient {
 
   private async request<T>(path: string, opts: RequestInit = {}): Promise<T> {
     await this.ensureInit();
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${this.apiKey}`,
+    };
+    if (opts.body) {
+      headers['Content-Type'] = 'application/json';
+    }
     const res = await fetch(`${this.baseUrl}${path}`, {
       ...opts,
       headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${this.apiKey}`,
-        ...opts.headers,
+        ...headers,
+        ...(opts.headers as Record<string, string>),
       },
     });
 
