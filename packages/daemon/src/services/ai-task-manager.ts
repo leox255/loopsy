@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
-import { realpathSync } from 'node:fs';
+import { realpathSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { tmpdir } from 'node:os';
 import * as pty from 'node-pty';
 import { which } from '../utils/which.js';
 import type {
@@ -124,10 +125,39 @@ export class AiTaskManager {
       env[key] = val;
     }
 
-    // Set env vars for the permission hook script
+    // Set env vars for the permission hook script (also available via CLI args)
     env.LOOPSY_TASK_ID = taskId;
     env.LOOPSY_DAEMON_PORT = String(this.daemonPort);
     env.LOOPSY_API_KEY = this.apiKey;
+
+    // Create a per-task temp directory with .claude/settings.local.json
+    // containing the PreToolUse hook config with task-specific args baked in.
+    // This ensures the hook receives the task ID even though Claude Code
+    // doesn't propagate parent env vars to hook subprocesses.
+    const hookScriptPath = this.getHookScriptPath();
+    const taskCwd = params.cwd || process.cwd();
+    const taskTmpDir = join(tmpdir(), `loopsy-task-${taskId}`);
+    const claudeSettingsDir = join(taskTmpDir, '.claude');
+    mkdirSync(claudeSettingsDir, { recursive: true });
+    writeFileSync(join(claudeSettingsDir, 'settings.local.json'), JSON.stringify({
+      hooks: {
+        PreToolUse: [{
+          matcher: '',
+          hooks: [{
+            type: 'command',
+            command: `node ${hookScriptPath} ${taskId} ${this.daemonPort} ${this.apiKey}`,
+            timeout: 300,
+          }],
+        }],
+      },
+    }, null, 2));
+    // Also write a CLAUDE.md that tells Claude the actual working directory
+    writeFileSync(join(taskTmpDir, 'CLAUDE.md'),
+      `Your actual working directory is: ${taskCwd}\n` +
+      `Always use absolute paths rooted at ${taskCwd} for all file operations.\n`);
+
+    // Grant access to the actual working directory
+    args.push('--add-dir', taskCwd);
 
     // Use node-pty to spawn with a pseudo-TTY
     // Claude CLI (Bun runtime) buffers stdout when connected to a pipe;
@@ -151,7 +181,7 @@ export class AiTaskManager {
       name: 'xterm-256color',
       cols: process.platform === 'win32' ? 9999 : 32000, // ConPTY needs wide cols to avoid JSON line wrapping
       rows: 50,
-      cwd: params.cwd || process.cwd(),
+      cwd: taskTmpDir,
       env,
     });
 
@@ -250,6 +280,9 @@ export class AiTaskManager {
       this.recentTasks.set(taskId, { info: { ...info }, eventBuffer: [...task.eventBuffer] });
       this.tasks.delete(taskId);
       setTimeout(() => this.recentTasks.delete(taskId), 300_000); // keep 5 min
+
+      // Clean up per-task temp directory
+      try { rmSync(taskTmpDir, { recursive: true, force: true }); } catch {}
     });
 
     // Emit initial status
