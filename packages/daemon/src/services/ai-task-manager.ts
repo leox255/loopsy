@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { realpathSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 import * as pty from 'node-pty';
 import { which } from '../utils/which.js';
 import type {
@@ -9,6 +11,8 @@ import type {
   AiTaskApprovalRequest,
   AiTaskApprovalResponse,
   AiTaskStreamEvent,
+  PermissionRequestEntry,
+  PermissionResponseEntry,
 } from '@loopsy/protocol';
 import {
   LoopsyError,
@@ -44,13 +48,25 @@ function stripAnsi(str: string): string {
     .replace(/\[<u/g, '');                          // PTY artifacts
 }
 
+export interface AiTaskManagerConfig {
+  maxConcurrent?: number;
+  daemonPort: number;
+  apiKey: string;
+}
+
 export class AiTaskManager {
   private tasks = new Map<string, AiTask>();
   private recentTasks = new Map<string, { info: AiTaskInfo; eventBuffer: AiTaskStreamEvent[] }>();
+  private pendingPermissions = new Map<string, PermissionRequestEntry>();
+  private permissionResponses = new Map<string, PermissionResponseEntry>();
   private maxConcurrent: number;
+  private daemonPort: number;
+  private apiKey: string;
 
-  constructor(opts?: { maxConcurrent?: number }) {
-    this.maxConcurrent = opts?.maxConcurrent ?? MAX_CONCURRENT_AI_TASKS;
+  constructor(config: AiTaskManagerConfig) {
+    this.maxConcurrent = config.maxConcurrent ?? MAX_CONCURRENT_AI_TASKS;
+    this.daemonPort = config.daemonPort;
+    this.apiKey = config.apiKey;
   }
 
   async dispatch(params: AiTaskParams, fromNodeId: string): Promise<AiTaskInfo> {
@@ -107,6 +123,11 @@ export class AiTaskManager {
       }
       env[key] = val;
     }
+
+    // Set env vars for the permission hook script
+    env.LOOPSY_TASK_ID = taskId;
+    env.LOOPSY_DAEMON_PORT = String(this.daemonPort);
+    env.LOOPSY_API_KEY = this.apiKey;
 
     // Use node-pty to spawn with a pseudo-TTY
     // Claude CLI (Bun runtime) buffers stdout when connected to a pipe;
@@ -237,37 +258,99 @@ export class AiTaskManager {
     return { ...info };
   }
 
-  approve(taskId: string, response: AiTaskApprovalResponse): boolean {
+  /**
+   * Register a permission request from the hook script.
+   * Called by POST /ai-tasks/:taskId/permission-request
+   */
+  registerPermissionRequest(taskId: string, request: Omit<PermissionRequestEntry, 'taskId' | 'timestamp'>): boolean {
     const task = this.tasks.get(taskId);
     if (!task) return false;
-    if (task.info.status !== 'waiting_approval') return false;
-    if (!task.info.pendingApproval) return false;
 
-    // Write approval to Claude's stdin via PTY
-    const stdinMsg = JSON.stringify({
-      type: 'permission_response',
-      id: response.requestId,
-      allow: response.approved,
-    }) + '\n';
-
-    try {
-      task.ptyProcess.write(stdinMsg);
-    } catch {
-      return false;
-    }
-
-    task.info.status = 'running';
-    task.info.pendingApproval = undefined;
-    task.info.updatedAt = Date.now();
-
-    this.emit(task, {
-      type: 'status',
+    const entry: PermissionRequestEntry = {
+      ...request,
       taskId,
       timestamp: Date.now(),
-      data: { status: 'running', approved: response.approved },
+    };
+
+    this.pendingPermissions.set(request.requestId, entry);
+
+    // Update task status
+    const approval: AiTaskApprovalRequest = {
+      toolName: request.toolName,
+      toolInput: request.toolInput,
+      requestId: request.requestId,
+      timestamp: entry.timestamp,
+      description: request.description,
+    };
+    task.info.status = 'waiting_approval';
+    task.info.pendingApproval = approval;
+    task.info.updatedAt = entry.timestamp;
+
+    // Emit SSE event for dashboard
+    this.emit(task, {
+      type: 'permission_request',
+      taskId,
+      timestamp: entry.timestamp,
+      data: approval,
     });
 
     return true;
+  }
+
+  /**
+   * Resolve a pending permission request (approve or deny).
+   * Called by POST /ai-tasks/:taskId/approve
+   */
+  resolvePermission(taskId: string, requestId: string, approved: boolean, message?: string): boolean {
+    const pending = this.pendingPermissions.get(requestId);
+    if (!pending || pending.taskId !== taskId) return false;
+
+    const response: PermissionResponseEntry = {
+      requestId,
+      approved,
+      message,
+      resolvedAt: Date.now(),
+    };
+
+    this.permissionResponses.set(requestId, response);
+    this.pendingPermissions.delete(requestId);
+
+    // Update task status
+    const task = this.tasks.get(taskId);
+    if (task) {
+      task.info.status = 'running';
+      task.info.pendingApproval = undefined;
+      task.info.updatedAt = Date.now();
+
+      this.emit(task, {
+        type: 'status',
+        taskId,
+        timestamp: Date.now(),
+        data: { status: 'running', approved },
+      });
+    }
+
+    // Clean up response after 60s (hook should have polled by then)
+    setTimeout(() => this.permissionResponses.delete(requestId), 60_000);
+
+    return true;
+  }
+
+  /**
+   * Get the permission response for a given requestId (polled by hook script).
+   * Returns null if not yet resolved.
+   */
+  getPermissionResponse(taskId: string, requestId: string): PermissionResponseEntry | null {
+    const response = this.permissionResponses.get(requestId);
+    if (!response) return null;
+    return response;
+  }
+
+  /**
+   * Legacy approve method — now delegates to resolvePermission.
+   */
+  approve(taskId: string, response: AiTaskApprovalResponse & { message?: string }): boolean {
+    return this.resolvePermission(taskId, response.requestId, response.approved, response.message);
   }
 
   cancel(taskId: string): boolean {
@@ -319,6 +402,17 @@ export class AiTaskManager {
       if (task.timeoutTimer) clearTimeout(task.timeoutTimer);
       this.tasks.delete(id);
     }
+  }
+
+  /**
+   * Get the absolute path to the permission hook script.
+   * Used by external callers (e.g. hook installer).
+   */
+  getHookScriptPath(): string {
+    // In the built output, hook lives at dist/hooks/permission-hook.mjs
+    // relative to dist/services/ai-task-manager.js
+    const thisFile = fileURLToPath(import.meta.url);
+    return join(dirname(thisFile), '..', 'hooks', 'permission-hook.mjs');
   }
 
   get activeCount(): number {

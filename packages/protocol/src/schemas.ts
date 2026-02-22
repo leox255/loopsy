@@ -116,6 +116,14 @@ export const AiTaskParamsSchema = z.object({
 export const AiTaskApprovalResponseSchema = z.object({
   requestId: z.string().min(1),
   approved: z.boolean(),
+  message: z.string().optional(),
+});
+
+export const PermissionRequestBodySchema = z.object({
+  requestId: z.string().min(1),
+  toolName: z.string().min(1),
+  toolInput: z.unknown().optional().default({}),
+  description: z.string().optional(),
 });
 
 export const PeerAddSchema = z.object({

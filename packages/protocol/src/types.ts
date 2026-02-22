@@ -256,6 +256,24 @@ export interface AiTaskApprovalResponse {
   approved: boolean;
 }
 
+/** A permission request registered by the hook script with the daemon */
+export interface PermissionRequestEntry {
+  requestId: string;
+  taskId: string;
+  toolName: string;
+  toolInput: unknown;
+  description?: string;
+  timestamp: number;
+}
+
+/** The resolved permission decision (stored by daemon when user approves/denies) */
+export interface PermissionResponseEntry {
+  requestId: string;
+  approved: boolean;
+  message?: string;
+  resolvedAt: number;
+}
+
 /** SSE event from an AI task stream */
 export interface AiTaskStreamEvent {
   type: 'text' | 'thinking' | 'tool_use' | 'tool_result' | 'permission_request' | 'status' | 'error' | 'result' | 'exit' | 'system';

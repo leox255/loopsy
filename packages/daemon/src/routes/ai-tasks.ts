@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import type { AiTaskManager } from '../services/ai-task-manager.js';
-import { AiTaskParamsSchema, AiTaskApprovalResponseSchema } from '@loopsy/protocol';
+import { AiTaskParamsSchema, AiTaskApprovalResponseSchema, PermissionRequestBodySchema } from '@loopsy/protocol';
 
 export function registerAiTaskRoutes(app: FastifyInstance, aiTaskManager: AiTaskManager) {
   // Dispatch a new AI task
@@ -92,7 +92,53 @@ export function registerAiTaskRoutes(app: FastifyInstance, aiTaskManager: AiTask
     },
   );
 
-  // Approve/deny a permission request
+  // Register a permission request from the hook script
+  // Called by permission-hook.mjs when Claude wants to use a tool
+  app.post<{ Params: { taskId: string } }>('/api/v1/ai-tasks/:taskId/permission-request', async (request, reply) => {
+    const { taskId } = request.params;
+    const body = PermissionRequestBodySchema.parse(request.body);
+
+    const success = aiTaskManager.registerPermissionRequest(taskId, {
+      requestId: body.requestId,
+      toolName: body.toolName,
+      toolInput: body.toolInput,
+      description: body.description,
+    });
+
+    if (!success) {
+      reply.code(404);
+      return { error: 'Task not found' };
+    }
+
+    return { success: true, requestId: body.requestId };
+  });
+
+  // Poll for permission response (called by hook script)
+  app.get<{ Params: { taskId: string }; Querystring: { requestId: string } }>(
+    '/api/v1/ai-tasks/:taskId/permission-response',
+    async (request, reply) => {
+      const { taskId } = request.params;
+      const { requestId } = request.query;
+
+      if (!requestId) {
+        reply.code(400);
+        return { error: 'requestId query parameter required' };
+      }
+
+      const response = aiTaskManager.getPermissionResponse(taskId, requestId);
+      if (!response) {
+        return { resolved: false };
+      }
+
+      return {
+        resolved: true,
+        approved: response.approved,
+        message: response.message || '',
+      };
+    },
+  );
+
+  // Approve/deny a permission request (called by dashboard)
   app.post<{ Params: { taskId: string } }>('/api/v1/ai-tasks/:taskId/approve', async (request, reply) => {
     const { taskId } = request.params;
     const response = AiTaskApprovalResponseSchema.parse(request.body);
@@ -100,7 +146,7 @@ export function registerAiTaskRoutes(app: FastifyInstance, aiTaskManager: AiTask
     const success = aiTaskManager.approve(taskId, response);
     if (!success) {
       reply.code(400);
-      return { error: 'Task not in waiting_approval state or not found' };
+      return { error: 'No pending permission request found for this task' };
     }
     return { success: true, taskId };
   });

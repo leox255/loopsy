@@ -53,7 +53,10 @@ export async function createDaemon(config: LoopsyConfig): Promise<DaemonServer> 
     allowlist: config.execution.allowlist,
   });
 
-  const aiTaskManager = new AiTaskManager();
+  const aiTaskManager = new AiTaskManager({
+    daemonPort: config.server.port,
+    apiKey: config.auth.apiKey,
+  });
 
   const auditLogger = new AuditLogger(dataDir);
   await auditLogger.init();
