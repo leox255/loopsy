@@ -23,15 +23,23 @@ const baseUrl = `http://127.0.0.1:${port}`;
 function allow() {
   process.stdout.write(JSON.stringify({
     hookSpecificOutput: {
+      hookEventName: 'PreToolUse',
       permissionDecision: 'allow',
+      permissionDecisionReason: 'Approved via Loopsy dashboard',
     },
   }));
   process.exit(0);
 }
 
 function deny(reason) {
-  process.stderr.write(reason || 'Denied');
-  process.exit(2);
+  process.stdout.write(JSON.stringify({
+    hookSpecificOutput: {
+      hookEventName: 'PreToolUse',
+      permissionDecision: 'deny',
+      permissionDecisionReason: reason || 'Denied via Loopsy dashboard',
+    },
+  }));
+  process.exit(0);
 }
 
 // If no task ID, this is a normal Claude session — no-op (allow all)
