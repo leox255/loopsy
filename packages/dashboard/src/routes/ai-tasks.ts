@@ -2,6 +2,25 @@ import type { FastifyInstance } from 'fastify';
 import { listSessions } from '../session-manager.js';
 import { fetchAndDeduplicatePeers } from './peer-utils.js';
 
+function resolveHost(address?: string): { host: string; isRemote: boolean } {
+  const isRemote = !!address && address !== '127.0.0.1' && address !== 'localhost';
+  return { host: isRemote ? address! : '127.0.0.1', isRemote };
+}
+
+function resolveApiKey(
+  host: string,
+  isRemote: boolean,
+  localApiKey: string,
+  allowedKeys: Record<string, string>,
+): string {
+  if (!isRemote) return localApiKey;
+  // All remote peers share the same allowed key set — pick the first non-local key
+  for (const key of Object.values(allowedKeys)) {
+    if (key !== localApiKey) return key;
+  }
+  return localApiKey;
+}
+
 export function registerAiTaskRoutes(
   app: FastifyInstance,
   apiKey: string,
@@ -19,21 +38,9 @@ export function registerAiTaskRoutes(
 
     const body = { prompt, cwd, permissionMode, model, maxBudgetUsd, allowedTools, disallowedTools, additionalArgs };
 
-    // Determine target: local session or remote peer
-    const isRemote = targetAddress && targetAddress !== '127.0.0.1' && targetAddress !== 'localhost';
-    const host = isRemote ? targetAddress : '127.0.0.1';
+    const { host, isRemote } = resolveHost(targetAddress);
     const port = targetPort || 19532;
-
-    // Resolve API key for remote peers
-    let targetApiKey = apiKey;
-    if (isRemote) {
-      for (const key of Object.values(allowedKeys)) {
-        if (key !== apiKey) {
-          targetApiKey = key;
-          break;
-        }
-      }
-    }
+    const targetApiKey = resolveApiKey(host, isRemote, apiKey, allowedKeys);
 
     try {
       const res = await fetch(`http://${host}:${port}/api/v1/ai-tasks`, {
@@ -56,22 +63,48 @@ export function registerAiTaskRoutes(
     }
   });
 
-  // Aggregate tasks across all running sessions
+  // Aggregate tasks across all running sessions AND remote peers
   app.get('/dashboard/api/ai-tasks/all', async () => {
     const { main, sessions } = await listSessions();
-    const running = [];
-    if (main && main.status === 'running') running.push(main);
-    running.push(...sessions.filter((s) => s.status === 'running'));
+    const running: { host: string; port: number; hostname: string; key: string }[] = [];
+
+    // Local sessions
+    if (main && main.status === 'running') {
+      running.push({ host: '127.0.0.1', port: main.port, hostname: main.hostname, key: apiKey });
+    }
+    for (const s of sessions.filter((s) => s.status === 'running')) {
+      running.push({ host: '127.0.0.1', port: s.port, hostname: s.hostname, key: apiKey });
+    }
+
+    // Remote peers
+    try {
+      const peers = await fetchAndDeduplicatePeers(apiKey, allowedKeys);
+      const remotePeers = peers.filter(
+        (p) => p.address !== '127.0.0.1' && p.address !== 'localhost' && p.status === 'online',
+      );
+      for (const p of remotePeers) {
+        const remoteKey = resolveApiKey(p.address, true, apiKey, allowedKeys);
+        // Avoid duplicates (same address:port)
+        if (!running.some((r) => r.host === p.address && r.port === p.port)) {
+          running.push({ host: p.address, port: p.port, hostname: p.hostname, key: remoteKey });
+        }
+      }
+    } catch {}
 
     const results = await Promise.allSettled(
       running.map(async (s) => {
-        const res = await fetch(`http://127.0.0.1:${s.port}/api/v1/ai-tasks`, {
-          headers: { Authorization: `Bearer ${apiKey}` },
+        const res = await fetch(`http://${s.host}:${s.port}/api/v1/ai-tasks`, {
+          headers: { Authorization: `Bearer ${s.key}` },
           signal: AbortSignal.timeout(3000),
         });
         if (!res.ok) return [];
         const data = (await res.json()) as { tasks?: any[] };
-        return (data.tasks || []).map((t: any) => ({ ...t, _sourcePort: s.port, _sourceHostname: s.hostname }));
+        return (data.tasks || []).map((t: any) => ({
+          ...t,
+          _sourcePort: s.port,
+          _sourceAddress: s.host,
+          _sourceHostname: s.hostname,
+        }));
       }),
     );
 
@@ -80,7 +113,7 @@ export function registerAiTaskRoutes(
       if (r.status === 'fulfilled') tasks.push(...r.value);
     }
 
-    // Deduplicate by taskId (same task won't be on multiple sessions)
+    // Deduplicate by taskId
     const map = new Map<string, any>();
     for (const t of tasks) {
       if (!map.has(t.taskId)) map.set(t.taskId, t);
@@ -91,12 +124,14 @@ export function registerAiTaskRoutes(
   });
 
   // SSE proxy: stream task events from a specific daemon
-  app.get<{ Params: { port: string; taskId: string }; Querystring: { since?: string } }>(
+  app.get<{ Params: { port: string; taskId: string }; Querystring: { since?: string; address?: string } }>(
     '/dashboard/api/ai-tasks/stream/:port/:taskId',
     async (request, reply) => {
       const port = parseInt(request.params.port, 10);
       const { taskId } = request.params;
       const since = request.query.since || '0';
+      const { host, isRemote } = resolveHost(request.query.address);
+      const targetKey = resolveApiKey(host, isRemote, apiKey, allowedKeys);
 
       reply.raw.writeHead(200, {
         'Content-Type': 'text/event-stream',
@@ -107,9 +142,9 @@ export function registerAiTaskRoutes(
 
       try {
         const upstreamRes = await fetch(
-          `http://127.0.0.1:${port}/api/v1/ai-tasks/${encodeURIComponent(taskId)}/stream?since=${since}`,
+          `http://${host}:${port}/api/v1/ai-tasks/${encodeURIComponent(taskId)}/stream?since=${since}`,
           {
-            headers: { Authorization: `Bearer ${apiKey}` },
+            headers: { Authorization: `Bearer ${targetKey}` },
             signal: AbortSignal.timeout(DEFAULT_AI_TASK_TIMEOUT),
           },
         );
@@ -140,18 +175,20 @@ export function registerAiTaskRoutes(
   );
 
   // Proxy approval to daemon
-  app.post<{ Params: { port: string; taskId: string } }>(
+  app.post<{ Params: { port: string; taskId: string }; Querystring: { address?: string } }>(
     '/dashboard/api/ai-tasks/approve/:port/:taskId',
     async (request, reply) => {
       const port = parseInt(request.params.port, 10);
       const { taskId } = request.params;
+      const { host, isRemote } = resolveHost(request.query.address);
+      const targetKey = resolveApiKey(host, isRemote, apiKey, allowedKeys);
 
       try {
-        const res = await fetch(`http://127.0.0.1:${port}/api/v1/ai-tasks/${encodeURIComponent(taskId)}/approve`, {
+        const res = await fetch(`http://${host}:${port}/api/v1/ai-tasks/${encodeURIComponent(taskId)}/approve`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            Authorization: `Bearer ${apiKey}`,
+            Authorization: `Bearer ${targetKey}`,
           },
           body: JSON.stringify(request.body),
           signal: AbortSignal.timeout(5000),
@@ -167,16 +204,18 @@ export function registerAiTaskRoutes(
   );
 
   // Proxy cancel to daemon
-  app.delete<{ Params: { port: string; taskId: string } }>(
+  app.delete<{ Params: { port: string; taskId: string }; Querystring: { address?: string } }>(
     '/dashboard/api/ai-tasks/cancel/:port/:taskId',
     async (request, reply) => {
       const port = parseInt(request.params.port, 10);
       const { taskId } = request.params;
+      const { host, isRemote } = resolveHost(request.query.address);
+      const targetKey = resolveApiKey(host, isRemote, apiKey, allowedKeys);
 
       try {
-        const res = await fetch(`http://127.0.0.1:${port}/api/v1/ai-tasks/${encodeURIComponent(taskId)}`, {
+        const res = await fetch(`http://${host}:${port}/api/v1/ai-tasks/${encodeURIComponent(taskId)}`, {
           method: 'DELETE',
-          headers: { Authorization: `Bearer ${apiKey}` },
+          headers: { Authorization: `Bearer ${targetKey}` },
           signal: AbortSignal.timeout(5000),
         });
         const data = await res.json();

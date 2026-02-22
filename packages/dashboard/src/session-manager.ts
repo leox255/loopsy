@@ -37,35 +37,37 @@ export interface SessionInfo {
 }
 
 export async function listSessions(): Promise<{ main: SessionInfo | null; sessions: SessionInfo[] }> {
-  // Main daemon
+  // Main daemon — check PID file first, fall back to port health check
   let main: SessionInfo | null = null;
   try {
     const parentConfig = await loadParentConfig();
-    const pidRaw = await readFile(join(LOOPSY_DIR, 'daemon.pid'), 'utf-8');
-    const pid = parseInt(pidRaw, 10);
+    const port = parentConfig.server?.port ?? DEFAULT_PORT;
+    const hostname = parentConfig.server?.hostname || osHostname();
+    let pid: number | null = null;
     let status: 'running' | 'stopped' = 'stopped';
-    try { process.kill(pid, 0); status = 'running'; } catch {}
-    main = {
-      name: 'main',
-      port: parentConfig.server?.port ?? DEFAULT_PORT,
-      hostname: parentConfig.server?.hostname || osHostname(),
-      pid: status === 'running' ? pid : null,
-      status,
-      dataDir: LOOPSY_DIR,
-    };
-  } catch {
+
+    // Try PID file
     try {
-      const parentConfig = await loadParentConfig();
-      main = {
-        name: 'main',
-        port: parentConfig.server?.port ?? DEFAULT_PORT,
-        hostname: parentConfig.server?.hostname || osHostname(),
-        pid: null,
-        status: 'stopped',
-        dataDir: LOOPSY_DIR,
-      };
+      const pidRaw = await readFile(join(LOOPSY_DIR, 'daemon.pid'), 'utf-8');
+      const pidNum = parseInt(pidRaw, 10);
+      process.kill(pidNum, 0);
+      pid = pidNum;
+      status = 'running';
     } catch {}
-  }
+
+    // PID check failed — try HTTP health check (handles stale/missing PID file)
+    if (status === 'stopped') {
+      try {
+        const res = await fetch(`http://127.0.0.1:${port}/api/v1/status`, {
+          headers: { Authorization: `Bearer ${parentConfig.auth?.apiKey}` },
+          signal: AbortSignal.timeout(2000),
+        });
+        if (res.ok) status = 'running';
+      } catch {}
+    }
+
+    main = { name: 'main', port, hostname, pid, status, dataDir: LOOPSY_DIR };
+  } catch {}
 
   // Sessions
   const sessions: SessionInfo[] = [];
@@ -91,6 +93,18 @@ export async function listSessions(): Promise<{ main: SessionInfo | null; sessio
         pid = pidNum;
         status = 'running';
       } catch {}
+
+      // PID check failed — try HTTP health check if port is known
+      if (status === 'stopped' && port > 0) {
+        try {
+          const cfg = await loadParentConfig();
+          const res = await fetch(`http://127.0.0.1:${port}/api/v1/status`, {
+            headers: { Authorization: `Bearer ${cfg.auth?.apiKey}` },
+            signal: AbortSignal.timeout(2000),
+          });
+          if (res.ok) status = 'running';
+        } catch {}
+      }
 
       sessions.push({ name, port, hostname, pid, status, dataDir: sessionDir });
     }

@@ -62,15 +62,16 @@ async function renderDispatch() {
       </div>
     </div>
     <div class="form-row">
+      <div class="form-group">
+        <div class="form-label">Model</div>
+        <select class="input" id="ai-model">
+          <option value="">Default</option>
+          <option value="sonnet">Sonnet</option>
+          <option value="opus">Opus</option>
+          <option value="haiku">Haiku</option>
+        </select>
+      </div>
       <div class="form-group" style="flex:1">
-        <div class="form-label">Model (optional)</div>
-        <input class="input" id="ai-model" placeholder="e.g. sonnet, opus, haiku">
-      </div>
-      <div class="form-group">
-        <div class="form-label">Max Budget USD (optional)</div>
-        <input class="input" id="ai-budget" type="number" step="0.01" min="0" placeholder="e.g. 1.00">
-      </div>
-      <div class="form-group">
         <div class="form-label">Working Dir (optional)</div>
         <input class="input" id="ai-cwd" placeholder="e.g. /home/user/project">
       </div>
@@ -129,8 +130,7 @@ async function dispatchTask() {
   const targetVal = document.getElementById('ai-target').value;
   const prompt = document.getElementById('ai-prompt').value.trim();
   const permissionMode = document.getElementById('ai-perm-mode').value;
-  const model = document.getElementById('ai-model').value.trim();
-  const budget = document.getElementById('ai-budget').value;
+  const model = document.getElementById('ai-model').value;
   const cwd = document.getElementById('ai-cwd').value.trim();
   const statusEl = document.getElementById('dispatch-status');
 
@@ -151,7 +151,6 @@ async function dispatchTask() {
       permissionMode,
     };
     if (model) body.model = model;
-    if (budget) body.maxBudgetUsd = parseFloat(budget);
     if (cwd) body.cwd = cwd;
 
     const result = await dashboardApi('/ai-tasks/dispatch', {
@@ -199,7 +198,7 @@ async function renderTasks() {
       const needsAttention = t.status === 'waiting_approval';
 
       return `
-        <div class="msg-row${needsAttention ? ' needs-attention' : ''}" onclick="window.__selectTask('${escapeHtml(t.taskId)}', ${t._sourcePort || 19532})">
+        <div class="msg-row${needsAttention ? ' needs-attention' : ''}" onclick="window.__selectTask('${escapeHtml(t.taskId)}', ${t._sourcePort || 19532}, '${escapeHtml(t._sourceAddress || '127.0.0.1')}')">
           <div class="msg-header">
             <span class="badge ${badgeClass}${needsAttention ? ' pulse' : ''}">${escapeHtml(t.status)}</span>
             <span class="msg-from">${escapeHtml(t._sourceHostname || 'unknown')}</span>
@@ -224,7 +223,7 @@ function refreshTasksIfVisible() {
 
 // ── Task Stream + Approval ──
 
-function renderTaskStream() {
+async function renderTaskStream() {
   if (!selectedTask) return;
   const content = document.getElementById('ai-content');
   const { taskId, port } = selectedTask;
@@ -232,8 +231,15 @@ function renderTaskStream() {
   content.innerHTML = `
     <div class="flex justify-between items-center mb-1">
       <button class="btn btn-sm" id="btn-back-tasks" style="border-color:var(--text-muted)">&#8592; Back</button>
-      <span class="text-xs font-mono text-muted">Task: ${escapeHtml(taskId.slice(0, 12))}...</span>
       <button class="btn btn-sm btn-danger" id="btn-cancel-task">Cancel</button>
+    </div>
+    <div class="task-info">
+      <div class="task-info-header">
+        <span class="badge badge-cyan" id="task-status-badge">loading</span>
+        <span class="text-xs font-mono text-muted">Task: ${escapeHtml(taskId.slice(0, 12))}...</span>
+      </div>
+      <div class="task-info-prompt" id="task-prompt">Loading...</div>
+      <div class="task-info-meta" id="task-meta"></div>
     </div>
     <div class="ai-terminal" id="ai-output"></div>
     <div id="ai-approval" style="display:none"></div>
@@ -246,10 +252,33 @@ function renderTaskStream() {
   });
   document.getElementById('btn-cancel-task').addEventListener('click', cancelTask);
 
-  connectStream(taskId, port);
+  // Fetch task info for header
+  try {
+    const data = await dashboardApi('/ai-tasks/all');
+    const task = (data.tasks || []).find(t => t.taskId === taskId);
+    if (task) {
+      updateStatusBadge(task.status);
+      document.getElementById('task-prompt').textContent = task.prompt;
+      const meta = [];
+      if (task.model) meta.push(`Model: ${task.model}`);
+      if (task._sourceHostname) meta.push(`Host: ${task._sourceHostname}`);
+      if (task.startedAt) meta.push(formatTime(task.startedAt));
+      const metaEl = document.getElementById('task-meta');
+      if (metaEl) metaEl.textContent = meta.join(' \u00b7 ');
+    }
+  } catch {}
+
+  connectStream(taskId, port, selectedTask.address);
 }
 
-async function connectStream(taskId, port) {
+function updateStatusBadge(status) {
+  const badge = document.getElementById('task-status-badge');
+  if (!badge) return;
+  badge.textContent = status;
+  badge.className = `badge ${statusBadgeClass(status)}`;
+}
+
+async function connectStream(taskId, port, address) {
   closeStream();
   taskFinished = false;
 
@@ -263,7 +292,8 @@ async function connectStream(taskId, port) {
     }
   } catch {}
 
-  const url = `/dashboard/api/ai-tasks/stream/${port}/${encodeURIComponent(taskId)}`;
+  const addrParam = address ? `&address=${encodeURIComponent(address)}` : '';
+  const url = `/dashboard/api/ai-tasks/stream/${port}/${encodeURIComponent(taskId)}?since=0${addrParam}`;
   eventSource = new EventSource(url);
 
   eventSource.onmessage = (e) => {
@@ -282,44 +312,89 @@ async function connectStream(taskId, port) {
 function handleStreamEvent(event) {
   const { type, data } = event;
 
+  // Filter system init and user echo noise
+  if (type === 'text' || type === 'default') {
+    if (typeof data === 'object' && data !== null) {
+      if (data.type === 'system' && data.subtype === 'init') return;
+      if (data.type === 'user') return;
+    }
+    if (typeof data === 'string') {
+      // Try parsing JSON strings that are init/user payloads
+      try {
+        const parsed = JSON.parse(data);
+        if (parsed.type === 'system' && parsed.subtype === 'init') return;
+        if (parsed.type === 'user') return;
+      } catch {}
+      // Skip empty text
+      if (!data.trim()) return;
+    }
+  }
+
   switch (type) {
     case 'text':
-      appendLine('stdout', typeof data === 'string' ? data : JSON.stringify(data));
+      appendLine('stdout', typeof data === 'string' ? data : (data?.text || JSON.stringify(data)));
       break;
     case 'thinking':
       appendLine('thinking', typeof data === 'string' ? data : JSON.stringify(data));
       break;
-    case 'tool_use':
-      appendLine('tool-use', `Using ${data?.name || 'tool'}: ${truncateJson(data?.input)}`);
+    case 'tool_use': {
+      const name = data?.name || 'tool';
+      const input = data?.input;
+      let desc = '';
+      if (input) {
+        // Show concise tool description
+        if (input.command) desc = input.command;
+        else if (input.file_path) desc = input.file_path;
+        else if (input.pattern) desc = input.pattern;
+        else if (input.query) desc = input.query;
+        else if (input.url) desc = input.url;
+        else {
+          const str = typeof input === 'string' ? input : JSON.stringify(input);
+          desc = str.length > 100 ? str.slice(0, 100) + '...' : str;
+        }
+      }
+      appendLine('tool-use', `\u25b6 ${name}${desc ? ': ' + desc : ''}`);
       break;
-    case 'tool_result':
-      appendLine('tool-result', formatToolResult(data));
+    }
+    case 'tool_result': {
+      const result = formatToolResult(data);
+      if (result) appendLine('tool-result', result);
       break;
+    }
     case 'permission_request':
       if (!taskFinished) showApprovalBanner(data);
       break;
     case 'status':
-      appendLine('system', `Status: ${data?.status || JSON.stringify(data)}`);
+      updateStatusBadge(data?.status || 'running');
       break;
     case 'error':
       appendLine('stderr', typeof data === 'string' ? data : JSON.stringify(data));
       break;
-    case 'result':
-      appendLine('result', data?.text || JSON.stringify(data));
+    case 'result': {
+      const parts = [];
+      if (data?.text) parts.push(data.text);
       if (data?.cost) {
-        appendLine('system', `Cost: $${data.cost.input || '?'} in + $${data.cost.output || '?'} out`);
+        parts.push(`\nCost: $${data.cost.input || '?'} in + $${data.cost.output || '?'} out`);
       }
+      if (data?.duration) parts.push(`Duration: ${data.duration}`);
+      appendLine('result', parts.join('\n'), true);
+      updateStatusBadge('completed');
       break;
+    }
     case 'exit':
       taskFinished = true;
-      appendLine('system', `Exited (code: ${data?.exitCode ?? '?'})`);
+      updateStatusBadge(data?.exitCode === 0 ? 'completed' : 'failed');
+      if (data?.exitCode !== 0) {
+        appendLine('stderr', `Exited with code ${data?.exitCode ?? '?'}`);
+      }
       // Hide any stale approval banner
       const approvalEl = document.getElementById('ai-approval');
       if (approvalEl) { approvalEl.style.display = 'none'; approvalEl.innerHTML = ''; }
       closeStream();
       break;
     default:
-      appendLine('system', JSON.stringify(event));
+      // Skip unknown event types silently instead of dumping raw JSON
+      break;
   }
 }
 
@@ -358,7 +433,8 @@ function showApprovalBanner(approval) {
 
 async function sendApproval(requestId, approved) {
   if (!selectedTask) return;
-  const { taskId, port } = selectedTask;
+  const { taskId, port, address } = selectedTask;
+  const addrParam = address ? `?address=${encodeURIComponent(address)}` : '';
 
   const el = document.getElementById('ai-approval');
   if (el) {
@@ -366,7 +442,7 @@ async function sendApproval(requestId, approved) {
   }
 
   try {
-    await dashboardApi(`/ai-tasks/approve/${port}/${encodeURIComponent(taskId)}`, {
+    await dashboardApi(`/ai-tasks/approve/${port}/${encodeURIComponent(taskId)}${addrParam}`, {
       method: 'POST',
       body: JSON.stringify({ requestId, approved }),
     });
@@ -382,9 +458,10 @@ async function sendApproval(requestId, approved) {
 
 async function cancelTask() {
   if (!selectedTask) return;
-  const { taskId, port } = selectedTask;
+  const { taskId, port, address } = selectedTask;
+  const addrParam = address ? `?address=${encodeURIComponent(address)}` : '';
   try {
-    await dashboardApi(`/ai-tasks/cancel/${port}/${encodeURIComponent(taskId)}`, { method: 'DELETE' });
+    await dashboardApi(`/ai-tasks/cancel/${port}/${encodeURIComponent(taskId)}${addrParam}`, { method: 'DELETE' });
     appendLine('system', 'Task cancelled');
   } catch (err) {
     appendLine('stderr', `Cancel failed: ${err.message}`);
@@ -400,12 +477,18 @@ function closeStream() {
 
 // ── Terminal Helpers ──
 
-function appendLine(cls, text) {
+function appendLine(cls, text, isResult = false) {
   const output = document.getElementById('ai-output');
   if (!output) return;
   const line = document.createElement('div');
   line.className = `ai-line ai-${cls}`;
-  line.textContent = text;
+  if (isResult) {
+    // For result blocks, preserve newlines as HTML
+    line.textContent = text;
+    line.style.whiteSpace = 'pre-wrap';
+  } else {
+    line.textContent = text;
+  }
   output.appendChild(line);
   output.scrollTop = output.scrollHeight;
 }
@@ -419,8 +502,10 @@ function truncateJson(obj) {
 function formatToolResult(data) {
   if (!data) return '';
   const content = data.content || data.output || '';
-  if (typeof content === 'string') return content.length > 500 ? content.slice(0, 500) + '...' : content;
-  return JSON.stringify(content).slice(0, 500);
+  if (!content) return '';
+  const str = typeof content === 'string' ? content : JSON.stringify(content);
+  if (!str.trim()) return '';
+  return str.length > 200 ? str.slice(0, 200) + '...' : str;
 }
 
 function statusBadgeClass(status) {
@@ -435,8 +520,8 @@ function statusBadgeClass(status) {
 
 // ── Global handlers ──
 
-window.__selectTask = (taskId, port) => {
-  selectedTask = { taskId, port };
+window.__selectTask = (taskId, port, address) => {
+  selectedTask = { taskId, port, address: address || '127.0.0.1' };
   renderTaskStream();
 };
 
