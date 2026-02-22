@@ -484,18 +484,10 @@ export class AiTaskManager {
     } else if (cliType === 'tool_result') {
       this.emit(task, { type: 'tool_result', taskId, timestamp: ts, data: { name: parsed.name, content: parsed.content, output: parsed.output } });
     } else if (cliType === 'permission_request' || cliType === 'input_request') {
-      // Claude is asking for permission
-      const approval: AiTaskApprovalRequest = {
-        toolName: parsed.tool?.name || parsed.toolName || parsed.name || 'unknown',
-        toolInput: parsed.tool?.input || parsed.toolInput || parsed.input || {},
-        requestId: parsed.id || parsed.request_id || randomUUID(),
-        timestamp: ts,
-        description: parsed.description || parsed.message || `Claude wants to use: ${parsed.tool?.name || parsed.name || 'a tool'}`,
-      };
-      task.info.status = 'waiting_approval';
-      task.info.pendingApproval = approval;
-      task.info.updatedAt = ts;
-      this.emit(task, { type: 'permission_request', taskId, timestamp: ts, data: approval });
+      // Ignored here — the PreToolUse hook (permission-hook.mjs) handles
+      // permission requests via the /permission-request endpoint. Emitting
+      // a second event from stream-json would create duplicate approval
+      // banners with mismatched requestIds, causing approvals to fail.
     } else if (cliType === 'result') {
       this.emit(task, { type: 'result', taskId, timestamp: ts, data: { text: parsed.result, cost: parsed.total_cost_usd, duration: parsed.duration_ms } });
     } else if (cliType === 'error') {
