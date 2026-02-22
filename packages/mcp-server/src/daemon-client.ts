@@ -1,5 +1,11 @@
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { homedir } from 'node:os';
+import { parse as parseYaml } from 'yaml';
 import {
   DEFAULT_PORT,
+  CONFIG_DIR,
+  CONFIG_FILE,
   type MessageEnvelope,
   type MessageType,
   createMessageEnvelope,
@@ -8,18 +14,60 @@ import {
   ACK_TTL,
 } from '@loopsy/protocol';
 
-const BASE_URL = `http://127.0.0.1:${DEFAULT_PORT}/api/v1`;
+/**
+ * Read the API key from ~/.loopsy/config.yaml.
+ * Falls back to LOOPSY_API_KEY env var, then empty string.
+ */
+async function loadApiKeyFromConfig(): Promise<{ apiKey: string; port: number }> {
+  try {
+    const configPath = join(homedir(), CONFIG_DIR, CONFIG_FILE);
+    const raw = await readFile(configPath, 'utf-8');
+    const parsed = parseYaml(raw) as any;
+    return {
+      apiKey: parsed?.auth?.apiKey ?? process.env.LOOPSY_API_KEY ?? '',
+      port: parsed?.server?.port ?? DEFAULT_PORT,
+    };
+  } catch {
+    return {
+      apiKey: process.env.LOOPSY_API_KEY ?? '',
+      port: DEFAULT_PORT,
+    };
+  }
+}
 
 export class DaemonClient {
   private apiKey: string;
   private baseUrl: string;
+  private initialized: boolean = false;
+  private initPromise: Promise<void> | null = null;
 
   constructor(apiKey?: string, port?: number) {
-    this.apiKey = apiKey ?? process.env.LOOPSY_API_KEY ?? '';
+    this.apiKey = apiKey ?? '';
     this.baseUrl = `http://127.0.0.1:${port ?? DEFAULT_PORT}/api/v1`;
+
+    // If no API key provided, auto-load from config
+    if (!this.apiKey) {
+      this.initPromise = this.autoInit(port);
+    } else {
+      this.initialized = true;
+    }
+  }
+
+  private async autoInit(portOverride?: number): Promise<void> {
+    const config = await loadApiKeyFromConfig();
+    this.apiKey = this.apiKey || config.apiKey;
+    this.baseUrl = `http://127.0.0.1:${portOverride ?? config.port}/api/v1`;
+    this.initialized = true;
+  }
+
+  private async ensureInit(): Promise<void> {
+    if (!this.initialized && this.initPromise) {
+      await this.initPromise;
+    }
   }
 
   private async request<T>(path: string, opts: RequestInit = {}): Promise<T> {
+    await this.ensureInit();
     const res = await fetch(`${this.baseUrl}${path}`, {
       ...opts,
       headers: {

@@ -25,12 +25,13 @@
     "@loopsy/protocol": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.12.0",
     "undici": "^7.0.0",
+    "yaml": "^2.8.2",
     "zod": "^3.23.0"
   },
   "devDependencies": {
-    "typescript": "^5.5.0",
+    "@types/node": "^22.0.0",
     "tsx": "^4.16.0",
-    "vitest": "^2.0.0",
-    "@types/node": "^22.0.0"
+    "typescript": "^5.5.0",
+    "vitest": "^2.0.0"
   }
 }

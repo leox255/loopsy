@@ -3,10 +3,7 @@
     "loopsy": {
       "command": "node",
       "args": ["packages/mcp-server/dist/index.js"],
-      "env": {
-        "LOOPSY_API_KEY": "",
-        "LOOPSY_PORT": "19532"
-      }
+      "env": {}
     }
   }
 }
