@@ -208,6 +208,9 @@ export type AiTaskStatus = 'pending' | 'running' | 'waiting_approval' | 'complet
 /** Permission modes for the Claude CLI */
 export type ClaudePermissionMode = 'default' | 'acceptEdits' | 'bypassPermissions' | 'dontAsk';
 
+/** Supported AI agent CLIs */
+export type AiAgent = 'claude' | 'gemini' | 'codex' | 'auto';
+
 /** Parameters to dispatch an AI task */
 export interface AiTaskParams {
   prompt: string;
@@ -219,6 +222,7 @@ export interface AiTaskParams {
   disallowedTools?: string[];
   additionalArgs?: string[];
   resumeSessionId?: string;
+  agent?: AiAgent;
 }
 
 /** AI task info tracked by the daemon */
@@ -236,6 +240,7 @@ export interface AiTaskInfo {
   model?: string;
   pendingApproval?: AiTaskApprovalRequest;
   sessionId?: string;
+  agent?: AiAgent;
 }
 
 /** A permission request from Claude needing human approval */

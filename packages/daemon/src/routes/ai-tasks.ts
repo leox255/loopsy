@@ -17,7 +17,7 @@ export function registerAiTaskRoutes(app: FastifyInstance, aiTaskManager: AiTask
         reply.code(429);
         return { error: err.message };
       }
-      if (err.code === 6006) {
+      if (err.code === 6006 || err.code === 6007) {
         reply.code(500);
         return { error: err.message };
       }

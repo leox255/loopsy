@@ -3,6 +3,7 @@ import { realpathSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
+import { spawn, type ChildProcess } from 'node:child_process';
 import * as pty from 'node-pty';
 import { which } from '../utils/which.js';
 import type {
@@ -12,6 +13,7 @@ import type {
   AiTaskApprovalRequest,
   AiTaskApprovalResponse,
   AiTaskStreamEvent,
+  AiAgent,
   PermissionRequestEntry,
   PermissionResponseEntry,
 } from '@loopsy/protocol';
@@ -23,11 +25,13 @@ import {
   AI_TASK_EVENT_BUFFER_SIZE,
 } from '@loopsy/protocol';
 
+type ResolvedAgent = 'claude' | 'gemini' | 'codex';
 type EventCallback = (event: AiTaskStreamEvent) => void;
 
 interface AiTask {
   info: AiTaskInfo;
-  ptyProcess: pty.IPty;
+  ptyProcess?: pty.IPty;
+  childProcess?: ChildProcess;
   eventBuffer: AiTaskStreamEvent[];
   subscribers: Set<EventCallback>;
   timeoutTimer?: ReturnType<typeof setTimeout>;
@@ -70,30 +74,20 @@ export class AiTaskManager {
     this.apiKey = config.apiKey;
   }
 
-  async dispatch(params: AiTaskParams, fromNodeId: string): Promise<AiTaskInfo> {
-    const activeCount = Array.from(this.tasks.values()).filter(
-      (t) => t.info.status === 'running' || t.info.status === 'waiting_approval',
-    ).length;
-    if (activeCount >= this.maxConcurrent) {
-      throw new LoopsyError(
-        LoopsyErrorCode.AI_TASK_MAX_CONCURRENT,
-        `Max concurrent AI tasks (${this.maxConcurrent}) reached`,
-      );
+  /** Auto-detect the first available agent CLI */
+  private async detectAgent(): Promise<ResolvedAgent> {
+    for (const agent of ['claude', 'gemini', 'codex'] as const) {
+      const path = await which(agent);
+      if (path) return agent;
     }
+    throw new LoopsyError(
+      LoopsyErrorCode.AI_TASK_AGENT_NOT_FOUND,
+      'No AI agent CLI found in PATH. Install claude-code, gemini-cli, or codex-cli.',
+    );
+  }
 
-    // Find claude CLI
-    const claudePath = await which('claude');
-    if (!claudePath) {
-      throw new LoopsyError(
-        LoopsyErrorCode.AI_TASK_CLAUDE_NOT_FOUND,
-        'Claude CLI not found in PATH. Install claude-code first.',
-      );
-    }
-
-    const taskId = randomUUID();
-    const now = Date.now();
-
-    // Build CLI args
+  /** Build CLI args for Claude */
+  private buildClaudeArgs(params: AiTaskParams): string[] {
     const args = ['-p', params.prompt, '--output-format', 'stream-json', '--verbose'];
 
     if (params.permissionMode) {
@@ -118,35 +112,130 @@ export class AiTaskManager {
       args.push(...params.additionalArgs);
     }
 
-    // Strip all Claude-related env vars to avoid nesting detection
+    return args;
+  }
+
+  /** Build CLI args for Gemini CLI */
+  private buildGeminiArgs(params: AiTaskParams): string[] {
+    const args = ['-p', params.prompt, '--output-format', 'stream-json'];
+
+    if (params.permissionMode === 'bypassPermissions') {
+      args.push('--yolo');
+    } else if (params.permissionMode === 'acceptEdits') {
+      args.push('--approval-mode', 'auto_edit');
+    }
+    if (params.model) {
+      args.push('-m', params.model);
+    }
+    if (params.additionalArgs?.length) {
+      args.push(...params.additionalArgs);
+    }
+
+    return args;
+  }
+
+  /** Build CLI args for Codex CLI */
+  private buildCodexArgs(params: AiTaskParams): string[] {
+    const args = ['exec', params.prompt, '--json'];
+
+    if (params.permissionMode === 'bypassPermissions' || params.permissionMode === 'acceptEdits') {
+      args.push('--full-auto');
+    }
+    if (params.model) {
+      args.push('-m', params.model);
+    }
+    if (params.cwd) {
+      args.push('--cd', params.cwd);
+    }
+    if (params.additionalArgs?.length) {
+      args.push(...params.additionalArgs);
+    }
+
+    return args;
+  }
+
+  /** Build a sanitized env for the given agent */
+  private buildEnv(agent: ResolvedAgent, taskId: string): Record<string, string> {
     const env: Record<string, string> = {};
     for (const [key, val] of Object.entries(process.env)) {
       if (val === undefined) continue;
-      if (key.startsWith('CLAUDE') || key.startsWith('ANTHROPIC_') || key.startsWith('OTEL_') || key === 'MCP_') {
-        continue;
+
+      // Per-agent env stripping
+      switch (agent) {
+        case 'claude':
+          if (key.startsWith('CLAUDE') || key.startsWith('ANTHROPIC_') || key.startsWith('OTEL_') || key === 'MCP_') continue;
+          break;
+        case 'gemini':
+          if (key.startsWith('GEMINI_') && key !== 'GEMINI_API_KEY') continue;
+          break;
+        case 'codex':
+          if (key.startsWith('CODEX_') && key !== 'CODEX_API_KEY') continue;
+          break;
       }
       env[key] = val;
     }
 
-    // Set env vars for the permission hook script (also available via CLI args)
+    // Loopsy task env vars
     env.LOOPSY_TASK_ID = taskId;
     env.LOOPSY_DAEMON_PORT = String(this.daemonPort);
     env.LOOPSY_API_KEY = this.apiKey;
+
+    return env;
+  }
+
+  async dispatch(params: AiTaskParams, fromNodeId: string): Promise<AiTaskInfo> {
+    const activeCount = Array.from(this.tasks.values()).filter(
+      (t) => t.info.status === 'running' || t.info.status === 'waiting_approval',
+    ).length;
+    if (activeCount >= this.maxConcurrent) {
+      throw new LoopsyError(
+        LoopsyErrorCode.AI_TASK_MAX_CONCURRENT,
+        `Max concurrent AI tasks (${this.maxConcurrent}) reached`,
+      );
+    }
+
+    // Resolve agent
+    const agentParam = params.agent || 'auto';
+    const resolvedAgent: ResolvedAgent = agentParam === 'auto'
+      ? await this.detectAgent()
+      : agentParam;
+
+    // Find CLI binary
+    const cliPath = await which(resolvedAgent);
+    if (!cliPath) {
+      const errorCode = resolvedAgent === 'claude'
+        ? LoopsyErrorCode.AI_TASK_CLAUDE_NOT_FOUND
+        : LoopsyErrorCode.AI_TASK_AGENT_NOT_FOUND;
+      throw new LoopsyError(errorCode, `${resolvedAgent} CLI not found in PATH`);
+    }
+
+    const taskId = randomUUID();
+    const now = Date.now();
+
+    // Build per-agent CLI args
+    let args: string[];
+    switch (resolvedAgent) {
+      case 'claude':
+        args = this.buildClaudeArgs(params);
+        break;
+      case 'gemini':
+        args = this.buildGeminiArgs(params);
+        break;
+      case 'codex':
+        args = this.buildCodexArgs(params);
+        break;
+    }
+
+    // Build sanitized env
+    const env = this.buildEnv(resolvedAgent, taskId);
 
     const isBypass = params.permissionMode === 'bypassPermissions';
     const taskCwd = params.cwd || homedir();
     const taskTmpDir = join(tmpdir(), `loopsy-task-${taskId}`);
     let spawnCwd: string;
 
-    if (isBypass) {
-      // Bypass mode: no hook needed — run directly in the actual cwd.
-      // The hook would register permission requests that nobody approves,
-      // causing a deadlock. Skip it entirely.
-      mkdirSync(taskTmpDir, { recursive: true }); // still needed for cleanup tracking
-      spawnCwd = taskCwd;
-    } else {
-      // Hook mode: cwd = taskTmpDir so Claude discovers .claude/settings.local.json
-      // containing the PreToolUse hook config with task-specific args baked in.
+    // Permission hook setup — Claude only, non-bypass mode
+    if (resolvedAgent === 'claude' && !isBypass) {
       const hookScriptPath = this.getHookScriptPath();
       const claudeSettingsDir = join(taskTmpDir, '.claude');
       mkdirSync(claudeSettingsDir, { recursive: true });
@@ -162,44 +251,57 @@ export class AiTaskManager {
           }],
         },
       }, null, 2));
-      // Write a CLAUDE.md that tells Claude the actual working directory
       writeFileSync(join(taskTmpDir, 'CLAUDE.md'),
         `Your actual working directory is: ${taskCwd}\n` +
         `Always use absolute paths rooted at ${taskCwd} for all file operations.\n`);
 
-      // Grant access to the actual cwd and user's home directory
       args.push('--add-dir', taskCwd);
       if (homedir() !== taskCwd) {
         args.push('--add-dir', homedir());
       }
       spawnCwd = taskTmpDir;
+    } else {
+      mkdirSync(taskTmpDir, { recursive: true });
+      spawnCwd = taskCwd;
     }
 
-    // Use node-pty to spawn with a pseudo-TTY
-    // Claude CLI (Bun runtime) buffers stdout when connected to a pipe;
-    // a PTY ensures real-time streaming output
-    let spawnFile: string;
-    let spawnArgs: string[];
-    if (process.platform === 'win32') {
-      // On Windows, .cmd files must be spawned via cmd.exe for ConPTY to work
-      spawnFile = 'cmd.exe';
-      spawnArgs = ['/c', claudePath, ...args];
-    } else {
-      // On macOS/Linux, resolve symlinks for node-pty
-      try {
-        spawnFile = realpathSync(claudePath);
-      } catch {
-        spawnFile = claudePath;
+    // Spawn the process
+    let ptyProcess: pty.IPty | undefined;
+    let childProcess: ChildProcess | undefined;
+    let pid: number | undefined;
+
+    if (resolvedAgent === 'claude') {
+      // Claude needs PTY (Bun runtime buffers stdout on pipes)
+      let spawnFile: string;
+      let spawnArgs: string[];
+      if (process.platform === 'win32') {
+        spawnFile = 'cmd.exe';
+        spawnArgs = ['/c', cliPath, ...args];
+      } else {
+        try {
+          spawnFile = realpathSync(cliPath);
+        } catch {
+          spawnFile = cliPath;
+        }
+        spawnArgs = args;
       }
-      spawnArgs = args;
+      ptyProcess = pty.spawn(spawnFile, spawnArgs, {
+        name: 'xterm-256color',
+        cols: process.platform === 'win32' ? 9999 : 32000,
+        rows: 50,
+        cwd: spawnCwd,
+        env,
+      });
+      pid = ptyProcess.pid;
+    } else {
+      // Gemini and Codex use child_process.spawn
+      childProcess = spawn(cliPath, args, {
+        cwd: spawnCwd,
+        env,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      pid = childProcess.pid;
     }
-    const proc = pty.spawn(spawnFile, spawnArgs, {
-      name: 'xterm-256color',
-      cols: process.platform === 'win32' ? 9999 : 32000, // ConPTY needs wide cols to avoid JSON line wrapping
-      rows: 50,
-      cwd: spawnCwd,
-      env,
-    });
 
     const info: AiTaskInfo = {
       taskId,
@@ -208,13 +310,15 @@ export class AiTaskManager {
       startedAt: now,
       updatedAt: now,
       fromNodeId,
-      pid: proc.pid,
+      pid,
       model: params.model,
+      agent: resolvedAgent,
     };
 
     const task: AiTask = {
       info,
-      ptyProcess: proc,
+      ptyProcess,
+      childProcess,
       eventBuffer: [],
       subscribers: new Set(),
     };
@@ -227,58 +331,56 @@ export class AiTaskManager {
       this.emit(task, { type: 'error', taskId, timestamp: Date.now(), data: 'Task timed out' });
     }, DEFAULT_AI_TASK_TIMEOUT);
 
-    // Buffer for incomplete lines from PTY
+    // Buffer for incomplete lines
     let lineBuffer = '';
 
-    // Parse PTY output — data arrives as chunks that may contain partial lines
-    proc.onData((data: string) => {
-      // Debug: log raw PTY data
+    const processLine = (line: string) => {
+      if (!line) return;
       if (process.env.LOOPSY_DEBUG_PTY) {
-        console.log(`[PTY ${taskId.slice(0,8)}] raw(${data.length}): ${JSON.stringify(data.slice(0, 300))}`);
+        console.log(`[${resolvedAgent.toUpperCase()} ${taskId.slice(0,8)}] line(${line.length}): ${line.slice(0, 100)}...`);
       }
-      // Strip ANSI before buffering to prevent escape sequences splitting JSON
-      const cleaned = stripAnsi(data);
+      try {
+        const parsed = JSON.parse(line);
+        switch (resolvedAgent) {
+          case 'claude':
+            this.handleClaudeEvent(task, parsed);
+            break;
+          case 'gemini':
+            this.handleGeminiEvent(task, parsed);
+            break;
+          case 'codex':
+            this.handleCodexEvent(task, parsed);
+            break;
+        }
+      } catch (err) {
+        if (process.env.LOOPSY_DEBUG_PTY) {
+          console.log(`[${resolvedAgent.toUpperCase()} ${taskId.slice(0,8)}] JSON parse fail: ${(err as Error).message}, line starts: ${JSON.stringify(line.slice(0, 80))}`);
+        }
+        if (line.length > 0) {
+          this.emit(task, { type: 'text', taskId, timestamp: Date.now(), data: line });
+        }
+      }
+    };
+
+    const processChunk = (data: string, needsAnsiStrip: boolean) => {
+      if (process.env.LOOPSY_DEBUG_PTY) {
+        console.log(`[${resolvedAgent.toUpperCase()} ${taskId.slice(0,8)}] raw(${data.length}): ${JSON.stringify(data.slice(0, 300))}`);
+      }
+      const cleaned = needsAnsiStrip ? stripAnsi(data) : data;
       lineBuffer += cleaned;
       const lines = lineBuffer.split('\n');
-      // Keep the last element (may be incomplete)
       lineBuffer = lines.pop() || '';
-
       for (const rawLine of lines) {
         const line = rawLine.trim();
-        if (!line) continue;
-        if (process.env.LOOPSY_DEBUG_PTY) {
-          console.log(`[PTY ${taskId.slice(0,8)}] line(${line.length}): ${line.slice(0, 100)}...`);
-        }
-        try {
-          const parsed = JSON.parse(line);
-          this.handleClaudeEvent(task, parsed);
-        } catch (err) {
-          if (process.env.LOOPSY_DEBUG_PTY) {
-            console.log(`[PTY ${taskId.slice(0,8)}] JSON parse fail: ${(err as Error).message}, line starts: ${JSON.stringify(line.slice(0, 80))}`);
-          }
-          // Non-JSON line — forward as text
-          if (line.length > 0) {
-            this.emit(task, { type: 'text', taskId, timestamp: Date.now(), data: line });
-          }
-        }
+        if (line) processLine(line);
       }
-    });
+    };
 
-    // Handle process exit
-    proc.onExit(({ exitCode, signal }) => {
-      // Process any remaining buffered data
+    const handleExit = (exitCode: number | null, signal?: number | null) => {
+      // Process remaining buffer
       if (lineBuffer.trim()) {
-        const line = stripAnsi(lineBuffer).trim();
-        if (line) {
-          try {
-            const parsed = JSON.parse(line);
-            this.handleClaudeEvent(task, parsed);
-          } catch {
-            if (line.length > 0) {
-              this.emit(task, { type: 'text', taskId, timestamp: Date.now(), data: line });
-            }
-          }
-        }
+        const line = (resolvedAgent === 'claude' ? stripAnsi(lineBuffer) : lineBuffer).trim();
+        if (line) processLine(line);
         lineBuffer = '';
       }
 
@@ -293,13 +395,30 @@ export class AiTaskManager {
       }
       this.emit(task, { type: 'exit', taskId, timestamp: Date.now(), data: { exitCode, signal } });
 
-      // Move to completed tasks (preserve event buffer) — kept until explicitly deleted
       this.recentTasks.set(taskId, { info: { ...info }, eventBuffer: [...task.eventBuffer] });
       this.tasks.delete(taskId);
 
-      // Clean up per-task temp directory
       try { rmSync(taskTmpDir, { recursive: true, force: true }); } catch {}
-    });
+    };
+
+    if (ptyProcess) {
+      // PTY data handler (Claude)
+      ptyProcess.onData((data: string) => processChunk(data, true));
+      ptyProcess.onExit(({ exitCode, signal }) => handleExit(exitCode, signal));
+    } else if (childProcess) {
+      // child_process data handler (Gemini/Codex)
+      childProcess.stdout!.on('data', (data: Buffer) => processChunk(data.toString(), false));
+      childProcess.stderr!.on('data', (data: Buffer) => {
+        const text = data.toString().trim();
+        if (text) {
+          this.emit(task, { type: 'text', taskId, timestamp: Date.now(), data: text });
+        }
+      });
+      childProcess.on('exit', (code, signal) => {
+        const sigNum = signal ? (({ SIGTERM: 15, SIGKILL: 9 } as Record<string, number>)[signal] || 1) : null;
+        handleExit(code ?? null, sigNum);
+      });
+    }
 
     // Emit initial status
     this.emit(task, { type: 'status', taskId, timestamp: now, data: { status: 'running' } });
@@ -407,12 +526,23 @@ export class AiTaskManager {
     if (!task) return false;
     task.info.status = 'cancelled';
     task.info.updatedAt = Date.now();
-    task.ptyProcess.kill('SIGTERM');
-    setTimeout(() => {
-      if (this.tasks.has(taskId)) {
-        try { task.ptyProcess.kill('SIGKILL'); } catch {}
-      }
-    }, 5000);
+
+    if (task.ptyProcess) {
+      task.ptyProcess.kill('SIGTERM');
+      setTimeout(() => {
+        if (this.tasks.has(taskId)) {
+          try { task.ptyProcess!.kill('SIGKILL'); } catch {}
+        }
+      }, 5000);
+    } else if (task.childProcess) {
+      task.childProcess.kill('SIGTERM');
+      setTimeout(() => {
+        if (this.tasks.has(taskId)) {
+          try { task.childProcess!.kill('SIGKILL'); } catch {}
+        }
+      }, 5000);
+    }
+
     return true;
   }
 
@@ -447,7 +577,10 @@ export class AiTaskManager {
 
   cancelAll(): void {
     for (const [id, task] of this.tasks) {
-      try { task.ptyProcess.kill('SIGKILL'); } catch {}
+      try {
+        if (task.ptyProcess) task.ptyProcess.kill('SIGKILL');
+        else if (task.childProcess) task.childProcess.kill('SIGKILL');
+      } catch {}
       if (task.timeoutTimer) clearTimeout(task.timeoutTimer);
       this.tasks.delete(id);
     }
@@ -528,6 +661,79 @@ export class AiTaskManager {
       // Rate limit and user echo events — silently ignore
     } else {
       // Unknown event type — forward as-is
+      this.emit(task, { type: 'text', taskId, timestamp: ts, data: JSON.stringify(parsed) });
+    }
+  }
+
+  private handleGeminiEvent(task: AiTask, parsed: any): void {
+    const taskId = task.info.taskId;
+    const ts = Date.now();
+    const cliType = parsed.type;
+
+    if (cliType === 'init') {
+      this.emit(task, { type: 'system', taskId, timestamp: ts, data: parsed });
+    } else if (cliType === 'message') {
+      // Extract text from content blocks
+      const content = parsed.content || parsed.message?.content || [];
+      if (Array.isArray(content)) {
+        for (const block of content) {
+          if (block.type === 'text' || block.text) {
+            this.emit(task, { type: 'text', taskId, timestamp: ts, data: block.text || '' });
+          }
+        }
+      } else if (typeof content === 'string') {
+        this.emit(task, { type: 'text', taskId, timestamp: ts, data: content });
+      } else if (parsed.text) {
+        this.emit(task, { type: 'text', taskId, timestamp: ts, data: parsed.text });
+      }
+    } else if (cliType === 'tool_use') {
+      this.emit(task, { type: 'tool_use', taskId, timestamp: ts, data: { name: parsed.name, input: parsed.input } });
+    } else if (cliType === 'tool_result') {
+      this.emit(task, { type: 'tool_result', taskId, timestamp: ts, data: { name: parsed.name, content: parsed.content, output: parsed.output } });
+    } else if (cliType === 'result') {
+      this.emit(task, { type: 'result', taskId, timestamp: ts, data: { text: parsed.response || parsed.result, cost: parsed.stats?.cost, duration: parsed.stats?.duration_ms } });
+    } else if (cliType === 'error') {
+      task.info.error = parsed.message || parsed.error || JSON.stringify(parsed);
+      this.emit(task, { type: 'error', taskId, timestamp: ts, data: parsed.message || parsed.error || parsed });
+    } else {
+      // Forward unknown events as text
+      this.emit(task, { type: 'text', taskId, timestamp: ts, data: JSON.stringify(parsed) });
+    }
+  }
+
+  private handleCodexEvent(task: AiTask, parsed: any): void {
+    const taskId = task.info.taskId;
+    const ts = Date.now();
+    const cliType = parsed.type;
+
+    if (cliType === 'thread.started') {
+      this.emit(task, { type: 'system', taskId, timestamp: ts, data: parsed });
+    } else if (cliType === 'item.completed') {
+      const item = parsed.item || parsed;
+      const itemType = item.type || item.item_type;
+
+      if (itemType === 'agent_message' || itemType === 'message') {
+        const text = item.content || item.text || '';
+        if (text) this.emit(task, { type: 'text', taskId, timestamp: ts, data: text });
+      } else if (itemType === 'reasoning') {
+        const text = item.content || item.text || '';
+        if (text) this.emit(task, { type: 'thinking', taskId, timestamp: ts, data: text });
+      } else if (itemType === 'command_execution') {
+        this.emit(task, { type: 'tool_use', taskId, timestamp: ts, data: { name: 'command', input: { command: item.command || item.input } } });
+        if (item.output || item.result) {
+          this.emit(task, { type: 'tool_result', taskId, timestamp: ts, data: { name: 'command', content: item.output || item.result } });
+        }
+      } else if (itemType === 'file_change') {
+        this.emit(task, { type: 'tool_use', taskId, timestamp: ts, data: { name: 'file_change', input: { file: item.file || item.path, action: item.action } } });
+      } else if (itemType === 'mcp_tool_call') {
+        this.emit(task, { type: 'tool_use', taskId, timestamp: ts, data: { name: item.tool_name || item.name, input: item.input || item.arguments } });
+      }
+    } else if (cliType === 'error') {
+      task.info.error = parsed.message || parsed.error || JSON.stringify(parsed);
+      this.emit(task, { type: 'error', taskId, timestamp: ts, data: parsed.message || parsed.error || parsed });
+    } else if (cliType === 'turn.completed') {
+      // Ignore — exit event handles completion
+    } else {
       this.emit(task, { type: 'text', taskId, timestamp: ts, data: JSON.stringify(parsed) });
     }
   }

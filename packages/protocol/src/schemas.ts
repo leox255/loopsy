@@ -112,6 +112,7 @@ export const AiTaskParamsSchema = z.object({
   disallowedTools: z.array(z.string()).optional(),
   additionalArgs: z.array(z.string()).optional(),
   resumeSessionId: z.string().optional(),
+  agent: z.enum(['claude', 'gemini', 'codex', 'auto']).optional().default('auto'),
 });
 
 export const AiTaskApprovalResponseSchema = z.object({

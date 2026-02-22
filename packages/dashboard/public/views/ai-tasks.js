@@ -54,6 +54,17 @@ async function renderDispatch() {
         </select>
       </div>
       <div class="form-group">
+        <div class="form-label">Agent</div>
+        <select class="input" id="ai-agent">
+          <option value="auto">Auto-detect</option>
+          <option value="claude">Claude Code</option>
+          <option value="gemini">Gemini CLI</option>
+          <option value="codex">Codex CLI</option>
+        </select>
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
         <div class="form-label">Permission Mode</div>
         <select class="input" id="ai-perm-mode">
           <option value="default">Default (Human Approves)</option>
@@ -62,8 +73,6 @@ async function renderDispatch() {
           <option value="dontAsk">Don't Ask (Skip)</option>
         </select>
       </div>
-    </div>
-    <div class="form-row">
       <div class="form-group">
         <div class="form-label">Model</div>
         <select class="input" id="ai-model">
@@ -81,7 +90,7 @@ async function renderDispatch() {
     <div class="form-row">
       <div class="form-group" style="flex:1">
         <div class="form-label">Prompt</div>
-        <textarea class="textarea input" id="ai-prompt" rows="5" placeholder="Describe the task for Claude..."></textarea>
+        <textarea class="textarea input" id="ai-prompt" rows="5" placeholder="Describe the task..."></textarea>
       </div>
     </div>
     <button class="btn btn-primary" id="btn-dispatch">Dispatch Task</button>
@@ -90,6 +99,39 @@ async function renderDispatch() {
 
   loadPeers();
   document.getElementById('btn-dispatch').addEventListener('click', dispatchTask);
+  document.getElementById('ai-agent').addEventListener('change', onAgentChange);
+  onAgentChange(); // set initial state
+}
+
+function onAgentChange() {
+  const agent = document.getElementById('ai-agent').value;
+  const modelSel = document.getElementById('ai-model');
+  const permSel = document.getElementById('ai-perm-mode');
+
+  // Dynamic model options
+  const modelOptions = {
+    auto: [['', 'Default']],
+    claude: [['', 'Default'], ['sonnet', 'Sonnet'], ['opus', 'Opus'], ['haiku', 'Haiku']],
+    gemini: [['', 'Default'], ['gemini-2.5-pro', 'Gemini 2.5 Pro'], ['gemini-2.5-flash', 'Gemini 2.5 Flash']],
+    codex: [['', 'Default'], ['gpt-5-codex', 'GPT-5 Codex'], ['o3', 'o3']],
+  };
+  const models = modelOptions[agent] || modelOptions.auto;
+  modelSel.innerHTML = models.map(([val, label]) => `<option value="${val}">${escapeHtml(label)}</option>`).join('');
+
+  // Dynamic permission mode options
+  if (agent === 'gemini' || agent === 'codex') {
+    permSel.innerHTML = `
+      <option value="acceptEdits">Accept Edits</option>
+      <option value="bypassPermissions">Bypass All</option>
+    `;
+  } else {
+    permSel.innerHTML = `
+      <option value="default">Default (Human Approves)</option>
+      <option value="acceptEdits">Accept Edits</option>
+      <option value="bypassPermissions">Bypass All</option>
+      <option value="dontAsk">Don't Ask (Skip)</option>
+    `;
+  }
 }
 
 async function loadPeers() {
@@ -133,6 +175,7 @@ async function dispatchTask() {
   const prompt = document.getElementById('ai-prompt').value.trim();
   const permissionMode = document.getElementById('ai-perm-mode').value;
   const model = document.getElementById('ai-model').value;
+  const agent = document.getElementById('ai-agent').value;
   const cwd = document.getElementById('ai-cwd').value.trim();
   const statusEl = document.getElementById('dispatch-status');
 
@@ -151,6 +194,7 @@ async function dispatchTask() {
       targetAddress: address,
       prompt,
       permissionMode,
+      agent,
     };
     if (model) body.model = model;
     if (cwd) body.cwd = cwd;
@@ -199,10 +243,12 @@ async function renderTasks() {
       const promptPreview = t.prompt.length > 100 ? t.prompt.slice(0, 100) + '...' : t.prompt;
       const needsAttention = t.status === 'waiting_approval';
 
+      const agentBadge = t.agent ? `<span class="badge badge-muted" style="margin-left:4px;font-size:0.7em">${escapeHtml(t.agent)}</span>` : '';
+
       return `
         <div class="msg-row${needsAttention ? ' needs-attention' : ''}" onclick="window.__selectTask('${escapeHtml(t.taskId)}', ${t._sourcePort || 19532}, '${escapeHtml(t._sourceAddress || '127.0.0.1')}')">
           <div class="msg-header">
-            <span class="badge ${badgeClass}${needsAttention ? ' pulse' : ''}">${escapeHtml(t.status)}</span>
+            <span class="badge ${badgeClass}${needsAttention ? ' pulse' : ''}">${escapeHtml(t.status)}</span>${agentBadge}
             <span class="msg-from">${escapeHtml(t._sourceHostname || 'unknown')}</span>
             <span class="msg-time">${formatTime(t.startedAt)}</span>
           </div>
@@ -263,6 +309,7 @@ async function renderTaskStream() {
       updateStatusBadge(task.status);
       document.getElementById('task-prompt').textContent = task.prompt;
       const meta = [];
+      if (task.agent) meta.push(`Agent: ${task.agent}`);
       if (task.model) meta.push(`Model: ${task.model}`);
       if (task._sourceHostname) meta.push(`Host: ${task._sourceHostname}`);
       if (task.startedAt) meta.push(formatTime(task.startedAt));
