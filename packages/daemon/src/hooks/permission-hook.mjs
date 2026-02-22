@@ -7,21 +7,34 @@
 // permission request with the Loopsy daemon, and polls until the human
 // approves/denies via the dashboard.
 //
-// Usage (env vars set by daemon at spawn time):
-//   LOOPSY_TASK_ID      - The AI task ID
-//   LOOPSY_DAEMON_PORT  - The daemon's HTTP port
-//   LOOPSY_API_KEY      - API key for authenticating with the daemon
+// Exit codes:
+//   0 + JSON stdout  → allow (Claude proceeds with tool)
+//   2 + stderr text  → deny (Claude blocks tool, stderr shown as error)
 //
-// OR command-line args (embedded by daemon in per-task settings):
+// Usage (command-line args embedded by daemon in per-task settings):
 //   node permission-hook.mjs <taskId> <port> <apiKey>
 
-// Support both env vars and CLI args
+// Support both CLI args and env vars
 const taskId = process.argv[2] || process.env.LOOPSY_TASK_ID;
 const port = process.argv[3] || process.env.LOOPSY_DAEMON_PORT || '19532';
 const apiKey = process.argv[4] || process.env.LOOPSY_API_KEY;
 const baseUrl = `http://127.0.0.1:${port}`;
 
-// If no task ID, this is a normal Claude session — no-op
+function allow() {
+  process.stdout.write(JSON.stringify({
+    hookSpecificOutput: {
+      permissionDecision: 'allow',
+    },
+  }));
+  process.exit(0);
+}
+
+function deny(reason) {
+  process.stderr.write(reason || 'Denied');
+  process.exit(2);
+}
+
+// If no task ID, this is a normal Claude session — no-op (allow all)
 if (!taskId) {
   process.stdout.write('{}');
   process.exit(0);
@@ -51,14 +64,8 @@ process.stdin.on('end', async () => {
     });
 
     if (!registerRes.ok) {
-      // If we can't reach the daemon, deny for safety
-      process.stdout.write(JSON.stringify({
-        hookSpecificOutput: {
-          permissionDecision: 'deny',
-          permissionDecisionReason: 'Failed to register permission request with daemon',
-        },
-      }));
-      process.exit(0);
+      deny('Failed to register permission request with daemon');
+      return;
     }
 
     // Poll for decision (100ms interval, 5min timeout)
@@ -75,35 +82,20 @@ process.stdin.on('end', async () => {
 
         const data = await res.json();
         if (data.resolved) {
-          process.stdout.write(JSON.stringify({
-            hookSpecificOutput: {
-              permissionDecision: data.approved ? 'allow' : 'deny',
-              permissionDecisionReason: data.message || '',
-            },
-          }));
-          process.exit(0);
+          if (data.approved) {
+            allow();
+          } else {
+            deny(data.message || 'Denied by user');
+          }
+          return;
         }
       } catch {
         // Network error during poll — keep trying
       }
     }
 
-    // Timeout → deny
-    process.stdout.write(JSON.stringify({
-      hookSpecificOutput: {
-        permissionDecision: 'deny',
-        permissionDecisionReason: 'Permission request timed out (5 minutes)',
-      },
-    }));
-    process.exit(0);
+    deny('Permission request timed out (5 minutes)');
   } catch (err) {
-    // Parse error or unexpected failure → deny
-    process.stdout.write(JSON.stringify({
-      hookSpecificOutput: {
-        permissionDecision: 'deny',
-        permissionDecisionReason: `Hook error: ${err.message}`,
-      },
-    }));
-    process.exit(0);
+    deny(`Hook error: ${err.message}`);
   }
 });
