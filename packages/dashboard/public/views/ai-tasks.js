@@ -4,6 +4,8 @@ let refreshTimer = null;
 let selectedTask = null; // { taskId, port, address }
 let eventSource = null;
 let taskFinished = false; // true once we receive an exit event
+let resolvedRequestIds = new Set(); // track approved/denied requests to skip stale replays
+let currentPendingRequestId = null; // the currently active pending request from the daemon
 
 function mount(container) {
   container.innerHTML = `
@@ -282,14 +284,22 @@ function updateStatusBadge(status) {
 async function connectStream(taskId, port, address) {
   closeStream();
   taskFinished = false;
+  resolvedRequestIds = new Set();
+  currentPendingRequestId = null;
 
-  // Check if task is already finished before connecting — prevents
-  // stale permission_request events from showing the approval banner
+  // Check task state before connecting — detect finished tasks and
+  // identify which permission request (if any) is actually pending
   try {
     const data = await dashboardApi('/ai-tasks/all');
     const task = (data.tasks || []).find(t => t.taskId === taskId);
-    if (task && (task.status === 'completed' || task.status === 'failed' || task.status === 'cancelled')) {
-      taskFinished = true;
+    if (task) {
+      if (task.status === 'completed' || task.status === 'failed' || task.status === 'cancelled') {
+        taskFinished = true;
+      }
+      // Track which request is actually pending right now
+      if (task.pendingApproval?.requestId) {
+        currentPendingRequestId = task.pendingApproval.requestId;
+      }
     }
   } catch {}
 
@@ -362,11 +372,25 @@ function handleStreamEvent(event) {
       if (result) appendLine('tool-result', result);
       break;
     }
-    case 'permission_request':
-      if (!taskFinished) showApprovalBanner(data);
+    case 'permission_request': {
+      const reqId = data?.requestId;
+      if (!taskFinished && reqId && !resolvedRequestIds.has(reqId)) {
+        // Only show if this is the actually pending request (or a new live one)
+        if (!currentPendingRequestId || reqId === currentPendingRequestId) {
+          showApprovalBanner(data);
+        }
+      }
       break;
+    }
     case 'status':
       updateStatusBadge(data?.status || 'running');
+      // When a permission is resolved, hide the banner and track it
+      if (data?.approved !== undefined) {
+        const approvalEl = document.getElementById('ai-approval');
+        if (approvalEl) { approvalEl.style.display = 'none'; approvalEl.innerHTML = ''; }
+        // After seeing an approval status, any prior permission_request is resolved
+        currentPendingRequestId = null;
+      }
       break;
     case 'error':
       appendLine('stderr', typeof data === 'string' ? data : JSON.stringify(data));
@@ -449,6 +473,8 @@ async function sendApproval(requestId, approved) {
       method: 'POST',
       body: JSON.stringify({ requestId, approved }),
     });
+    resolvedRequestIds.add(requestId);
+    currentPendingRequestId = null;
     if (el) {
       el.style.display = 'none';
       el.innerHTML = '';
