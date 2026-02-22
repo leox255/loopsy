@@ -11,6 +11,8 @@ function platformSvg(platform) {
 }
 
 let refreshTimer = null;
+let allPeers = []; // cached peer list for selection
+let selectedPeers = new Set(); // nodeIds of selected peers
 
 function mount(container) {
   container.innerHTML = `
@@ -20,7 +22,10 @@ function mount(container) {
       <div class="form-group">
         <select class="input" id="peers-session"></select>
       </div>
-      <button class="btn btn-primary btn-sm" id="btn-peers-refresh">Refresh</button>
+      <div class="flex gap-sm items-center">
+        <button class="btn btn-primary btn-sm" id="btn-peers-refresh">Refresh</button>
+        <button class="btn btn-danger btn-sm" id="btn-delete-peers" style="display:none">Delete Selected</button>
+      </div>
     </div>
 
     <div class="peer-grid" id="peer-grid"></div>
@@ -39,12 +44,15 @@ function mount(container) {
   document.getElementById('btn-peers-refresh').addEventListener('click', loadPeers);
   document.getElementById('btn-add-peer').addEventListener('click', addPeer);
   document.getElementById('peers-session').addEventListener('change', loadPeers);
+  document.getElementById('btn-delete-peers').addEventListener('click', deleteSelectedPeers);
 
   refreshTimer = setInterval(loadPeers, 15000);
 }
 
 function unmount() {
   if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; }
+  selectedPeers.clear();
+  allPeers = [];
 }
 
 async function loadSessions() {
@@ -76,19 +84,30 @@ async function loadPeers() {
       peers = data.peers || [];
     }
 
+    allPeers = peers;
+
+    // Clean up selected peers that no longer exist
+    const currentNodeIds = new Set(peers.map(p => p.nodeId));
+    for (const id of selectedPeers) {
+      if (!currentNodeIds.has(id)) selectedPeers.delete(id);
+    }
+
     if (peers.length === 0) {
       grid.innerHTML = '<div class="empty">No peers discovered</div>';
+      updateDeleteButton();
       return;
     }
 
     grid.innerHTML = peers.map(p => {
       const dotClass = p.status === 'online' ? 'online' : p.status === 'offline' ? 'offline' : 'unknown';
       const platformIcon = platformSvg(p.platform);
+      const isSelected = selectedPeers.has(p.nodeId);
 
       return `
-        <div class="peer-card">
+        <div class="peer-card ${isSelected ? 'peer-selected' : ''}" data-node-id="${escapeHtml(p.nodeId)}" onclick="window.__togglePeer('${escapeHtml(p.nodeId)}')">
           <div class="flex items-center justify-between mb-1">
             <div class="flex items-center gap-sm">
+              <input type="checkbox" class="peer-check" ${isSelected ? 'checked' : ''} onclick="event.stopPropagation(); window.__togglePeer('${escapeHtml(p.nodeId)}')">
               <span class="status-dot ${dotClass}"></span>
               <span class="font-mono text-sm" style="font-weight:600">${escapeHtml(p.hostname)}</span>
             </div>
@@ -104,9 +123,63 @@ async function loadPeers() {
         </div>
       `;
     }).join('');
+
+    updateDeleteButton();
   } catch (err) {
     grid.innerHTML = `<div class="empty">${escapeHtml(err.message)}</div>`;
   }
+}
+
+function updateDeleteButton() {
+  const btn = document.getElementById('btn-delete-peers');
+  if (!btn) return;
+  if (selectedPeers.size > 0) {
+    btn.style.display = '';
+    btn.textContent = `Delete Selected (${selectedPeers.size})`;
+  } else {
+    btn.style.display = 'none';
+  }
+}
+
+window.__togglePeer = (nodeId) => {
+  if (selectedPeers.has(nodeId)) {
+    selectedPeers.delete(nodeId);
+  } else {
+    selectedPeers.add(nodeId);
+  }
+  // Update UI without full reload
+  const card = document.querySelector(`[data-node-id="${nodeId}"]`);
+  if (card) {
+    card.classList.toggle('peer-selected', selectedPeers.has(nodeId));
+    const check = card.querySelector('.peer-check');
+    if (check) check.checked = selectedPeers.has(nodeId);
+  }
+  updateDeleteButton();
+};
+
+async function deleteSelectedPeers() {
+  if (selectedPeers.size === 0) return;
+  if (!confirm(`Delete ${selectedPeers.size} peer(s) from all sessions?`)) return;
+
+  const btn = document.getElementById('btn-delete-peers');
+  if (btn) btn.disabled = true;
+
+  const peersToDelete = allPeers
+    .filter(p => selectedPeers.has(p.nodeId))
+    .map(p => ({ nodeId: p.nodeId, address: p.address, port: p.port, _seenBySessions: p._seenBySessions }));
+
+  try {
+    await dashboardApi('/peers/delete', {
+      method: 'POST',
+      body: JSON.stringify({ peers: peersToDelete }),
+    });
+    selectedPeers.clear();
+    await loadPeers();
+  } catch (err) {
+    alert('Failed: ' + err.message);
+  }
+
+  if (btn) btn.disabled = false;
 }
 
 async function addPeer() {

@@ -581,7 +581,10 @@ select option { background: var(--bg-base); color: var(--text-primary); }
   transition: border-color 0.15s;
 }
 
+.peer-card { cursor: pointer; }
 .peer-card:hover { border-color: var(--border-bright); }
+.peer-card.peer-selected { border-color: var(--red-dim); background: rgba(255,51,102,0.05); }
+.peer-check { accent-color: var(--red); cursor: pointer; width: 14px; height: 14px; }
 
 /* ═══ Message Rows ═══ */
 .msg-row {
