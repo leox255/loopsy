@@ -95,12 +95,12 @@ function updateClock() {
 async function init() {
   // Load view modules
   await Promise.all([
-    import('/views/overview.js'),
-    import('/views/terminal.js'),
-    import('/views/context.js'),
-    import('/views/messages.js'),
-    import('/views/peers.js'),
-    import('/views/ai-tasks.js'),
+    import('./views/overview.js'),
+    import('./views/terminal.js'),
+    import('./views/context.js'),
+    import('./views/messages.js'),
+    import('./views/peers.js'),
+    import('./views/ai-tasks.js'),
   ]);
 
   // Nav click handlers

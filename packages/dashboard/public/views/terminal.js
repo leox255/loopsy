@@ -1,4 +1,4 @@
-import { registerView, dashboardApi, escapeHtml } from '/app.js';
+import { registerView, dashboardApi, escapeHtml } from '../app.js';
 
 let eventSource = null;
 let refreshTimer = null;

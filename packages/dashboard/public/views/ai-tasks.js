@@ -1,4 +1,4 @@
-import { registerView, dashboardApi, escapeHtml, formatTime } from '/app.js';
+import { registerView, dashboardApi, escapeHtml, formatTime } from '../app.js';
 
 let refreshTimer = null;
 let selectedTask = null; // { taskId, port, address }

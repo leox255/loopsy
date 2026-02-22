@@ -1,4 +1,4 @@
-import { registerView, api, dashboardApi, escapeHtml, formatTime } from '/app.js';
+import { registerView, api, dashboardApi, escapeHtml, formatTime } from '../app.js';
 
 let refreshTimer = null;
 let activeTab = 'inbox';
