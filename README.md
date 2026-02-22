@@ -1,11 +1,13 @@
 # Loopsy
 
-Cross-machine communication for Claude Code. Run commands, transfer files, share context, and send messages between Claude Code instances on different machines over your LAN.
+Cross-machine communication for AI coding agents. Run commands, transfer files, share context, and send messages between Claude Code, Gemini CLI, or Codex CLI instances on different machines over your LAN.
 
 ```
 Machine A (macOS)                    Machine B (Windows)
 ┌──────────────┐                     ┌──────────────┐
 │  Claude Code  │                     │  Claude Code  │
+│  Gemini CLI   │                     │  Gemini CLI   │
+│  Codex CLI    │                     │  Codex CLI    │
 │  + MCP Server │                     │  + MCP Server │
 │       │       │                     │       │       │
 │  Loopsy Daemon│◄── HTTP(S)/LAN ───►│  Loopsy Daemon│
@@ -24,7 +26,7 @@ Requires Node.js 20+. That's it — no cloning, no build step.
 ## Quick Start
 
 ```bash
-# 1. Initialize (generates config + API key, registers MCP with Claude Code)
+# 1. Initialize (generates config + API key, auto-registers MCP with available agents)
 loopsy init
 
 # 2. Start the daemon
@@ -38,7 +40,7 @@ loopsy pair 192.168.1.50 # on Machine B (enters invite code)
 loopsy doctor
 ```
 
-After pairing, restart both daemons (`loopsy stop && loopsy start`). Open Claude Code and the `loopsy_*` MCP tools are available immediately.
+After pairing, restart both daemons (`loopsy stop && loopsy start`). Open your AI coding agent and the `loopsy_*` MCP tools are available immediately.
 
 ### Auto-Start on Login
 
@@ -49,7 +51,7 @@ loopsy disable  # removes the system service
 
 ## How It Works
 
-Each machine runs a **Loopsy daemon** — a Fastify HTTP server on port 19532. Daemons communicate directly over HTTP (or HTTPS with TLS enabled). An **MCP server** exposes the daemon's capabilities as tools inside Claude Code.
+Each machine runs a **Loopsy daemon** — a Fastify HTTP server on port 19532. Daemons communicate directly over HTTP (or HTTPS with TLS enabled). An **MCP server** exposes the daemon's capabilities as tools inside any supported AI coding agent (Claude Code, Gemini CLI, Codex CLI).
 
 Peers discover each other via mDNS or manual configuration. The `loopsy pair` command automates key exchange using ECDH with a 6-digit verification code — no manual copying of 64-character API keys.
 
@@ -59,7 +61,7 @@ Peers discover each other via mDNS or manual configuration. The `loopsy pair` co
 
 | Command | Description |
 |---|---|
-| `loopsy init` | Generate config and API key; auto-registers MCP with Claude Code |
+| `loopsy init` | Generate config and API key; auto-registers MCP with available agents |
 | `loopsy start` | Start the daemon |
 | `loopsy stop` | Stop the daemon |
 | `loopsy status` | Show daemon status (peers, jobs, context) |
@@ -104,9 +106,9 @@ Peers discover each other via mDNS or manual configuration. The `loopsy pair` co
 
 | Command | Description |
 |---|---|
-| `loopsy mcp add` | Register MCP server with Claude Code |
-| `loopsy mcp remove` | Unregister MCP server |
-| `loopsy mcp status` | Check registration |
+| `loopsy mcp add` | Register MCP server with all available agents (Claude Code, Gemini CLI, Codex CLI) |
+| `loopsy mcp remove` | Unregister MCP server from all agents |
+| `loopsy mcp status` | Check registration status per agent |
 
 ### Multi-Session
 
@@ -133,14 +135,14 @@ Each session gets a unique port (19533+), hostname (`<host>-worker-N`), and isol
 
 | Command | Description |
 |---|---|
-| `loopsy dashboard` | Start the web dashboard (default port 19540) |
+| `loopsy dashboard` | Open the web dashboard (served at `/dashboard` on daemon port) |
 | `loopsy key show` | Show current API key |
 | `loopsy key generate` | Generate a new API key |
 | `loopsy logs [-f]` | View audit logs |
 
 ## MCP Tools
 
-When the MCP server is registered with Claude Code (done automatically by `loopsy init`), these tools are available:
+When the MCP server is registered with your AI coding agent (done automatically by `loopsy init`), these tools are available:
 
 | Tool | Description |
 |---|---|
@@ -163,16 +165,23 @@ The MCP server also exposes resources (`loopsy://peers`, `loopsy://status`, `loo
 
 ### Manual MCP Registration
 
-If `loopsy init` didn't auto-register (e.g., Claude Code wasn't installed yet):
+If `loopsy init` didn't auto-register (e.g., no agents were installed yet):
 
 ```bash
-loopsy mcp add
+loopsy mcp add    # auto-detects and registers with all available agents
 ```
 
-Or manually:
+Or manually per agent:
 
 ```bash
+# Claude Code
 claude mcp add loopsy -- node $(npm root -g)/loopsy/dist/mcp-server/index.js
+
+# Gemini CLI
+gemini mcp add loopsy -s user node $(npm root -g)/loopsy/dist/mcp-server/index.js
+
+# Codex CLI
+codex mcp add loopsy -- node $(npm root -g)/loopsy/dist/mcp-server/index.js
 ```
 
 ## Pairing Protocol
@@ -207,8 +216,7 @@ The daemon falls back to HTTP for peers that don't support TLS. Local connection
 A browser-based UI for monitoring and control:
 
 ```bash
-loopsy dashboard          # opens on port 19540
-loopsy dashboard -p 8080  # custom port
+loopsy dashboard          # opens browser to http://localhost:19532/dashboard/
 ```
 
 The dashboard provides:
@@ -371,7 +379,7 @@ packages/
   protocol/     Shared types, schemas, constants
   discovery/    mDNS peer discovery + health checking
   daemon/       Fastify HTTP server (the core)
-  mcp-server/   MCP server for Claude Code integration
+  mcp-server/   MCP server for AI coding agent integration
   cli/          CLI tool (the loopsy binary)
   dashboard/    Web UI for monitoring and control
 scripts/

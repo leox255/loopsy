@@ -186,7 +186,7 @@ const packageJson = {
   name: 'loopsy',
   version,
   description:
-    'Cross-machine communication for Claude Code — run commands, transfer files, and share context between machines',
+    'Cross-machine communication for AI coding agents — run commands, transfer files, and share context between machines',
   type: 'module',
   bin: {
     loopsy: 'dist/cli/index.js',
@@ -199,7 +199,7 @@ const packageJson = {
     postinstall: 'node scripts/postinstall.mjs',
   },
   dependencies: allDeps,
-  keywords: ['claude', 'claude-code', 'mcp', 'cross-machine', 'p2p', 'remote-execution'],
+  keywords: ['claude', 'claude-code', 'gemini', 'codex', 'mcp', 'cross-machine', 'p2p', 'remote-execution', 'ai-agents'],
   license: 'Apache-2.0',
   repository: {
     type: 'git',

@@ -53,18 +53,28 @@ export async function initCommand() {
   console.log(`API Key: ${apiKey}`);
   console.log('');
 
-  // Auto-register MCP server with Claude Code if available
+  // Auto-register MCP server with available AI coding agents
   const serverPath = mcpServerPath();
-  try {
-    execSync('claude --version', { stdio: 'ignore' });
+  const agents = [
+    { name: 'Claude Code', bin: 'claude', add: `claude mcp add loopsy -- node ${serverPath}`, remove: 'claude mcp remove loopsy' },
+    { name: 'Gemini CLI', bin: 'gemini', add: `gemini mcp add loopsy -s user node ${serverPath}`, remove: 'gemini mcp remove loopsy -s user' },
+    { name: 'Codex CLI', bin: 'codex', add: `codex mcp add loopsy -- node ${serverPath}`, remove: 'codex mcp remove loopsy' },
+  ];
+
+  let registered = 0;
+  for (const agent of agents) {
     try {
-      execSync('claude mcp remove loopsy', { stdio: 'ignore' });
-    } catch {}
-    execSync(`claude mcp add loopsy -- node ${serverPath}`, { stdio: 'pipe' });
-    console.log('MCP server registered with Claude Code');
-  } catch {
-    console.log('To register the MCP server with Claude Code, run:');
-    console.log(`  claude mcp add loopsy -- node ${serverPath}`);
+      execSync(`${agent.bin} --version`, { stdio: 'ignore' });
+      try { execSync(agent.remove, { stdio: 'ignore' }); } catch {}
+      execSync(agent.add, { stdio: 'pipe' });
+      console.log(`MCP server registered with ${agent.name}`);
+      registered++;
+    } catch {
+      // Agent not installed or registration failed — skip
+    }
+  }
+  if (registered === 0) {
+    console.log('No AI coding agents found. Register MCP manually with: loopsy mcp add');
   }
 
   console.log('');

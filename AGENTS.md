@@ -5,7 +5,7 @@
 Loopsy enables AI coding agent instances (Claude Code, Gemini CLI, Codex CLI, etc.) on different machines to communicate. You can:
 - **Run commands** on remote machines
 - **Transfer files** between machines
-- **Share context** (key-value state) between Claude Code instances
+- **Share context** (key-value state) between AI coding agent instances
 
 ## Setup
 
@@ -35,7 +35,7 @@ When the Loopsy MCP server is running, you have these tools:
 
 ## Messaging Protocol v1
 
-This section defines the standard protocol for Claude Code instances to communicate reliably across machines. Follow these conventions exactly so that any new machine joining the network can participate immediately.
+This section defines the standard protocol for AI coding agent instances to communicate reliably across machines. Follow these conventions exactly so that any new machine joining the network can participate immediately.
 
 ### Key Concepts
 
@@ -177,7 +177,7 @@ DELETE http://localhost:19532/api/v1/context/inbox:leo:1771732800000-kai-a3f2
 
 ## Task Queue Protocol v1
 
-Enables one Claude Code instance to delegate work to another machine and poll for results. Validated bidirectionally between macOS and Windows.
+Enables one AI coding agent instance to delegate work to another machine and poll for results. Validated bidirectionally between macOS and Windows.
 
 ### Context Key Pattern
 
@@ -282,11 +282,10 @@ Key learnings from macOS ↔ Windows communication:
 ## Known Issues
 
 - `loopsy_ack_message` MCP tool returns HTTP 400 in some cases — workaround: use `loopsy_context_set` directly to set the `ack:<hostname>` key on the sender's machine
-- `loopsy_context_delete` may have similar issues — use REST API fallback if needed
 
 ## Multi-Session Support
 
-Run multiple daemon sessions per machine, each acting as an independent peer. This enables a fleet of Claude Code instances to collaborate — e.g., 3 sessions on macOS + 3 on Windows = 6 peers.
+Run multiple daemon sessions per machine, each acting as an independent peer. This enables a fleet of AI coding agent instances to collaborate — e.g., 3 sessions on macOS + 3 on Windows = 6 peers.
 
 ### Session Architecture
 
@@ -369,7 +368,7 @@ This reads config from and stores state in the specified directory instead of `~
 - `packages/protocol` - Shared types, schemas, constants
 - `packages/discovery` - mDNS peer discovery
 - `packages/daemon` - Fastify HTTP server (the core)
-- `packages/mcp-server` - MCP server for AI coding agents
+- `packages/mcp-server` - MCP server for AI coding agents (Claude Code, Gemini CLI, Codex CLI)
 - `packages/cli` - CLI management tool
 
 ## Build

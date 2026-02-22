@@ -48,21 +48,36 @@ export async function doctorCommand() {
     checks.push({ name: 'Daemon', status: 'fail', message: 'Not running', fix: 'loopsy start' });
   }
 
-  // 3. MCP registered
-  try {
-    execSync('claude --version', { stdio: 'ignore' });
+  // 3. MCP registered (check all supported agents)
+  const mcpAgents = [
+    { name: 'Claude Code', bin: 'claude', list: 'claude mcp list' },
+    { name: 'Gemini CLI', bin: 'gemini', list: 'gemini mcp list' },
+    { name: 'Codex CLI', bin: 'codex', list: 'codex mcp list' },
+  ];
+  const mcpResults: string[] = [];
+  let anyRegistered = false;
+  let anyAgentFound = false;
+
+  for (const agent of mcpAgents) {
     try {
-      const output = execSync('claude mcp list', { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] });
-      if (output.includes('loopsy')) {
-        checks.push({ name: 'MCP', status: 'pass', message: 'Registered with Claude Code' });
-      } else {
-        checks.push({ name: 'MCP', status: 'warn', message: 'Not registered', fix: 'loopsy mcp add' });
-      }
-    } catch {
-      checks.push({ name: 'MCP', status: 'warn', message: 'Could not check', fix: 'loopsy mcp add' });
-    }
-  } catch {
-    checks.push({ name: 'MCP', status: 'warn', message: 'Claude Code CLI not found' });
+      execSync(`${agent.bin} --version`, { stdio: 'ignore' });
+      anyAgentFound = true;
+      try {
+        const output = execSync(agent.list, { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] });
+        if (output.includes('loopsy')) {
+          mcpResults.push(agent.name);
+          anyRegistered = true;
+        }
+      } catch {}
+    } catch {}
+  }
+
+  if (anyRegistered) {
+    checks.push({ name: 'MCP', status: 'pass', message: `Registered with ${mcpResults.join(', ')}` });
+  } else if (anyAgentFound) {
+    checks.push({ name: 'MCP', status: 'warn', message: 'Not registered with any agent', fix: 'loopsy mcp add' });
+  } else {
+    checks.push({ name: 'MCP', status: 'warn', message: 'No AI coding agents found on PATH' });
   }
 
   // 4. TLS

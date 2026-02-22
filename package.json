@@ -1,8 +1,8 @@
 {
   "name": "loopsy",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "private": true,
-  "description": "Cross-machine communication protocol for Claude Code",
+  "description": "Cross-machine communication for AI coding agents",
   "scripts": {
     "setup": "pnpm install && pnpm build && node packages/cli/dist/index.js init",
     "build": "pnpm -r --filter=@loopsy/protocol build && pnpm -r --filter=@loopsy/discovery build && pnpm -r --filter=!@loopsy/protocol --filter=!@loopsy/discovery build",
