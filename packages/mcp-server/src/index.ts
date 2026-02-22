@@ -216,6 +216,95 @@ server.tool(
   },
 );
 
+// --- Messaging Protocol v1 Tools ---
+
+server.tool(
+  'loopsy_send_message',
+  'Send a protocol-compliant message to a peer. Handles envelope creation, inbox key, outbox copy, and TTL automatically.',
+  {
+    peerAddress: z.string().describe('IP address or hostname of the peer'),
+    peerPort: z.number().default(19532).describe('Port of the peer daemon'),
+    peerApiKey: z.string().describe('API key for the peer'),
+    peerHostname: z.string().describe('Hostname of the peer (e.g. "leo")'),
+    type: z.enum(['chat', 'request', 'response', 'broadcast']).default('chat').describe('Message type'),
+    body: z.string().describe('Message body text'),
+  },
+  async ({ peerAddress, peerPort, peerApiKey, peerHostname, type, body }) => {
+    try {
+      const { id, envelope } = await client.sendMessage(peerAddress, peerPort, peerApiKey, peerHostname, type, body);
+      return {
+        content: [{
+          type: 'text',
+          text: `Message sent!\nID: ${id}\nTo: ${envelope.to} (${peerAddress}:${peerPort})\nType: ${envelope.type}\nInbox key: inbox:${peerHostname}:${id}`,
+        }],
+      };
+    } catch (err: any) {
+      return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+    }
+  },
+);
+
+server.tool(
+  'loopsy_check_inbox',
+  'Check this machine\'s inbox for new messages. Returns all unprocessed messages sorted by timestamp.',
+  {},
+  async () => {
+    try {
+      const messages = await client.checkInbox();
+      if (messages.length === 0) {
+        return { content: [{ type: 'text', text: 'No new messages in inbox.' }] };
+      }
+      const lines = messages.map((m) =>
+        `[${m.envelope.type}] From: ${m.envelope.from} | ID: ${m.envelope.id}\n  Body: ${m.envelope.body}\n  Key: ${m.key}`,
+      );
+      return { content: [{ type: 'text', text: `${messages.length} message(s):\n\n${lines.join('\n\n')}` }] };
+    } catch (err: any) {
+      return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+    }
+  },
+);
+
+server.tool(
+  'loopsy_ack_message',
+  'Acknowledge a received message. Sends ACK to the sender\'s machine and deletes the processed inbox message locally.',
+  {
+    senderAddress: z.string().describe('IP address of the message sender'),
+    senderPort: z.number().default(19532).describe('Port of the sender daemon'),
+    senderApiKey: z.string().describe('API key for the sender'),
+    messageKey: z.string().describe('The inbox context key (e.g. "inbox:kai:1234-leo-ab12")'),
+    messageId: z.string().describe('The message ID to acknowledge'),
+  },
+  async ({ senderAddress, senderPort, senderApiKey, messageKey, messageId }) => {
+    try {
+      await client.ackMessage(senderAddress, senderPort, senderApiKey, messageKey, messageId);
+      return { content: [{ type: 'text', text: `ACK sent for message ${messageId} and inbox entry cleaned up.` }] };
+    } catch (err: any) {
+      return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+    }
+  },
+);
+
+server.tool(
+  'loopsy_check_ack',
+  'Check if a peer has acknowledged your messages. Returns the last acknowledged message ID.',
+  {
+    peerHostname: z.string().describe('Hostname of the peer to check ACK from'),
+  },
+  async ({ peerHostname }) => {
+    try {
+      const lastAck = await client.checkAck(peerHostname);
+      if (lastAck) {
+        return { content: [{ type: 'text', text: `Last ACK from ${peerHostname}: ${lastAck}` }] };
+      }
+      return { content: [{ type: 'text', text: `No ACK received from ${peerHostname} yet.` }] };
+    } catch (err: any) {
+      return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+    }
+  },
+);
+
+// --- Peer Status & Broadcast ---
+
 server.tool(
   'loopsy_peer_status',
   'Get detailed status information for a specific Loopsy peer',
@@ -335,30 +424,46 @@ server.prompt(
         role: 'user' as const,
         content: {
           type: 'text' as const,
-          text: `You have access to Loopsy - a cross-machine communication system. Here's how to use it:
+          text: `You have access to Loopsy - a cross-machine communication system with a built-in messaging protocol.
 
-## Available Tools
+## Messaging Tools (Protocol v1)
 
-1. **loopsy_list_peers** - See all machines on the network
-2. **loopsy_execute** - Run a command on a remote machine
-3. **loopsy_transfer_file** - Send/receive files between machines
-4. **loopsy_list_remote_files** - Browse files on a remote machine
-5. **loopsy_context_set** - Store shared state (like a message or data)
-6. **loopsy_context_get** - Retrieve shared state
-7. **loopsy_peer_status** - Check a peer's health
-8. **loopsy_broadcast_context** - Set context on all peers at once
+Use these for all peer-to-peer communication:
 
-## Quick Start
-1. First, use loopsy_list_peers to see available machines
-2. To run a command on another machine: use loopsy_execute with the peer's address, port, API key, and command
-3. To share information: use loopsy_context_set to store data, loopsy_context_get to retrieve it
-4. To transfer files: use loopsy_transfer_file with direction "push" or "pull"
+1. **loopsy_send_message** - Send a message to a peer (handles envelope, inbox key, outbox, TTL automatically)
+2. **loopsy_check_inbox** - Check your inbox for new messages
+3. **loopsy_ack_message** - Acknowledge a received message (sends ACK + cleans up inbox)
+4. **loopsy_check_ack** - Check if a peer has acknowledged your messages
 
-## Communication Between Claude Instances
-To "chat" between Claude Code instances on different machines:
-- Use loopsy_context_set to write a message to a key like "message_from_mac"
-- The other Claude Code instance uses loopsy_context_get to read it
-- Use loopsy_execute to ask the other machine to run commands and return results`,
+## Other Tools
+
+5. **loopsy_list_peers** - See all machines on the network
+6. **loopsy_execute** - Run a command on a remote machine
+7. **loopsy_transfer_file** - Send/receive files between machines
+8. **loopsy_list_remote_files** - Browse files on a remote machine
+9. **loopsy_context_set** - Store shared state (low-level, prefer messaging tools)
+10. **loopsy_context_get** - Retrieve shared state (low-level)
+11. **loopsy_context_list** - List context entries with prefix filtering
+12. **loopsy_context_delete** - Delete context entries
+13. **loopsy_peer_status** - Check a peer's health
+14. **loopsy_broadcast_context** - Set context on all peers at once
+
+## How to Communicate with Other Claude Instances
+
+1. **Discover peers**: Use loopsy_list_peers to find online machines
+2. **Send a message**: Use loopsy_send_message with the peer's address, port, API key, and hostname
+3. **Check for replies**: Use loopsy_check_inbox to see incoming messages
+4. **Acknowledge**: Use loopsy_ack_message to confirm receipt and clean up
+5. **Verify delivery**: Use loopsy_check_ack to see if your message was acknowledged
+
+## Protocol Details
+
+Messages use JSON envelopes with: from, to, ts (timestamp), id, type, body
+- Inbox keys: inbox:<recipient>:<msg_id> (stored on recipient's machine)
+- Outbox keys: outbox:<msg_id> (stored locally)
+- ACK keys: ack:<receiver> (stored on sender's machine)
+- Message IDs: <timestamp>-<hostname>-<4hex>
+- Default TTL: 3600s for messages, 7200s for ACKs`,
         },
       },
     ],
@@ -383,13 +488,14 @@ server.prompt(
 ${task}
 
 Steps:
-1. First, check if the peer is online using loopsy_peer_status
-2. Set context on the peer describing what you need: loopsy_context_set with key "coordination_request"
-3. Use loopsy_execute to run any necessary commands on the remote machine
-4. Use loopsy_context_get to check for responses from the remote instance
-5. Transfer any needed files with loopsy_transfer_file
+1. First, check if the peer is online using loopsy_list_peers
+2. Send a message describing what you need using loopsy_send_message (type: "request")
+3. Poll for their response using loopsy_check_inbox (check every 5-10 seconds)
+4. When you receive a reply, acknowledge it with loopsy_ack_message
+5. Use loopsy_execute to run any necessary commands on the remote machine
+6. Transfer any needed files with loopsy_transfer_file
 
-Remember: The remote machine is a separate Claude Code instance. Use context entries to leave messages for it.`,
+Remember: Use the messaging protocol tools (loopsy_send_message, loopsy_check_inbox, loopsy_ack_message) for all communication. These handle envelope formatting, TTLs, and cleanup automatically.`,
         },
       },
     ],

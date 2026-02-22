@@ -190,3 +190,16 @@ export interface StreamEvent {
   jobId: string;
   timestamp: number;
 }
+
+/** Message types for the messaging protocol */
+export type MessageType = 'chat' | 'request' | 'response' | 'ack' | 'broadcast';
+
+/** Message envelope for peer-to-peer messaging */
+export interface MessageEnvelope {
+  from: string;
+  to: string;
+  ts: number;
+  id: string;
+  type: MessageType;
+  body: string;
+}
