@@ -2,14 +2,22 @@ import type { FastifyInstance } from 'fastify';
 import { fetchAndDeduplicatePeers } from './peer-utils.js';
 import { listSessions } from '../session-manager.js';
 
-function resolveApiKey(
+async function findWorkingKey(
   address: string,
+  port: number,
   localApiKey: string,
   allowedKeys: Record<string, string>,
-): string {
+): Promise<string> {
   if (address === '127.0.0.1' || address === 'localhost') return localApiKey;
   for (const key of Object.values(allowedKeys)) {
-    if (key !== localApiKey) return key;
+    if (key === localApiKey) continue;
+    try {
+      const res = await fetch(`http://${address}:${port}/api/v1/status`, {
+        headers: { Authorization: `Bearer ${key}` },
+        signal: AbortSignal.timeout(2000),
+      });
+      if (res.ok) return key;
+    } catch {}
   }
   return localApiKey;
 }
@@ -56,7 +64,7 @@ export function registerPeersAllRoute(app: FastifyInstance, apiKey: string, allo
       // If this peer is on a remote machine, also tell that machine to remove it
       const isRemote = peer.address !== '127.0.0.1' && peer.address !== 'localhost';
       if (isRemote && allowedKeys) {
-        const remoteKey = resolveApiKey(peer.address, apiKey, allowedKeys);
+        const remoteKey = await findWorkingKey(peer.address, peer.port, apiKey, allowedKeys);
         try {
           const res = await fetch(
             `http://${peer.address}:${peer.port}/api/v1/peers/${encodeURIComponent(peer.nodeId)}`,

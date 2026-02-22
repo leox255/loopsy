@@ -90,8 +90,12 @@ export async function fetchAndDeduplicatePeers(
     }
   }
 
-  // Resolve hostnames, platform, and version for peers with missing info via /api/v1/status
-  const needsEnrichment = allPeers.filter((p) => looksLikeIp(p.hostname) || !p.platform || p.platform === 'unknown');
+  // Resolve hostnames, platform, and version via /api/v1/status
+  // Always enrich remote peers (their mDNS hostname may differ from configured hostname)
+  const needsEnrichment = allPeers.filter((p) => {
+    const isLocal = p.address === '127.0.0.1' || p.address === 'localhost';
+    return looksLikeIp(p.hostname) || !p.platform || p.platform === 'unknown' || !isLocal;
+  });
   if (needsEnrichment.length > 0) {
     const uniqueTargets = [...new Map(needsEnrichment.map((p) => [`${p.address}:${p.port}`, p])).values()];
     const remoteKeys = new Set<string>([apiKey]);
@@ -127,7 +131,8 @@ export async function fetchAndDeduplicatePeers(
       const key = `${p.address}:${p.port}`;
       const resolved = resolvedMap.get(key);
       if (resolved) {
-        if (looksLikeIp(p.hostname) && resolved.hostname) p.hostname = resolved.hostname;
+        // Always prefer status-reported hostname (the configured name) over mDNS-discovered name
+        if (resolved.hostname) p.hostname = resolved.hostname;
         if ((!p.platform || p.platform === 'unknown') && resolved.platform) p.platform = resolved.platform;
         if ((!p.version || p.version === 'unknown') && resolved.version) p.version = resolved.version;
       }

@@ -106,16 +106,19 @@ export function registerMessageRoutes(
       return reply.status(404).send({ error: `Peer "${toHostname}" not found in peer registry` });
     }
 
-    // Determine peer API key: check allowedKeys, fall back to own apiKey
+    // Determine peer API key by probing with each allowed key
+    const isRemotePeer = peerAddress !== '127.0.0.1' && peerAddress !== 'localhost';
     let peerApiKey = apiKey;
-    for (const [, key] of Object.entries(allowedKeys)) {
-      // Try each allowed key — for remote peers, their key is in our allowedKeys
-      // For local sessions, they share our apiKey
-      // We can't know which key maps to which peer by name alone,
-      // so for remote peers we try the first non-self key
-      if (key !== apiKey) {
-        peerApiKey = key;
-        break;
+    if (isRemotePeer) {
+      for (const key of Object.values(allowedKeys)) {
+        if (key === apiKey) continue;
+        try {
+          const probe = await fetch(`http://${peerAddress}:${peerPort}/api/v1/status`, {
+            headers: { Authorization: `Bearer ${key}` },
+            signal: AbortSignal.timeout(2000),
+          });
+          if (probe.ok) { peerApiKey = key; break; }
+        } catch {}
       }
     }
 

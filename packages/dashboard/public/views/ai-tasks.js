@@ -453,12 +453,7 @@ function handleStreamEvent(event) {
       appendLine('stderr', typeof data === 'string' ? data : JSON.stringify(data));
       break;
     case 'result': {
-      const parts = [];
-      if (data?.cost) {
-        parts.push(`Cost: $${data.cost.input || '?'} in + $${data.cost.output || '?'} out`);
-      }
-      if (data?.duration) parts.push(`Duration: ${formatDuration(data.duration)}`);
-      if (parts.length > 0) appendLine('result', parts.join('  \u00b7  '));
+      if (data?.duration) appendLine('result', `Duration: ${formatDuration(data.duration)}`);
       updateStatusBadge('completed');
       showFollowUpInput();
       break;
