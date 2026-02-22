@@ -271,6 +271,7 @@ export class AiTaskManager {
       info.completedAt = Date.now();
       info.updatedAt = Date.now();
       info.status = exitCode === 0 ? 'completed' : (signal ? 'cancelled' : 'failed');
+      info.pendingApproval = undefined;
       if (exitCode !== 0 && !info.error) {
         info.error = signal ? `Killed by signal ${signal}` : `Exit code ${exitCode}`;
       }

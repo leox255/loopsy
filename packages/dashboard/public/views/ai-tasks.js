@@ -3,6 +3,7 @@ import { registerView, dashboardApi, escapeHtml, formatTime } from '/app.js';
 let refreshTimer = null;
 let selectedTask = null; // { taskId, port, address }
 let eventSource = null;
+let taskFinished = false; // true once we receive an exit event
 
 function mount(container) {
   container.innerHTML = `
@@ -250,6 +251,7 @@ function renderTaskStream() {
 
 function connectStream(taskId, port) {
   closeStream();
+  taskFinished = false;
 
   const url = `/dashboard/api/ai-tasks/stream/${port}/${encodeURIComponent(taskId)}`;
   eventSource = new EventSource(url);
@@ -284,7 +286,7 @@ function handleStreamEvent(event) {
       appendLine('tool-result', formatToolResult(data));
       break;
     case 'permission_request':
-      showApprovalBanner(data);
+      if (!taskFinished) showApprovalBanner(data);
       break;
     case 'status':
       appendLine('system', `Status: ${data?.status || JSON.stringify(data)}`);
@@ -299,7 +301,11 @@ function handleStreamEvent(event) {
       }
       break;
     case 'exit':
+      taskFinished = true;
       appendLine('system', `Exited (code: ${data?.exitCode ?? '?'})`);
+      // Hide any stale approval banner
+      const approvalEl = document.getElementById('ai-approval');
+      if (approvalEl) { approvalEl.style.display = 'none'; approvalEl.innerHTML = ''; }
       closeStream();
       break;
     default:
