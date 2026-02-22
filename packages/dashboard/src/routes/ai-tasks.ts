@@ -3,8 +3,9 @@ import { listSessions } from '../session-manager.js';
 import { fetchAndDeduplicatePeers } from './peer-utils.js';
 
 function resolveHost(address?: string): { host: string; isRemote: boolean } {
-  const isRemote = !!address && address !== '127.0.0.1' && address !== 'localhost';
-  return { host: isRemote ? address! : '127.0.0.1', isRemote };
+  const addr = address?.trim() || '';
+  const isRemote = addr.length > 0 && addr !== '127.0.0.1' && addr !== 'localhost';
+  return { host: isRemote ? addr : '127.0.0.1', isRemote };
 }
 
 function resolveApiKey(

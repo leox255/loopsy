@@ -8,8 +8,7 @@
 // approves/denies via the dashboard.
 //
 // Exit codes:
-//   0 + JSON stdout  → allow (Claude proceeds with tool)
-//   2 + stderr text  → deny (Claude blocks tool, stderr shown as error)
+//   0 + JSON stdout  → allow or deny (via permissionDecision in hookSpecificOutput)
 //
 // Usage (command-line args embedded by daemon in per-task settings):
 //   node permission-hook.mjs <taskId> <port> <apiKey>

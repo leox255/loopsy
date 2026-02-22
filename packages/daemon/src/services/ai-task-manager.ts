@@ -101,7 +101,7 @@ export class AiTaskManager {
       args.push('--resume', params.resumeSessionId);
     }
 
-    if (params.permissionMode && params.permissionMode !== 'default') {
+    if (params.permissionMode) {
       args.push('--permission-mode', params.permissionMode);
     }
     if (params.model) {
