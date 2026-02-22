@@ -164,7 +164,7 @@ async function restartAll() {
   const btn = document.getElementById('btn-restart-all');
   btn.disabled = true;
   try {
-    await dashboardApi('/sessions/restart-all', { method: 'POST' });
+    await dashboardApi('/sessions/restart-all', { method: 'POST', body: '{}' });
     await new Promise(r => setTimeout(r, 1500));
     await refresh();
   } catch (err) {
@@ -201,7 +201,7 @@ window.__stopSession = async (name) => {
 
 window.__restartSession = async (name) => {
   try {
-    await dashboardApi(`/sessions/${name}/restart`, { method: 'POST' });
+    await dashboardApi(`/sessions/${name}/restart`, { method: 'POST', body: '{}' });
     await new Promise(r => setTimeout(r, 1500));
     await refresh();
   } catch (err) { alert('Failed: ' + err.message); }
