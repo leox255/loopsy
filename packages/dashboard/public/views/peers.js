@@ -63,8 +63,8 @@ async function loadSessions() {
     if (main && main.status === 'running') all.push(main);
     all.push(...sessions.filter(s => s.status === 'running'));
     sel.innerHTML =
-      '<option value="all">All Sessions</option>' +
-      all.map(s => `<option value="${s.port}">${escapeHtml(s.hostname)} :${s.port}</option>`).join('');
+      '<option value="all">All Sessions (deduplicated)</option>' +
+      all.map(s => `<option value="${s.port}">${escapeHtml(s.hostname || s.name)} :${s.port} (raw)</option>`).join('');
     loadPeers();
   } catch {}
 }
@@ -102,6 +102,7 @@ async function loadPeers() {
       const dotClass = p.status === 'online' ? 'online' : p.status === 'offline' ? 'offline' : 'unknown';
       const platformIcon = platformSvg(p.platform);
       const isSelected = selectedPeers.has(p.nodeId);
+      const displayName = p.hostname || p.nodeId || p.address || 'unknown';
 
       return `
         <div class="peer-card ${isSelected ? 'peer-selected' : ''}" data-node-id="${escapeHtml(p.nodeId)}" onclick="window.__togglePeer('${escapeHtml(p.nodeId)}')">
@@ -109,7 +110,7 @@ async function loadPeers() {
             <div class="flex items-center gap-sm">
               <input type="checkbox" class="peer-check" ${isSelected ? 'checked' : ''} onclick="event.stopPropagation(); window.__togglePeer('${escapeHtml(p.nodeId)}')">
               <span class="status-dot ${dotClass}"></span>
-              <span class="font-mono text-sm" style="font-weight:600">${escapeHtml(p.hostname)}</span>
+              <span class="font-mono text-sm" style="font-weight:600">${escapeHtml(displayName)}</span>
             </div>
             ${platformIcon}
           </div>
@@ -117,6 +118,7 @@ async function loadPeers() {
             ${escapeHtml(p.address)}:${p.port}<br>
             version ${escapeHtml(p.version || '?')}<br>
             last seen ${p.lastSeen ? formatTime(p.lastSeen) : 'never'}<br>
+            ${p.nodeId ? `<span class="text-xs text-muted">${escapeHtml(p.nodeId)}</span><br>` : ''}
             ${p.manuallyAdded ? '<span class="badge badge-amber">manual</span>' : ''}
             ${p.capabilities?.length ? p.capabilities.map(c => `<span class="badge badge-cyan">${escapeHtml(c)}</span>`).join(' ') : ''}
           </div>

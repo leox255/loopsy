@@ -16,7 +16,8 @@ export interface PeerInfo {
   _seenBySessions?: number[];
 }
 
-const looksLikeIp = (h: string) => /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(h) || h === 'localhost';
+const looksLikeIp = (h: string | undefined | null) =>
+  !h || /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(h) || h === 'localhost';
 
 function deduplicatePeers(allPeers: (PeerInfo & { _sourcePort?: number })[]): PeerInfo[] {
   const map = new Map<string, PeerInfo>();
@@ -35,8 +36,12 @@ function deduplicatePeers(allPeers: (PeerInfo & { _sourcePort?: number })[]): Pe
       if (!looksLikeIp(p.hostname) && looksLikeIp(existing.hostname)) {
         existing.hostname = p.hostname;
       }
+      // Ensure hostname is never empty
+      if (!existing.hostname && p.hostname) {
+        existing.hostname = p.hostname;
+      }
       // Prefer richer data (platform, capabilities) from non-manual peers
-      if (p.platform && p.platform !== 'unknown' && existing.platform === 'unknown') {
+      if (p.platform && p.platform !== 'unknown' && (!existing.platform || existing.platform === 'unknown')) {
         existing.platform = p.platform;
         existing.version = p.version;
         existing.capabilities = p.capabilities;

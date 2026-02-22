@@ -136,13 +136,14 @@ function renderNetworkPeers(network) {
   grid.innerHTML = peers.map(p => {
     const dotClass = p.status === 'online' ? 'online' : p.status === 'offline' ? 'offline' : 'unknown';
     const platformIcon = platformSvg(p.platform);
+    const displayName = p.hostname || p.nodeId || p.address || 'unknown';
 
     return `
       <div class="peer-card">
         <div class="flex items-center justify-between mb-1">
           <div class="flex items-center gap-sm">
             <span class="status-dot ${dotClass}"></span>
-            <span class="font-mono text-sm" style="font-weight:600">${escapeHtml(p.hostname)}</span>
+            <span class="font-mono text-sm" style="font-weight:600">${escapeHtml(displayName)}</span>
           </div>
           ${platformIcon}
         </div>
