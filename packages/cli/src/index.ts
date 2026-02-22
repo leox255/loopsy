@@ -3,7 +3,7 @@
 import yargs from 'yargs';
 import { hideBin } from 'yargs/helpers';
 import { initCommand } from './commands/init.js';
-import { startCommand, stopCommand, statusCommand } from './commands/daemon.js';
+import { startCommand, stopCommand, restartCommand, statusCommand } from './commands/daemon.js';
 import { peersListCommand, peersAddCommand, peersRemoveCommand } from './commands/peers.js';
 import { execCommand } from './commands/exec.js';
 import { sendCommand, pullCommand } from './commands/transfer.js';
@@ -32,6 +32,7 @@ yargs(hideBin(process.argv))
   .command('connect', 'Interactive wizard to connect to another machine', {}, connectCommand)
   .command('start', 'Start the Loopsy daemon', {}, startCommand)
   .command('stop', 'Stop the Loopsy daemon', {}, stopCommand)
+  .command('restart', 'Restart the Loopsy daemon', {}, restartCommand)
   .command('status', 'Show daemon status', {}, statusCommand)
   .command(
     'peers',
@@ -180,5 +181,5 @@ yargs(hideBin(process.argv))
   .command('doctor', 'Run health checks on your Loopsy installation', {}, doctorCommand)
   .demandCommand(1, 'You need at least one command')
   .help()
-  .version('1.0.5')
+  .version('1.0.8')
   .parse();

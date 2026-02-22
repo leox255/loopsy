@@ -46,6 +46,35 @@ export async function stopCommand() {
   }
 }
 
+export async function restartCommand() {
+  // Stop if running
+  try {
+    const pid = parseInt(await readFile(PID_FILE, 'utf-8'), 10);
+    process.kill(pid, 'SIGTERM');
+    await unlink(PID_FILE);
+    console.log(`Daemon stopped (PID ${pid})`);
+    // Brief pause to let the port release
+    await new Promise((r) => setTimeout(r, 1000));
+  } catch {
+    // Not running, that's fine
+  }
+
+  // Start
+  const daemonPath = daemonMainPath();
+  const child = spawn('node', [daemonPath], {
+    detached: true,
+    stdio: 'ignore',
+  });
+
+  if (child.pid) {
+    await writeFile(PID_FILE, String(child.pid));
+    child.unref();
+    console.log(`Loopsy daemon started (PID ${child.pid})`);
+  } else {
+    console.error('Failed to start daemon');
+  }
+}
+
 export async function statusCommand() {
   try {
     const result = await daemonRequest('/status');
