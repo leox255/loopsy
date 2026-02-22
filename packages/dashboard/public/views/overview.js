@@ -95,7 +95,10 @@ function renderGrid(sessions) {
                 </div>`
               : ''
             : s.name !== 'main'
-              ? `<button class="btn btn-success btn-sm" onclick="window.__startSession('${escapeHtml(s.name)}')">Start</button>`
+              ? `<div class="flex gap-sm">
+                  <button class="btn btn-success btn-sm" onclick="window.__startSession('${escapeHtml(s.name)}')">Start</button>
+                  <button class="btn btn-danger btn-sm" onclick="window.__removeSession('${escapeHtml(s.name)}')">Remove</button>
+                </div>`
               : ''
           }
         </div>
@@ -221,6 +224,16 @@ window.__startSession = async (name) => {
   try {
     await dashboardApi('/sessions', { method: 'POST', body: JSON.stringify({ name }) });
     await new Promise(r => setTimeout(r, 500));
+    await refresh();
+  } catch (err) { alert('Failed: ' + err.message); }
+};
+
+window.__removeSession = async (name) => {
+  if (!confirm(`Remove session "${name}"? This will delete its configuration.`)) return;
+  try {
+    await dashboardApi(`/sessions/${name}`, { method: 'DELETE' });
+    await dashboardApi(`/sessions/${name}/remove`, { method: 'POST' });
+    await new Promise(r => setTimeout(r, 300));
     await refresh();
   } catch (err) { alert('Failed: ' + err.message); }
 };

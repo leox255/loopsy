@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { listSessions, startSession, stopSession, restartSession } from '../session-manager.js';
+import { listSessions, startSession, stopSession, restartSession, removeSession } from '../session-manager.js';
 
 export function registerSessionRoutes(app: FastifyInstance) {
   app.get('/dashboard/api/sessions', async () => {
@@ -70,6 +70,20 @@ export function registerSessionRoutes(app: FastifyInstance) {
         return { success: true, name: request.params.name };
       } catch (err: any) {
         reply.code(404);
+        return { error: err.message };
+      }
+    },
+  );
+
+  // Remove a stopped session's directory entirely
+  app.post<{ Params: { name: string } }>(
+    '/dashboard/api/sessions/:name/remove',
+    async (request, reply) => {
+      try {
+        await removeSession(request.params.name);
+        return { success: true, name: request.params.name };
+      } catch (err: any) {
+        reply.code(400);
         return { error: err.message };
       }
     },

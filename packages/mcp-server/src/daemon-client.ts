@@ -324,6 +324,60 @@ export class DaemonClient {
     }
   }
 
+  // --- Sessions ---
+
+  async listSessions() {
+    await this.ensureInit();
+    const res = await fetch(`${this.baseUrl.replace('/api/v1', '')}/dashboard/api/sessions`, {
+      headers: { Authorization: `Bearer ${this.apiKey}` },
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json() as Promise<{ main: any; sessions: any[] }>;
+  }
+
+  async startSession(name: string) {
+    await this.ensureInit();
+    const res = await fetch(`${this.baseUrl.replace('/api/v1', '')}/dashboard/api/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${this.apiKey}` },
+      body: JSON.stringify({ name }),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({})) as any;
+      throw new Error(body.error ?? `HTTP ${res.status}`);
+    }
+    return res.json();
+  }
+
+  async stopSession(name: string) {
+    await this.ensureInit();
+    const res = await fetch(`${this.baseUrl.replace('/api/v1', '')}/dashboard/api/sessions/${encodeURIComponent(name)}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${this.apiKey}` },
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({})) as any;
+      throw new Error(body.error ?? `HTTP ${res.status}`);
+    }
+    return res.json();
+  }
+
+  async removeSession(name: string) {
+    await this.ensureInit();
+    // Stop first (ignore errors if already stopped)
+    try { await this.stopSession(name); } catch {}
+    // Then remove
+    const res = await fetch(`${this.baseUrl.replace('/api/v1', '')}/dashboard/api/sessions/${encodeURIComponent(name)}/remove`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${this.apiKey}` },
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({})) as any;
+      throw new Error(body.error ?? `HTTP ${res.status}`);
+    }
+    return res.json();
+  }
+
   // --- Transfer ---
 
   async pullFile(peerAddress: string, peerPort: number, peerApiKey: string, sourcePath: string) {

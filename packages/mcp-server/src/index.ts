@@ -216,6 +216,70 @@ server.tool(
   },
 );
 
+// --- Session Management Tools ---
+
+server.tool(
+  'loopsy_session_list',
+  'List all Loopsy sessions (workers) with their status, port, and hostname',
+  {},
+  async () => {
+    try {
+      const result = await client.listSessions();
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    } catch (err: any) {
+      return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+    }
+  },
+);
+
+server.tool(
+  'loopsy_session_start',
+  'Start a new Loopsy worker session. Creates a new daemon instance on a free port.',
+  {
+    name: z.string().describe('Name for the session (e.g. "worker-1")'),
+  },
+  async ({ name }) => {
+    try {
+      const result = await client.startSession(name);
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    } catch (err: any) {
+      return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+    }
+  },
+);
+
+server.tool(
+  'loopsy_session_stop',
+  'Stop a running Loopsy worker session',
+  {
+    name: z.string().describe('Name of the session to stop'),
+  },
+  async ({ name }) => {
+    try {
+      const result = await client.stopSession(name);
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    } catch (err: any) {
+      return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+    }
+  },
+);
+
+server.tool(
+  'loopsy_session_remove',
+  'Stop and remove a Loopsy worker session, deleting its configuration and data',
+  {
+    name: z.string().describe('Name of the session to remove'),
+  },
+  async ({ name }) => {
+    try {
+      const result = await client.removeSession(name);
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    } catch (err: any) {
+      return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+    }
+  },
+);
+
 // --- Messaging Protocol v1 Tools ---
 
 server.tool(
@@ -447,6 +511,13 @@ Use these for all peer-to-peer communication:
 12. **loopsy_context_delete** - Delete context entries
 13. **loopsy_peer_status** - Check a peer's health
 14. **loopsy_broadcast_context** - Set context on all peers at once
+
+## Session Management Tools
+
+15. **loopsy_session_list** - List all worker sessions with their status
+16. **loopsy_session_start** - Start a new worker session
+17. **loopsy_session_stop** - Stop a running worker session
+18. **loopsy_session_remove** - Stop and remove a worker session and its data
 
 ## How to Communicate with Other Claude Instances
 

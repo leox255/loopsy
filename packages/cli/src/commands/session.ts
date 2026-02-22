@@ -279,6 +279,35 @@ export async function sessionStatusCommand(argv: any) {
   }
 }
 
+export async function sessionRemoveCommand(argv: any) {
+  const name = argv.name as string;
+  if (name === 'main') {
+    console.log('Cannot remove the main session');
+    return;
+  }
+
+  const sessionDir = join(SESSIONS_PATH, name);
+
+  // Check if running
+  try {
+    const pidRaw = await readFile(join(sessionDir, 'daemon.pid'), 'utf-8');
+    const pid = parseInt(pidRaw, 10);
+    process.kill(pid, 0);
+    console.log(`Session "${name}" is still running. Stop it first with: loopsy session stop ${name}`);
+    return;
+  } catch {
+    // Not running — safe to remove
+  }
+
+  try {
+    const { rm } = await import('node:fs/promises');
+    await rm(sessionDir, { recursive: true, force: true });
+    console.log(`Session "${name}" removed`);
+  } catch (err: any) {
+    console.error(`Failed to remove session "${name}": ${err.message}`);
+  }
+}
+
 export function sessionCommand(argv: any) {
   // Handled by subcommands
 }

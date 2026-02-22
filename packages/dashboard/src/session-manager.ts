@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { readFile, writeFile, mkdir, readdir, unlink } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, readdir, unlink, rm } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir, hostname as osHostname } from 'node:os';
@@ -221,6 +221,24 @@ export async function restartSession(name: string): Promise<SessionInfo> {
   // Wait for port release
   await new Promise(r => setTimeout(r, 1000));
   return startSession(name);
+}
+
+export async function removeSession(name: string): Promise<void> {
+  if (name === 'main') throw new Error('Cannot remove the main session');
+  const sessionDir = join(SESSIONS_PATH, name);
+
+  // Ensure it's stopped first
+  try {
+    const pidRaw = await readFile(join(sessionDir, 'daemon.pid'), 'utf-8');
+    const pid = parseInt(pidRaw, 10);
+    process.kill(pid, 0); // Check if running
+    throw new Error(`Session "${name}" is still running. Stop it first.`);
+  } catch (e: any) {
+    if (e.message.includes('still running')) throw e;
+    // Not running — safe to remove
+  }
+
+  await rm(sessionDir, { recursive: true, force: true });
 }
 
 export async function stopAllSessions(): Promise<number> {

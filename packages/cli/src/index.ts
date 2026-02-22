@@ -19,6 +19,7 @@ import {
   sessionStopAllCommand,
   sessionListCommand,
   sessionStatusCommand,
+  sessionRemoveCommand,
 } from './commands/session.js';
 import { dashboardCommand } from './commands/dashboard.js';
 import { enableCommand, disableCommand, serviceStatusCommand } from './commands/service.js';
@@ -149,6 +150,12 @@ yargs(hideBin(process.argv))
           (y: any) => y.positional('name', { type: 'string', demandOption: true }),
           sessionStatusCommand,
         )
+        .command(
+          'remove <name>',
+          'Remove a stopped session and its data',
+          (y: any) => y.positional('name', { type: 'string', demandOption: true }),
+          sessionRemoveCommand,
+        )
         .demandCommand(1),
     sessionCommand,
   )
@@ -183,5 +190,5 @@ yargs(hideBin(process.argv))
   .command('doctor', 'Run health checks on your Loopsy installation', {}, doctorCommand)
   .demandCommand(1, 'You need at least one command')
   .help()
-  .version('1.0.8')
+  .version('1.0.9')
   .parse();

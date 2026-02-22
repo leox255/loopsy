@@ -278,7 +278,7 @@ async function renderTaskStream() {
 
   content.innerHTML = `
     <div class="flex justify-between items-center mb-1">
-      <button class="btn btn-sm" id="btn-back-tasks" style="border-color:var(--text-muted)"><svg width="14" height="14" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:4px"><polyline points="12,3 6,9 12,15"/></svg>Back</button>
+      <button class="btn btn-sm" id="btn-back-tasks" style="border-color:var(--text-secondary);color:var(--text-secondary)"><svg width="14" height="14" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:4px"><polyline points="12,3 6,9 12,15"/></svg>Back</button>
       <button class="btn btn-sm btn-danger" id="btn-cancel-task">Cancel</button>
     </div>
     <div class="task-info">

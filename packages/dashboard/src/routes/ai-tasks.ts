@@ -29,7 +29,7 @@ export function registerAiTaskRoutes(
 ) {
   // Dispatch an AI task to a target session/peer
   app.post('/dashboard/api/ai-tasks/dispatch', async (request, reply) => {
-    const { targetPort, targetAddress, prompt, cwd, permissionMode, model, maxBudgetUsd, allowedTools, disallowedTools, additionalArgs, resumeSessionId } =
+    const { targetPort, targetAddress, prompt, cwd, permissionMode, model, agent, maxBudgetUsd, allowedTools, disallowedTools, additionalArgs, resumeSessionId } =
       request.body as any;
 
     if (!prompt) {
@@ -37,7 +37,7 @@ export function registerAiTaskRoutes(
       return { error: 'Missing prompt' };
     }
 
-    const body: any = { prompt, cwd, permissionMode, model, maxBudgetUsd, allowedTools, disallowedTools, additionalArgs };
+    const body: any = { prompt, cwd, permissionMode, model, agent, maxBudgetUsd, allowedTools, disallowedTools, additionalArgs };
     if (resumeSessionId) body.resumeSessionId = resumeSessionId;
 
     const { host, isRemote } = resolveHost(targetAddress);
