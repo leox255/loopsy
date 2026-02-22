@@ -19,6 +19,7 @@ import { AuditLogger } from './services/audit-logger.js';
 import { AiTaskManager } from './services/ai-task-manager.js';
 import { TlsManager } from './services/tls-manager.js';
 import { registerPairRoutes } from './routes/pair.js';
+import { mountDashboard } from './dashboard.js';
 
 export interface DaemonServer {
   start(): Promise<void>;
@@ -116,6 +117,12 @@ export async function createDaemon(config: LoopsyConfig): Promise<DaemonServer> 
     apiKey: config.auth.apiKey,
     tlsManager,
     dataDir,
+  });
+
+  // Mount dashboard UI at /dashboard/
+  await mountDashboard(app, {
+    apiKey: config.auth.apiKey,
+    allowedKeys: config.auth.allowedKeys,
   });
 
   // Health checker (always enabled so manual peers and sessions get checked)

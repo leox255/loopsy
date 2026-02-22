@@ -56,6 +56,9 @@ importers:
       '@fastify/rate-limit':
         specifier: ^10.0.0
         version: 10.3.0
+      '@fastify/static':
+        specifier: ^8.0.0
+        version: 8.3.0
       '@loopsy/discovery':
         specifier: workspace:*
         version: link:../discovery

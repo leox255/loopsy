@@ -5,8 +5,11 @@ export function createAuthHook(ownKey: string, allowedKeys: Record<string, strin
   const validKeys = new Set([ownKey, ...Object.values(allowedKeys)]);
 
   return async (request: FastifyRequest, reply: FastifyReply) => {
-    // Skip auth for health endpoint
+    // Skip auth for health endpoint and dashboard static/API routes
     if (request.url === '/api/v1/health') return;
+    if (request.url.startsWith('/dashboard')) return;
+    // Skip auth for pairing endpoints (unauthenticated by design)
+    if (request.url.startsWith('/api/v1/pair/')) return;
 
     const authHeader = request.headers.authorization;
     if (!authHeader) {

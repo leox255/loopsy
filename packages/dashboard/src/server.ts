@@ -52,10 +52,15 @@ async function main() {
 
   await app.register(fastifyCors, { origin: true });
 
-  // Serve public/ directory
+  // Serve public/ directory at /dashboard/
   await app.register(fastifyStatic, {
     root: join(__dirname, '..', 'public'),
-    prefix: '/',
+    prefix: '/dashboard/',
+  });
+
+  // Redirect root to /dashboard/
+  app.get('/', async (_request, reply) => {
+    reply.redirect('/dashboard/');
   });
 
   // API routes

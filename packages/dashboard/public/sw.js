@@ -1,5 +1,5 @@
-const CACHE_NAME = 'loopsy-v1';
-const SHELL = ['/', '/style.css', '/app.js', '/icon-192.png'];
+const CACHE_NAME = 'loopsy-v2';
+const SHELL = ['/dashboard/', '/dashboard/style.css', '/dashboard/app.js', '/dashboard/icon-192.png'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(

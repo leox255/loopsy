@@ -7,11 +7,11 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="Loopsy">
-  <link rel="manifest" href="/manifest.json">
-  <link rel="icon" type="image/png" href="/icon-192.png">
-  <link rel="apple-touch-icon" href="/icon-192.png">
+  <link rel="manifest" href="/dashboard/manifest.json">
+  <link rel="icon" type="image/png" href="/dashboard/icon-192.png">
+  <link rel="apple-touch-icon" href="/dashboard/icon-192.png">
   <title>Loopsy // Dashboard</title>
-  <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="/dashboard/style.css">
 </head>
 <body>
   <div class="app">
@@ -75,10 +75,10 @@
     </div>
   </nav>
 
-  <script type="module" src="/app.js"></script>
+  <script type="module" src="/dashboard/app.js"></script>
   <script>
     if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('/sw.js').catch(() => {});
+      navigator.serviceWorker.register('/dashboard/sw.js', { scope: '/dashboard/' }).catch(() => {});
     }
   </script>
 </body>

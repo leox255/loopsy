@@ -87,18 +87,23 @@ for (const file of ['README.md', 'LICENSE']) {
 }
 
 // ─── Create postinstall script ────────────────────────────────────────
-// This runs after `npm install` and creates @loopsy/* stubs in node_modules
-// so that bare imports like `from '@loopsy/protocol'` resolve correctly.
+// This runs after `npm install` and creates @loopsy/* packages in node_modules
+// by copying the bundled dist/ outputs so bare imports resolve correctly.
+// Node.js ESM doesn't allow main/exports to point outside the package directory,
+// so we copy the files rather than using relative path references.
 
 mkdirSync(join(OUT, 'scripts'), { recursive: true });
 writeFileSync(
   join(OUT, 'scripts', 'postinstall.mjs'),
   `#!/usr/bin/env node
 /**
- * Postinstall: create @loopsy/* stub packages in node_modules so bare
- * specifier imports resolve to the bundled dist/ outputs.
+ * Postinstall: copy bundled @loopsy/* packages into node_modules so bare
+ * specifier imports (e.g. from '@loopsy/protocol') resolve correctly.
+ *
+ * Node.js ESM forbids main/exports pointing outside the package directory,
+ * so we copy the compiled files into each stub instead.
  */
-import { mkdirSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdirSync, writeFileSync, cpSync, existsSync } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -111,8 +116,8 @@ const pkgRoot = resolve(dirname(__filename), '..');
 const nodeModules = join(pkgRoot, 'node_modules');
 
 const stubs = [
-  { name: 'protocol', main: '../../dist/protocol/index.js' },
-  { name: 'discovery', main: '../../dist/discovery/index.js' },
+  { name: 'protocol', distDir: 'protocol' },
+  { name: 'discovery', distDir: 'discovery' },
 ];
 
 for (const stub of stubs) {
@@ -121,19 +126,38 @@ for (const stub of stubs) {
   // Don't overwrite if somehow already present (e.g. in monorepo dev)
   if (existsSync(join(stubDir, 'package.json'))) continue;
 
-  mkdirSync(stubDir, { recursive: true });
+  // Copy the compiled dist output into the stub directory
+  const srcDir = join(pkgRoot, 'dist', stub.distDir);
+  cpSync(srcDir, stubDir, { recursive: true });
+
+  // Write package.json pointing to the local index.js
   writeFileSync(
     join(stubDir, 'package.json'),
     JSON.stringify({
       name: \`@loopsy/\${stub.name}\`,
       version: '${version}',
       type: 'module',
-      main: stub.main,
+      main: 'index.js',
+      exports: { '.': './index.js' },
     }, null, 2),
   );
 }
 
 console.log('loopsy: workspace stubs created');
+
+// Auto-run 'loopsy init' if no config exists (first-time install)
+import { execSync } from 'node:child_process';
+import { homedir } from 'node:os';
+const configPath = join(homedir(), '.loopsy', 'config.yaml');
+if (!existsSync(configPath)) {
+  console.log('loopsy: first-time setup — running loopsy init...');
+  try {
+    const cliPath = join(pkgRoot, 'dist', 'cli', 'index.js');
+    execSync(\`node \${cliPath} init\`, { stdio: 'inherit' });
+  } catch (err) {
+    console.log('loopsy: auto-init failed (run "loopsy init" manually)');
+  }
+}
 `,
 );
 console.log('  Created scripts/postinstall.mjs');

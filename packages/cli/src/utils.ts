@@ -34,12 +34,17 @@ export function parsePeerAddress(peer: string): { address: string; port: number 
 
 export async function daemonRequest(path: string, opts: RequestInit = {}, dataDir?: string): Promise<any> {
   const { apiKey, port } = await loadCliConfig(dataDir);
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${apiKey}`,
+  };
+  if (opts.body) {
+    headers['Content-Type'] = 'application/json';
+  }
   const res = await fetch(`http://127.0.0.1:${port}/api/v1${path}`, {
     ...opts,
     headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
-      ...opts.headers,
+      ...headers,
+      ...(opts.headers as Record<string, string>),
     },
   });
   if (!res.ok) {

@@ -1,6 +1,6 @@
 {
   "name": "loopsy",
-  "version": "1.0.1",
+  "version": "1.0.4",
   "private": true,
   "description": "Cross-machine communication protocol for Claude Code",
   "scripts": {

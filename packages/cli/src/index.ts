@@ -4,11 +4,11 @@ import yargs from 'yargs';
 import { hideBin } from 'yargs/helpers';
 import { initCommand } from './commands/init.js';
 import { startCommand, stopCommand, statusCommand } from './commands/daemon.js';
-import { peersCommand } from './commands/peers.js';
+import { peersListCommand, peersAddCommand, peersRemoveCommand } from './commands/peers.js';
 import { execCommand } from './commands/exec.js';
 import { sendCommand, pullCommand } from './commands/transfer.js';
-import { contextCommand } from './commands/context.js';
-import { keyCommand } from './commands/key.js';
+import { contextSetCommand, contextGetCommand, contextListCommand, contextDeleteCommand } from './commands/context.js';
+import { keyGenerateCommand, keyShowCommand } from './commands/key.js';
 import { logsCommand } from './commands/logs.js';
 import { connectCommand } from './commands/connect.js';
 import {
@@ -41,11 +41,11 @@ yargs(hideBin(process.argv))
         .command('add <address> [port]', 'Add a manual peer', {
           address: { type: 'string', demandOption: true },
           port: { type: 'number', default: 19532 },
-        })
+        }, peersAddCommand)
         .command('remove <nodeId>', 'Remove a peer', {
           nodeId: { type: 'string', demandOption: true },
-        }),
-    peersCommand,
+        }, peersRemoveCommand),
+    peersListCommand,
   )
   .command(
     'exec <peer> <cmd..>',
@@ -89,24 +89,26 @@ yargs(hideBin(process.argv))
           key: { type: 'string', demandOption: true },
           value: { type: 'string', demandOption: true },
           ttl: { type: 'number', describe: 'TTL in seconds' },
-        })
+        }, contextSetCommand)
         .command('get <key>', 'Get a context value', {
           key: { type: 'string', demandOption: true },
-        })
-        .command('list', 'List all context entries')
+        }, contextGetCommand)
+        .command('list', 'List all context entries', {}, contextListCommand)
         .command('delete <key>', 'Delete a context entry', {
           key: { type: 'string', demandOption: true },
-        }),
-    contextCommand,
+        }, contextDeleteCommand)
+        .demandCommand(1),
+    () => {},
   )
   .command(
     'key',
     'API key management',
     (yargs) =>
       yargs
-        .command('generate', 'Generate a new API key')
-        .command('show', 'Show current API key'),
-    keyCommand,
+        .command('generate', 'Generate a new API key', {}, keyGenerateCommand)
+        .command('show', 'Show current API key', {}, keyShowCommand)
+        .demandCommand(1),
+    () => {},
   )
   .command(
     'logs',
@@ -150,8 +152,8 @@ yargs(hideBin(process.argv))
   )
   .command(
     'dashboard',
-    'Start the web dashboard for monitoring and control',
-    (yargs) => yargs.option('port', { type: 'number', alias: 'p', default: 19540, describe: 'Dashboard port' }),
+    'Open the web dashboard (served by the daemon)',
+    {},
     dashboardCommand,
   )
   .command(
@@ -178,5 +180,5 @@ yargs(hideBin(process.argv))
   .command('doctor', 'Run health checks on your Loopsy installation', {}, doctorCommand)
   .demandCommand(1, 'You need at least one command')
   .help()
-  .version('1.0.0')
+  .version('1.0.4')
   .parse();
