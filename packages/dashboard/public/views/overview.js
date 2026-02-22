@@ -1,5 +1,15 @@
 import { registerView, dashboardApi, formatUptime, escapeHtml } from '/app.js';
 
+function platformSvg(platform) {
+  const s = (d) => `<svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="color:var(--text-secondary)">${d}</svg>`;
+  switch (platform) {
+    case 'darwin': return s('<path d="M12.5 3C11 3 10 4 9 4S7 3 5.5 3C3.5 3 2 5 2 7.5c0 4 4.5 8 7 8.5 2.5-.5 7-4.5 7-8.5C16 5 14.5 3 12.5 3z"/>');
+    case 'win32': return s('<rect x="2" y="2" width="6" height="6" rx="0.5"/><rect x="10" y="2" width="6" height="6" rx="0.5"/><rect x="2" y="10" width="6" height="6" rx="0.5"/><rect x="10" y="10" width="6" height="6" rx="0.5"/>');
+    case 'linux': return s('<circle cx="9" cy="5" r="3"/><path d="M4 16c0-3 2.5-5 5-5s5 2 5 5"/>');
+    default: return s('<circle cx="9" cy="9" r="6"/><path d="M8.5 12h1"/><path d="M9 6a2 2 0 011.5 3.5L9 11"/>');
+  }
+}
+
 let refreshTimer = null;
 
 function mount(container) {
@@ -122,7 +132,7 @@ function renderNetworkPeers(network) {
 
   grid.innerHTML = peers.map(p => {
     const dotClass = p.status === 'online' ? 'online' : p.status === 'offline' ? 'offline' : 'unknown';
-    const platformIcon = p.platform === 'darwin' ? '&#63743;' : p.platform === 'win32' ? '&#8862;' : p.platform === 'linux' ? '&#9881;' : '&#63;';
+    const platformIcon = platformSvg(p.platform);
 
     return `
       <div class="peer-card">
@@ -131,7 +141,7 @@ function renderNetworkPeers(network) {
             <span class="status-dot ${dotClass}"></span>
             <span class="font-mono text-sm" style="font-weight:600">${escapeHtml(p.hostname)}</span>
           </div>
-          <span style="font-size:1.1rem">${platformIcon}</span>
+          ${platformIcon}
         </div>
         <div class="font-mono text-xs text-muted" style="line-height:1.7">
           ${escapeHtml(p.address)}:${p.port}<br>

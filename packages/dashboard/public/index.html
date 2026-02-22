@@ -6,6 +6,10 @@
   <meta name="theme-color" content="#050508">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Loopsy">
+  <link rel="manifest" href="/manifest.json">
+  <link rel="icon" type="image/png" href="/icon-192.png">
+  <link rel="apple-touch-icon" href="/icon-192.png">
   <title>Loopsy // Dashboard</title>
   <link rel="stylesheet" href="/style.css">
 </head>
@@ -20,22 +24,22 @@
     <!-- Sidebar nav (desktop) -->
     <nav class="nav" id="sidebar-nav">
       <div class="nav-item active" data-view="overview">
-        <span class="nav-icon">&#9632;</span> Overview
+        <span class="nav-icon"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="5.5" height="5.5" rx="1"/><rect x="10.5" y="2" width="5.5" height="5.5" rx="1"/><rect x="2" y="10.5" width="5.5" height="5.5" rx="1"/><rect x="10.5" y="10.5" width="5.5" height="5.5" rx="1"/></svg></span> Overview
       </div>
       <div class="nav-item" data-view="terminal">
-        <span class="nav-icon">&#9654;</span> Terminal
+        <span class="nav-icon"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="4,6 8,9 4,12"/><line x1="10" y1="12" x2="14" y2="12"/></svg></span> Terminal
       </div>
       <div class="nav-item" data-view="context">
-        <span class="nav-icon">&#8942;</span> Context
+        <span class="nav-icon"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><line x1="3" y1="5" x2="15" y2="5"/><line x1="3" y1="9" x2="15" y2="9"/><line x1="3" y1="13" x2="15" y2="13"/></svg></span> Context
       </div>
       <div class="nav-item" data-view="messages">
-        <span class="nav-icon">&#9993;</span> Messages
+        <span class="nav-icon"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3h12a1 1 0 011 1v8a1 1 0 01-1 1H6l-3 3V4a1 1 0 011-1z"/></svg></span> Messages
       </div>
       <div class="nav-item" data-view="peers">
-        <span class="nav-icon">&#8644;</span> Peers
+        <span class="nav-icon"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="5" cy="9" r="2.5"/><circle cx="13" cy="9" r="2.5"/><line x1="7.5" y1="9" x2="10.5" y2="9"/></svg></span> Peers
       </div>
       <div class="nav-item" data-view="ai-tasks">
-        <span class="nav-icon">&#9881;</span> AI Tasks
+        <span class="nav-icon"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="9" cy="4" r="1.5"/><circle cx="4" cy="13" r="1.5"/><circle cx="14" cy="13" r="1.5"/><line x1="9" y1="5.5" x2="5" y2="11.5"/><line x1="9" y1="5.5" x2="13" y2="11.5"/><line x1="5.5" y1="13" x2="12.5" y2="13"/></svg></span> AI Tasks
       </div>
     </nav>
 
@@ -46,31 +50,36 @@
   <!-- Mobile bottom nav -->
   <nav class="mobile-nav" id="mobile-nav">
     <div class="mobile-nav-item active" data-view="overview">
-      <span class="mobile-nav-icon">&#9632;</span>
+      <span class="mobile-nav-icon"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="5.5" height="5.5" rx="1"/><rect x="10.5" y="2" width="5.5" height="5.5" rx="1"/><rect x="2" y="10.5" width="5.5" height="5.5" rx="1"/><rect x="10.5" y="10.5" width="5.5" height="5.5" rx="1"/></svg></span>
       Overview
     </div>
     <div class="mobile-nav-item" data-view="terminal">
-      <span class="mobile-nav-icon">&#9654;</span>
+      <span class="mobile-nav-icon"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="4,6 8,9 4,12"/><line x1="10" y1="12" x2="14" y2="12"/></svg></span>
       Terminal
     </div>
     <div class="mobile-nav-item" data-view="context">
-      <span class="mobile-nav-icon">&#8942;</span>
+      <span class="mobile-nav-icon"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><line x1="3" y1="5" x2="15" y2="5"/><line x1="3" y1="9" x2="15" y2="9"/><line x1="3" y1="13" x2="15" y2="13"/></svg></span>
       Context
     </div>
     <div class="mobile-nav-item" data-view="messages">
-      <span class="mobile-nav-icon">&#9993;</span>
+      <span class="mobile-nav-icon"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3h12a1 1 0 011 1v8a1 1 0 01-1 1H6l-3 3V4a1 1 0 011-1z"/></svg></span>
       Messages
     </div>
     <div class="mobile-nav-item" data-view="peers">
-      <span class="mobile-nav-icon">&#8644;</span>
+      <span class="mobile-nav-icon"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="5" cy="9" r="2.5"/><circle cx="13" cy="9" r="2.5"/><line x1="7.5" y1="9" x2="10.5" y2="9"/></svg></span>
       Peers
     </div>
     <div class="mobile-nav-item" data-view="ai-tasks">
-      <span class="mobile-nav-icon">&#9881;</span>
+      <span class="mobile-nav-icon"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="9" cy="4" r="1.5"/><circle cx="4" cy="13" r="1.5"/><circle cx="14" cy="13" r="1.5"/><line x1="9" y1="5.5" x2="5" y2="11.5"/><line x1="9" y1="5.5" x2="13" y2="11.5"/><line x1="5.5" y1="13" x2="12.5" y2="13"/></svg></span>
       AI
     </div>
   </nav>
 
   <script type="module" src="/app.js"></script>
+  <script>
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/sw.js').catch(() => {});
+    }
+  </script>
 </body>
 </html>
