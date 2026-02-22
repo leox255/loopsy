@@ -128,7 +128,7 @@ export class AiTaskManager {
     }
     const proc = pty.spawn(spawnFile, spawnArgs, {
       name: 'xterm-256color',
-      cols: process.platform === 'win32' ? 200 : 32000, // ConPTY struggles with very wide cols
+      cols: process.platform === 'win32' ? 9999 : 32000, // ConPTY needs wide cols to avoid JSON line wrapping
       rows: 50,
       cwd: params.cwd || process.cwd(),
       env,
