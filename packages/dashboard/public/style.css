@@ -342,6 +342,9 @@ body {
 .btn-success { border-color: var(--green); color: var(--green); }
 .btn-success:hover:not(:disabled) { background: rgba(0,255,136,0.10); box-shadow: var(--green-glow); }
 
+.btn-warning { border-color: var(--amber); color: var(--amber); }
+.btn-warning:hover:not(:disabled) { background: rgba(255,184,0,0.12); }
+
 .btn-sm { font-size: 0.6rem; padding: 0.2rem 0.5rem; }
 
 /* ═══ Inputs ═══ */
@@ -655,6 +658,32 @@ select option { background: var(--bg-base); color: var(--text-primary); }
 
 /* ═══ AI Tasks ═══ */
 
+.task-info {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-normal);
+  border-radius: 6px;
+  padding: 0.75rem 1rem;
+  margin-bottom: 0.75rem;
+}
+.task-info-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.35rem;
+}
+.task-info-prompt {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--text-primary);
+  line-height: 1.5;
+  margin-bottom: 0.25rem;
+}
+.task-info-meta {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  color: var(--text-muted);
+}
+
 .ai-terminal {
   background: var(--bg-void);
   border: 1px solid var(--border-dim);
@@ -671,11 +700,11 @@ select option { background: var(--bg-base); color: var(--text-primary); }
 .ai-line { padding: 1px 0; }
 .ai-stdout { color: var(--green); }
 .ai-thinking { color: var(--text-muted); font-style: italic; }
-.ai-tool-use { color: var(--cyan); }
-.ai-tool-result { color: var(--text-secondary); padding-left: 1rem; border-left: 2px solid var(--border-dim); margin: 2px 0; }
+.ai-tool-use { color: var(--cyan); border-left: 2px solid var(--cyan-dim); padding-left: 0.5rem; margin: 2px 0; }
+.ai-tool-result { color: var(--text-secondary); padding-left: 1rem; border-left: 2px solid var(--border-dim); margin: 2px 0; font-size: 0.65rem; }
 .ai-stderr { color: var(--red); }
 .ai-system { color: var(--text-muted); font-style: italic; }
-.ai-result { color: var(--green); border: 1px solid var(--green)40; border-radius: 4px; padding: 0.5rem; margin: 4px 0; }
+.ai-result { color: var(--green); border: 1px solid rgba(0,255,136,0.25); border-radius: 4px; padding: 0.5rem; margin: 4px 0; background: rgba(0,255,136,0.03); }
 
 .approval-banner {
   background: var(--bg-elevated);

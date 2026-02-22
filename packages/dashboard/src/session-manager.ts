@@ -186,9 +186,27 @@ export async function startSession(name: string): Promise<SessionInfo> {
 
 export async function stopSession(name: string): Promise<void> {
   const pidFile = join(SESSIONS_PATH, name, 'daemon.pid');
-  const pid = parseInt(await readFile(pidFile, 'utf-8'), 10);
-  process.kill(pid, 'SIGTERM');
-  await unlink(pidFile);
+  let pid: number;
+  try {
+    pid = parseInt(await readFile(pidFile, 'utf-8'), 10);
+  } catch {
+    // PID file missing — already stopped
+    return;
+  }
+  try {
+    process.kill(pid, 'SIGTERM');
+  } catch (e: any) {
+    if (e.code !== 'ESRCH') throw e;
+    // Process already dead — clean up stale PID file
+  }
+  try { await unlink(pidFile); } catch {}
+}
+
+export async function restartSession(name: string): Promise<SessionInfo> {
+  await stopSession(name);
+  // Wait for port release
+  await new Promise(r => setTimeout(r, 1000));
+  return startSession(name);
 }
 
 export async function stopAllSessions(): Promise<number> {

@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { listSessions, startSession, stopSession } from '../session-manager.js';
+import { listSessions, startSession, stopSession, restartSession } from '../session-manager.js';
 
 export function registerSessionRoutes(app: FastifyInstance) {
   app.get('/dashboard/api/sessions', async () => {
@@ -32,6 +32,35 @@ export function registerSessionRoutes(app: FastifyInstance) {
       return { error: 'Provide "name" or "fleet" + "count"' };
     },
   );
+
+  app.post<{ Params: { name: string } }>(
+    '/dashboard/api/sessions/:name/restart',
+    async (request, reply) => {
+      try {
+        const session = await restartSession(request.params.name);
+        return { success: true, session };
+      } catch (err: any) {
+        reply.code(500);
+        return { error: err.message };
+      }
+    },
+  );
+
+  app.post('/dashboard/api/sessions/restart-all', async () => {
+    const { sessions } = await listSessions();
+    const results = [];
+    for (const s of sessions) {
+      if (s.status === 'running') {
+        try {
+          const session = await restartSession(s.name);
+          results.push(session);
+        } catch (err: any) {
+          results.push({ name: s.name, error: err.message });
+        }
+      }
+    }
+    return { sessions: results };
+  });
 
   app.delete<{ Params: { name: string } }>(
     '/dashboard/api/sessions/:name',

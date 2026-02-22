@@ -17,6 +17,7 @@ function mount(container) {
       <div class="flex gap-sm items-center">
         <input type="number" class="input" id="fleet-count" value="3" min="1" max="10" style="width:60px">
         <button class="btn btn-primary" id="btn-fleet">Start Fleet</button>
+        <button class="btn btn-warning btn-sm" id="btn-restart-all">Restart All</button>
         <button class="btn btn-danger btn-sm" id="btn-stop-all">Stop All</button>
       </div>
     </div>
@@ -28,6 +29,7 @@ function mount(container) {
   `;
 
   document.getElementById('btn-fleet').addEventListener('click', startFleet);
+  document.getElementById('btn-restart-all').addEventListener('click', restartAll);
   document.getElementById('btn-stop-all').addEventListener('click', stopAll);
 
   refresh();
@@ -76,7 +78,12 @@ function renderGrid(sessions) {
             ${escapeHtml(s.hostname || s.name)}
           </div>
           ${isRunning
-            ? `<button class="btn btn-danger btn-sm" onclick="window.__stopSession('${escapeHtml(s.name)}')">Stop</button>`
+            ? s.name !== 'main'
+              ? `<div class="flex gap-sm">
+                  <button class="btn btn-warning btn-sm" onclick="window.__restartSession('${escapeHtml(s.name)}')">Restart</button>
+                  <button class="btn btn-danger btn-sm" onclick="window.__stopSession('${escapeHtml(s.name)}')">Stop</button>
+                </div>`
+              : ''
             : s.name !== 'main'
               ? `<button class="btn btn-success btn-sm" onclick="window.__startSession('${escapeHtml(s.name)}')">Start</button>`
               : ''
@@ -152,6 +159,20 @@ async function startFleet() {
   btn.disabled = false;
 }
 
+async function restartAll() {
+  if (!confirm('Restart all sessions?')) return;
+  const btn = document.getElementById('btn-restart-all');
+  btn.disabled = true;
+  try {
+    await dashboardApi('/sessions/restart-all', { method: 'POST' });
+    await new Promise(r => setTimeout(r, 1500));
+    await refresh();
+  } catch (err) {
+    alert('Failed: ' + err.message);
+  }
+  btn.disabled = false;
+}
+
 async function stopAll() {
   if (!confirm('Stop all sessions?')) return;
   const btn = document.getElementById('btn-stop-all');
@@ -174,6 +195,14 @@ window.__stopSession = async (name) => {
   try {
     await dashboardApi(`/sessions/${name}`, { method: 'DELETE' });
     await new Promise(r => setTimeout(r, 500));
+    await refresh();
+  } catch (err) { alert('Failed: ' + err.message); }
+};
+
+window.__restartSession = async (name) => {
+  try {
+    await dashboardApi(`/sessions/${name}/restart`, { method: 'POST' });
+    await new Promise(r => setTimeout(r, 1500));
     await refresh();
   } catch (err) { alert('Failed: ' + err.message); }
 };
