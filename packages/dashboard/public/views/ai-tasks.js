@@ -249,9 +249,19 @@ function renderTaskStream() {
   connectStream(taskId, port);
 }
 
-function connectStream(taskId, port) {
+async function connectStream(taskId, port) {
   closeStream();
   taskFinished = false;
+
+  // Check if task is already finished before connecting — prevents
+  // stale permission_request events from showing the approval banner
+  try {
+    const data = await dashboardApi('/ai-tasks/all');
+    const task = (data.tasks || []).find(t => t.taskId === taskId);
+    if (task && (task.status === 'completed' || task.status === 'failed' || task.status === 'cancelled')) {
+      taskFinished = true;
+    }
+  } catch {}
 
   const url = `/dashboard/api/ai-tasks/stream/${port}/${encodeURIComponent(taskId)}`;
   eventSource = new EventSource(url);
