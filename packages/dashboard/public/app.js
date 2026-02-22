@@ -4,6 +4,13 @@
 
 // --- API Helpers ---
 
+function extractError(body, status) {
+  if (typeof body.error === 'string') return body.error;
+  if (typeof body.message === 'string') return body.message;
+  if (body.error) return JSON.stringify(body.error);
+  return `HTTP ${status}`;
+}
+
 export async function api(port, path, opts = {}) {
   const headers = opts.body ? { 'Content-Type': 'application/json' } : {};
   const res = await fetch(`/dashboard/api/proxy/${port}/api/v1${path}`, {
@@ -12,7 +19,7 @@ export async function api(port, path, opts = {}) {
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new Error(body.error || `HTTP ${res.status}`);
+    throw new Error(extractError(body, res.status));
   }
   return res.json();
 }
@@ -25,7 +32,7 @@ export async function dashboardApi(path, opts = {}) {
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new Error(body.error || `HTTP ${res.status}`);
+    throw new Error(extractError(body, res.status));
   }
   return res.json();
 }

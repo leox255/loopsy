@@ -1,10 +1,24 @@
 import { spawn } from 'node:child_process';
 import { readFile, writeFile, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
+import { homedir, platform } from 'node:os';
 import { CONFIG_DIR } from '@loopsy/protocol';
 import { daemonRequest } from '../utils.js';
 import { daemonMainPath } from '../package-root.js';
+
+/** Spawn daemon, wrapping with caffeinate on macOS to prevent idle/system sleep */
+function spawnDaemon(daemonPath: string) {
+  if (platform() === 'darwin') {
+    return spawn('caffeinate', ['-is', process.execPath, daemonPath], {
+      detached: true,
+      stdio: 'ignore',
+    });
+  }
+  return spawn('node', [daemonPath], {
+    detached: true,
+    stdio: 'ignore',
+  });
+}
 
 const PID_FILE = join(homedir(), CONFIG_DIR, 'daemon.pid');
 
@@ -21,10 +35,7 @@ export async function startCommand() {
 
   const daemonPath = daemonMainPath();
 
-  const child = spawn('node', [daemonPath], {
-    detached: true,
-    stdio: 'ignore',
-  });
+  const child = spawnDaemon(daemonPath);
 
   if (child.pid) {
     await writeFile(PID_FILE, String(child.pid));
@@ -61,10 +72,7 @@ export async function restartCommand() {
 
   // Start
   const daemonPath = daemonMainPath();
-  const child = spawn('node', [daemonPath], {
-    detached: true,
-    stdio: 'ignore',
-  });
+  const child = spawnDaemon(daemonPath);
 
   if (child.pid) {
     await writeFile(PID_FILE, String(child.pid));

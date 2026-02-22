@@ -20,6 +20,8 @@ function buildPlist(): string {
     <string>${PLIST_LABEL}</string>
     <key>ProgramArguments</key>
     <array>
+        <string>/usr/bin/caffeinate</string>
+        <string>-is</string>
         <string>${nodePath}</string>
         <string>${daemonPath}</string>
     </array>
@@ -27,6 +29,8 @@ function buildPlist(): string {
     <true/>
     <key>KeepAlive</key>
     <true/>
+    <key>ProcessType</key>
+    <string>Interactive</string>
     <key>StandardOutPath</key>
     <string>${join(homedir(), '.loopsy', 'logs', 'daemon.stdout.log')}</string>
     <key>StandardErrorPath</key>

@@ -8,18 +8,37 @@ function resolveHost(address?: string): { host: string; isRemote: boolean } {
   return { host: isRemote ? addr : '127.0.0.1', isRemote };
 }
 
-function resolveApiKey(
-  host: string,
-  isRemote: boolean,
+function getRemoteKeys(
   localApiKey: string,
   allowedKeys: Record<string, string>,
-): string {
-  if (!isRemote) return localApiKey;
-  // All remote peers share the same allowed key set — pick the first non-local key
+): string[] {
+  const keys: string[] = [];
   for (const key of Object.values(allowedKeys)) {
-    if (key !== localApiKey) return key;
+    if (key !== localApiKey) keys.push(key);
   }
-  return localApiKey;
+  // Also include local key as last resort
+  keys.push(localApiKey);
+  return keys;
+}
+
+/** Probe a remote host to find which key works */
+async function findWorkingKey(
+  host: string,
+  port: number,
+  localApiKey: string,
+  allowedKeys: Record<string, string>,
+): Promise<string> {
+  const keys = getRemoteKeys(localApiKey, allowedKeys);
+  for (const key of keys) {
+    try {
+      const res = await fetch(`http://${host}:${port}/api/v1/status`, {
+        headers: { Authorization: `Bearer ${key}` },
+        signal: AbortSignal.timeout(2000),
+      });
+      if (res.ok) return key;
+    } catch {}
+  }
+  return keys[0] || localApiKey;
 }
 
 export function registerAiTaskRoutes(
@@ -42,27 +61,38 @@ export function registerAiTaskRoutes(
 
     const { host, isRemote } = resolveHost(targetAddress);
     const port = targetPort || 19532;
-    const targetApiKey = resolveApiKey(host, isRemote, apiKey, allowedKeys);
+    const keysToTry = isRemote ? getRemoteKeys(apiKey, allowedKeys) : [apiKey];
 
-    try {
-      const res = await fetch(`http://${host}:${port}/api/v1/ai-tasks`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${targetApiKey}`,
-        },
-        body: JSON.stringify(body),
-        signal: AbortSignal.timeout(10_000),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        reply.code(res.status);
+    let lastError: string = 'No keys available';
+    for (const key of keysToTry) {
+      try {
+        const res = await fetch(`http://${host}:${port}/api/v1/ai-tasks`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${key}`,
+          },
+          body: JSON.stringify(body),
+          signal: AbortSignal.timeout(10_000),
+        });
+        const data = await res.json() as any;
+        if (res.status === 401 || res.status === 403) {
+          // Wrong key — try next
+          lastError = data?.error?.message || data?.message || 'Invalid API key';
+          continue;
+        }
+        if (!res.ok) {
+          reply.code(res.status);
+          const errMsg = typeof data.error === 'string' ? data.error : data.error?.message || data.message || 'Unknown error';
+          return { error: errMsg, _targetPort: port, _targetAddress: host };
+        }
+        return { ...data as object, _targetPort: port, _targetAddress: host };
+      } catch (err: any) {
+        lastError = err.message;
       }
-      return { ...data as object, _targetPort: port, _targetAddress: host };
-    } catch (err: any) {
-      reply.code(502);
-      return { error: `Failed to reach target: ${err.message}` };
     }
+    reply.code(502);
+    return { error: `Failed to reach target: ${lastError}` };
   });
 
   // Aggregate tasks across all running sessions AND remote peers
@@ -84,29 +114,39 @@ export function registerAiTaskRoutes(
       const remotePeers = peers.filter(
         (p) => p.address !== '127.0.0.1' && p.address !== 'localhost' && p.status === 'online',
       );
+      const remoteKeys = getRemoteKeys(apiKey, allowedKeys);
       for (const p of remotePeers) {
-        const remoteKey = resolveApiKey(p.address, true, apiKey, allowedKeys);
         // Avoid duplicates (same address:port)
         if (!running.some((r) => r.host === p.address && r.port === p.port)) {
-          running.push({ host: p.address, port: p.port, hostname: p.hostname, key: remoteKey });
+          // Try each key — use the first that works for listing
+          running.push({ host: p.address, port: p.port, hostname: p.hostname, key: remoteKeys[0] || apiKey });
         }
       }
     } catch {}
 
+    const allRemoteKeys = getRemoteKeys(apiKey, allowedKeys);
     const results = await Promise.allSettled(
       running.map(async (s) => {
-        const res = await fetch(`http://${s.host}:${s.port}/api/v1/ai-tasks`, {
-          headers: { Authorization: `Bearer ${s.key}` },
-          signal: AbortSignal.timeout(3000),
-        });
-        if (!res.ok) return [];
-        const data = (await res.json()) as { tasks?: any[] };
-        return (data.tasks || []).map((t: any) => ({
-          ...t,
-          _sourcePort: s.port,
-          _sourceAddress: s.host,
-          _sourceHostname: s.hostname,
-        }));
+        const isRemoteSession = s.host !== '127.0.0.1' && s.host !== 'localhost';
+        const keysToTry = isRemoteSession ? allRemoteKeys : [apiKey];
+        for (const key of keysToTry) {
+          try {
+            const res = await fetch(`http://${s.host}:${s.port}/api/v1/ai-tasks`, {
+              headers: { Authorization: `Bearer ${key}` },
+              signal: AbortSignal.timeout(3000),
+            });
+            if (res.status === 401 || res.status === 403) continue;
+            if (!res.ok) return [];
+            const data = (await res.json()) as { tasks?: any[] };
+            return (data.tasks || []).map((t: any) => ({
+              ...t,
+              _sourcePort: s.port,
+              _sourceAddress: s.host,
+              _sourceHostname: s.hostname,
+            }));
+          } catch { continue; }
+        }
+        return [];
       }),
     );
 
@@ -133,7 +173,9 @@ export function registerAiTaskRoutes(
       const { taskId } = request.params;
       const since = request.query.since || '0';
       const { host, isRemote } = resolveHost(request.query.address);
-      const targetKey = resolveApiKey(host, isRemote, apiKey, allowedKeys);
+      const targetKey = isRemote
+        ? await findWorkingKey(host, port, apiKey, allowedKeys)
+        : apiKey;
 
       reply.raw.writeHead(200, {
         'Content-Type': 'text/event-stream',
@@ -182,7 +224,9 @@ export function registerAiTaskRoutes(
       const port = parseInt(request.params.port, 10);
       const { taskId } = request.params;
       const { host, isRemote } = resolveHost(request.query.address);
-      const targetKey = resolveApiKey(host, isRemote, apiKey, allowedKeys);
+      const targetKey = isRemote
+        ? await findWorkingKey(host, port, apiKey, allowedKeys)
+        : apiKey;
 
       try {
         const res = await fetch(`http://${host}:${port}/api/v1/ai-tasks/${encodeURIComponent(taskId)}/approve`, {
@@ -211,7 +255,9 @@ export function registerAiTaskRoutes(
       const port = parseInt(request.params.port, 10);
       const { taskId } = request.params;
       const { host, isRemote } = resolveHost(request.query.address);
-      const targetKey = resolveApiKey(host, isRemote, apiKey, allowedKeys);
+      const targetKey = isRemote
+        ? await findWorkingKey(host, port, apiKey, allowedKeys)
+        : apiKey;
 
       try {
         const res = await fetch(`http://${host}:${port}/api/v1/ai-tasks/${encodeURIComponent(taskId)}`, {

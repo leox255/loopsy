@@ -190,5 +190,5 @@ yargs(hideBin(process.argv))
   .command('doctor', 'Run health checks on your Loopsy installation', {}, doctorCommand)
   .demandCommand(1, 'You need at least one command')
   .help()
-  .version('1.0.13')
+  .version('1.0.15')
   .parse();

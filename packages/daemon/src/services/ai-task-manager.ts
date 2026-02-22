@@ -410,9 +410,10 @@ export class AiTaskManager {
       childProcess.stdout!.on('data', (data: Buffer) => processChunk(data.toString(), false));
       childProcess.stderr!.on('data', (data: Buffer) => {
         const text = data.toString().trim();
-        if (text) {
-          this.emit(task, { type: 'text', taskId, timestamp: Date.now(), data: text });
-        }
+        if (!text) return;
+        // Filter out noisy MCP/transport stderr lines that aren't useful to the user
+        if (/rmcp::transport|TokenRefreshFailed|transport::worker/.test(text)) return;
+        this.emit(task, { type: 'text', taskId, timestamp: Date.now(), data: text });
       });
       childProcess.on('exit', (code, signal) => {
         const sigNum = signal ? (({ SIGTERM: 15, SIGKILL: 9 } as Record<string, number>)[signal] || 1) : null;
@@ -731,8 +732,8 @@ export class AiTaskManager {
     } else if (cliType === 'error') {
       task.info.error = parsed.message || parsed.error || JSON.stringify(parsed);
       this.emit(task, { type: 'error', taskId, timestamp: ts, data: parsed.message || parsed.error || parsed });
-    } else if (cliType === 'turn.completed') {
-      // Ignore — exit event handles completion
+    } else if (cliType === 'turn.completed' || cliType === 'turn.started') {
+      // Ignore — lifecycle events, exit handler handles completion
     } else {
       this.emit(task, { type: 'text', taskId, timestamp: ts, data: JSON.stringify(parsed) });
     }
