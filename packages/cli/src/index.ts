@@ -25,6 +25,7 @@ import { enableCommand, disableCommand, serviceStatusCommand } from './commands/
 import { mcpAddCommand, mcpRemoveCommand, mcpStatusCommand } from './commands/mcp.js';
 import { pairCommand } from './commands/pair.js';
 import { doctorCommand } from './commands/doctor.js';
+import { updateCommand } from './commands/update.js';
 
 yargs(hideBin(process.argv))
   .scriptName('loopsy')
@@ -178,6 +179,7 @@ yargs(hideBin(process.argv))
         .demandCommand(1),
     () => {},
   )
+  .command('update', 'Update Loopsy to the latest version', {}, updateCommand)
   .command('doctor', 'Run health checks on your Loopsy installation', {}, doctorCommand)
   .demandCommand(1, 'You need at least one command')
   .help()
