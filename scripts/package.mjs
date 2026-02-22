@@ -35,6 +35,20 @@ const OUT = join(ROOT, 'package-dist');
 const rootPkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf-8'));
 const version = rootPkg.version || '1.0.0';
 
+// Sync PROTOCOL_VERSION in constants.ts with root version before build
+const constantsPath = join(ROOT, 'packages', 'protocol', 'src', 'constants.ts');
+if (existsSync(constantsPath)) {
+  let constants = readFileSync(constantsPath, 'utf-8');
+  const updated = constants.replace(
+    /export const PROTOCOL_VERSION = '[^']*';/,
+    `export const PROTOCOL_VERSION = '${version}';`,
+  );
+  if (updated !== constants) {
+    writeFileSync(constantsPath, updated);
+    console.log(`Synced PROTOCOL_VERSION to ${version}`);
+  }
+}
+
 console.log(`Assembling loopsy v${version} into package-dist/...\n`);
 
 // Clean output directory

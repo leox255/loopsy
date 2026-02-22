@@ -10,9 +10,11 @@ const client = new DaemonClient(
   process.env.LOOPSY_PORT ? parseInt(process.env.LOOPSY_PORT, 10) : undefined,
 );
 
+import { PROTOCOL_VERSION } from '@loopsy/protocol';
+
 const server = new McpServer({
   name: 'loopsy',
-  version: '1.0.0',
+  version: PROTOCOL_VERSION,
 });
 
 // --- Tools ---

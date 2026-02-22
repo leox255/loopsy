@@ -85,11 +85,10 @@ export async function fetchAndDeduplicatePeers(
     }
   }
 
-  // Resolve hostnames for peers that still look like IP addresses via /api/v1/status
-  const unresolved = allPeers.filter((p) => looksLikeIp(p.hostname));
-  if (unresolved.length > 0) {
-    const uniqueTargets = [...new Map(unresolved.map((p) => [`${p.address}:${p.port}`, p])).values()];
-    // Build a set of API keys to try for remote peers
+  // Resolve hostnames, platform, and version for peers with missing info via /api/v1/status
+  const needsEnrichment = allPeers.filter((p) => looksLikeIp(p.hostname) || !p.platform || p.platform === 'unknown');
+  if (needsEnrichment.length > 0) {
+    const uniqueTargets = [...new Map(needsEnrichment.map((p) => [`${p.address}:${p.port}`, p])).values()];
     const remoteKeys = new Set<string>([apiKey]);
     if (allowedKeys) {
       for (const key of Object.values(allowedKeys)) remoteKeys.add(key);
@@ -104,24 +103,28 @@ export async function fetchAndDeduplicatePeers(
               signal: AbortSignal.timeout(2000),
             });
             if (res.ok) {
-              const data = (await res.json()) as { hostname?: string };
-              return { address: p.address, port: p.port, hostname: data.hostname };
+              const data = (await res.json()) as { hostname?: string; platform?: string; version?: string };
+              return { address: p.address, port: p.port, hostname: data.hostname, platform: data.platform, version: data.version };
             }
           } catch {}
         }
         return null;
       }),
     );
-    const resolvedMap = new Map<string, string>();
+    interface ResolvedInfo { hostname?: string; platform?: string; version?: string }
+    const resolvedMap = new Map<string, ResolvedInfo>();
     for (const r of statusResults) {
-      if (r.status === 'fulfilled' && r.value?.hostname) {
-        resolvedMap.set(`${r.value.address}:${r.value.port}`, r.value.hostname);
+      if (r.status === 'fulfilled' && r.value) {
+        resolvedMap.set(`${r.value.address}:${r.value.port}`, r.value);
       }
     }
     for (const p of allPeers) {
       const key = `${p.address}:${p.port}`;
-      if (looksLikeIp(p.hostname) && resolvedMap.has(key)) {
-        p.hostname = resolvedMap.get(key)!;
+      const resolved = resolvedMap.get(key);
+      if (resolved) {
+        if (looksLikeIp(p.hostname) && resolved.hostname) p.hostname = resolved.hostname;
+        if ((!p.platform || p.platform === 'unknown') && resolved.platform) p.platform = resolved.platform;
+        if ((!p.version || p.version === 'unknown') && resolved.version) p.version = resolved.version;
       }
     }
   }
