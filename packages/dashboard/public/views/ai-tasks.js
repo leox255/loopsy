@@ -269,7 +269,6 @@ async function renderTaskStream() {
     }
   } catch {}
 
-  lastSessionId = null;
   connectStream(taskId, port, selectedTask.address);
 }
 
