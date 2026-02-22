@@ -95,6 +95,7 @@ export class AiTaskManager {
       cwd: params.cwd || process.cwd(),
       env,
       stdio: ['pipe', 'pipe', 'pipe'],
+      shell: process.platform === 'win32',
     });
 
     const info: AiTaskInfo = {
