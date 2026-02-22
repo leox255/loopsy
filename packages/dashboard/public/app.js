@@ -5,8 +5,9 @@
 // --- API Helpers ---
 
 export async function api(port, path, opts = {}) {
+  const headers = opts.body ? { 'Content-Type': 'application/json' } : {};
   const res = await fetch(`/dashboard/api/proxy/${port}/api/v1${path}`, {
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     ...opts,
   });
   if (!res.ok) {
@@ -17,8 +18,9 @@ export async function api(port, path, opts = {}) {
 }
 
 export async function dashboardApi(path, opts = {}) {
+  const headers = opts.body ? { 'Content-Type': 'application/json' } : {};
   const res = await fetch(`/dashboard/api${path}`, {
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     ...opts,
   });
   if (!res.ok) {
