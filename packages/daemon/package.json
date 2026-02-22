@@ -15,7 +15,7 @@
     }
   },
   "scripts": {
-    "build": "tsc && mkdir -p dist/hooks && cp src/hooks/permission-hook.mjs dist/hooks/permission-hook.mjs",
+    "build": "tsc && node -e \"const{mkdirSync,copyFileSync}=require('fs');mkdirSync('dist/hooks',{recursive:true});copyFileSync('src/hooks/permission-hook.mjs','dist/hooks/permission-hook.mjs')\"",
     "clean": "rm -rf dist",
     "dev": "tsx src/main.ts",
     "typecheck": "tsc --noEmit",
