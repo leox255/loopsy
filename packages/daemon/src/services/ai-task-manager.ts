@@ -111,15 +111,24 @@ export class AiTaskManager {
     // Use node-pty to spawn with a pseudo-TTY
     // Claude CLI (Bun runtime) buffers stdout when connected to a pipe;
     // a PTY ensures real-time streaming output
-    let resolvedPath: string;
-    try {
-      resolvedPath = realpathSync(claudePath);
-    } catch {
-      resolvedPath = claudePath;
+    let spawnFile: string;
+    let spawnArgs: string[];
+    if (process.platform === 'win32') {
+      // On Windows, .cmd files must be spawned via cmd.exe for ConPTY to work
+      spawnFile = 'cmd.exe';
+      spawnArgs = ['/c', claudePath, ...args];
+    } else {
+      // On macOS/Linux, resolve symlinks for node-pty
+      try {
+        spawnFile = realpathSync(claudePath);
+      } catch {
+        spawnFile = claudePath;
+      }
+      spawnArgs = args;
     }
-    const proc = pty.spawn(resolvedPath, args, {
+    const proc = pty.spawn(spawnFile, spawnArgs, {
       name: 'xterm-256color',
-      cols: 32000, // Very wide to prevent JSON line wrapping
+      cols: process.platform === 'win32' ? 200 : 32000, // ConPTY struggles with very wide cols
       rows: 50,
       cwd: params.cwd || process.cwd(),
       env,
