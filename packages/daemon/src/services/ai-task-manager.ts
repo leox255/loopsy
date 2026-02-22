@@ -96,11 +96,6 @@ export class AiTaskManager {
     // Build CLI args
     const args = ['-p', params.prompt, '--output-format', 'stream-json', '--verbose'];
 
-    // Resume an existing conversation if sessionId provided
-    if (params.resumeSessionId) {
-      args.push('--resume', params.resumeSessionId);
-    }
-
     if (params.permissionMode) {
       args.push('--permission-mode', params.permissionMode);
     }
@@ -513,8 +508,8 @@ export class AiTaskManager {
     } else if (cliType === 'system') {
       // System init/status — emit as system event with structured data
       this.emit(task, { type: 'system', taskId, timestamp: ts, data: parsed });
-    } else if (cliType === 'rate_limit_event') {
-      // Rate limit info — silently ignore (not useful for consumers)
+    } else if (cliType === 'rate_limit_event' || cliType === 'user') {
+      // Rate limit and user echo events — silently ignore
     } else {
       // Unknown event type — forward as-is
       this.emit(task, { type: 'text', taskId, timestamp: ts, data: JSON.stringify(parsed) });

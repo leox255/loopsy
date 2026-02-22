@@ -4,7 +4,6 @@ let refreshTimer = null;
 let selectedTask = null; // { taskId, port, address }
 let eventSource = null;
 let taskFinished = false; // true once we receive an exit event
-let lastSessionId = null; // captured from result event for follow-ups
 
 function mount(container) {
   container.innerHTML = `
@@ -379,7 +378,6 @@ function handleStreamEvent(event) {
         parts.push(`Cost: $${data.cost.input || '?'} in + $${data.cost.output || '?'} out`);
       }
       if (data?.duration) parts.push(`Duration: ${formatDuration(data.duration)}`);
-      if (data?.sessionId) lastSessionId = data.sessionId;
       if (parts.length > 0) appendLine('result', parts.join('  \u00b7  '));
       updateStatusBadge('completed');
       showFollowUpInput();
@@ -501,6 +499,20 @@ function showFollowUpInput() {
   el.scrollIntoView({ behavior: 'smooth' });
 }
 
+function collectConversationHistory() {
+  const output = document.getElementById('ai-output');
+  if (!output) return '';
+  const lines = [];
+  for (const el of output.children) {
+    if (el.classList.contains('ai-stdout')) {
+      lines.push(`Assistant: ${el.textContent}`);
+    } else if (el.classList.contains('ai-tool-use')) {
+      lines.push(`[Tool: ${el.textContent}]`);
+    }
+  }
+  return lines.join('\n');
+}
+
 async function sendFollowUp() {
   if (!selectedTask) return;
   const promptEl = document.getElementById('followup-prompt');
@@ -511,14 +523,19 @@ async function sendFollowUp() {
   const btnEl = document.getElementById('btn-followup');
   if (btnEl) btnEl.disabled = true;
 
+  // Build context-enriched prompt with conversation history
+  const history = collectConversationHistory();
+  const contextPrompt = history
+    ? `Here is our conversation so far:\n\n${history}\n\nUser follow-up: ${prompt}`
+    : prompt;
+
   try {
     const body = {
       targetPort: port,
       targetAddress: address,
-      prompt,
+      prompt: contextPrompt,
       permissionMode: 'default',
     };
-    if (lastSessionId) body.resumeSessionId = lastSessionId;
 
     const result = await dashboardApi('/ai-tasks/dispatch', {
       method: 'POST',
