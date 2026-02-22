@@ -258,7 +258,7 @@ export interface AiTaskApprovalResponse {
 
 /** SSE event from an AI task stream */
 export interface AiTaskStreamEvent {
-  type: 'text' | 'thinking' | 'tool_use' | 'tool_result' | 'permission_request' | 'status' | 'error' | 'result' | 'exit';
+  type: 'text' | 'thinking' | 'tool_use' | 'tool_result' | 'permission_request' | 'status' | 'error' | 'result' | 'exit' | 'system';
   taskId: string;
   timestamp: number;
   data: unknown;

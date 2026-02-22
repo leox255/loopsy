@@ -13,6 +13,9 @@
     "lint": "pnpm -r lint",
     "typecheck": "pnpm -r typecheck"
   },
+  "pnpm": {
+    "onlyBuiltDependencies": ["node-pty", "esbuild"]
+  },
   "engines": {
     "node": ">=20.0.0",
     "pnpm": ">=9.0.0"

@@ -1,6 +1,6 @@
-import { spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { createInterface } from 'node:readline';
+import { realpathSync } from 'node:fs';
+import * as pty from 'node-pty';
 import { which } from '../utils/which.js';
 import type {
   AiTaskParams,
@@ -22,15 +22,31 @@ type EventCallback = (event: AiTaskStreamEvent) => void;
 
 interface AiTask {
   info: AiTaskInfo;
-  process: ChildProcess;
+  ptyProcess: pty.IPty;
   eventBuffer: AiTaskStreamEvent[];
   subscribers: Set<EventCallback>;
   timeoutTimer?: ReturnType<typeof setTimeout>;
 }
 
+// Strip ANSI escape sequences and PTY control characters from output
+function stripAnsi(str: string): string {
+  return str
+    // Remove all ESC sequences: CSI (ESC[...), OSC (ESC]...), and other ESC sequences
+    // eslint-disable-next-line no-control-regex
+    .replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '')     // CSI sequences (e.g. ESC[0m, ESC[?25h)
+    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '') // OSC sequences
+    .replace(/\x1b[()][0-9A-B]/g, '')             // Character set selection
+    .replace(/\x1b[=>]/g, '')                      // Keypad modes
+    .replace(/\x1b\x1b/g, '')                      // Double ESC
+    .replace(/\r/g, '')                             // Carriage returns
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, '') // Other control chars (keep \n and \t)
+    .replace(/\[<u/g, '');                          // PTY artifacts
+}
+
 export class AiTaskManager {
   private tasks = new Map<string, AiTask>();
-  private recentTasks = new Map<string, { info: AiTaskInfo; eventBuffer: AiTaskStreamEvent[] }>(); // completed tasks kept briefly
+  private recentTasks = new Map<string, { info: AiTaskInfo; eventBuffer: AiTaskStreamEvent[] }>();
   private maxConcurrent: number;
 
   constructor(opts?: { maxConcurrent?: number }) {
@@ -83,18 +99,30 @@ export class AiTaskManager {
     }
 
     // Strip all Claude-related env vars to avoid nesting detection
-    // When daemon runs standalone (not inside Claude Code), these won't exist anyway
-    const env = { ...process.env };
-    for (const key of Object.keys(env)) {
-      if (key.startsWith('CLAUDE') || key.startsWith('ANTHROPIC_') || key === 'MCP_') {
-        delete env[key];
+    const env: Record<string, string> = {};
+    for (const [key, val] of Object.entries(process.env)) {
+      if (val === undefined) continue;
+      if (key.startsWith('CLAUDE') || key.startsWith('ANTHROPIC_') || key.startsWith('OTEL_') || key === 'MCP_') {
+        continue;
       }
+      env[key] = val;
     }
 
-    const proc = spawn(claudePath, args, {
+    // Use node-pty to spawn with a pseudo-TTY
+    // Claude CLI (Bun runtime) buffers stdout when connected to a pipe;
+    // a PTY ensures real-time streaming output
+    let resolvedPath: string;
+    try {
+      resolvedPath = realpathSync(claudePath);
+    } catch {
+      resolvedPath = claudePath;
+    }
+    const proc = pty.spawn(resolvedPath, args, {
+      name: 'xterm-256color',
+      cols: 32000, // Very wide to prevent JSON line wrapping
+      rows: 50,
       cwd: params.cwd || process.cwd(),
       env,
-      stdio: ['pipe', 'pipe', 'pipe'],
     });
 
     const info: AiTaskInfo = {
@@ -110,7 +138,7 @@ export class AiTaskManager {
 
     const task: AiTask = {
       info,
-      process: proc,
+      ptyProcess: proc,
       eventBuffer: [],
       subscribers: new Set(),
     };
@@ -123,33 +151,68 @@ export class AiTaskManager {
       this.emit(task, { type: 'error', taskId, timestamp: Date.now(), data: 'Task timed out' });
     }, DEFAULT_AI_TASK_TIMEOUT);
 
-    // Parse stdout line-by-line as JSON
-    const rl = createInterface({ input: proc.stdout!, crlfDelay: Infinity });
-    rl.on('line', (line) => {
-      if (!line.trim()) return;
-      try {
-        const parsed = JSON.parse(line);
-        this.handleClaudeEvent(task, parsed);
-      } catch {
-        // Non-JSON line — forward as text
-        this.emit(task, { type: 'text', taskId, timestamp: Date.now(), data: line });
+    // Buffer for incomplete lines from PTY
+    let lineBuffer = '';
+
+    // Parse PTY output — data arrives as chunks that may contain partial lines
+    proc.onData((data: string) => {
+      // Debug: log raw PTY data
+      if (process.env.LOOPSY_DEBUG_PTY) {
+        console.log(`[PTY ${taskId.slice(0,8)}] raw(${data.length}): ${JSON.stringify(data.slice(0, 300))}`);
+      }
+      // Strip ANSI before buffering to prevent escape sequences splitting JSON
+      const cleaned = stripAnsi(data);
+      lineBuffer += cleaned;
+      const lines = lineBuffer.split('\n');
+      // Keep the last element (may be incomplete)
+      lineBuffer = lines.pop() || '';
+
+      for (const rawLine of lines) {
+        const line = rawLine.trim();
+        if (!line) continue;
+        if (process.env.LOOPSY_DEBUG_PTY) {
+          console.log(`[PTY ${taskId.slice(0,8)}] line(${line.length}): ${line.slice(0, 100)}...`);
+        }
+        try {
+          const parsed = JSON.parse(line);
+          this.handleClaudeEvent(task, parsed);
+        } catch (err) {
+          if (process.env.LOOPSY_DEBUG_PTY) {
+            console.log(`[PTY ${taskId.slice(0,8)}] JSON parse fail: ${(err as Error).message}, line starts: ${JSON.stringify(line.slice(0, 80))}`);
+          }
+          // Non-JSON line — forward as text
+          if (line.length > 0) {
+            this.emit(task, { type: 'text', taskId, timestamp: Date.now(), data: line });
+          }
+        }
       }
     });
 
-    // Capture stderr
-    proc.stderr?.on('data', (chunk: Buffer) => {
-      this.emit(task, { type: 'error', taskId, timestamp: Date.now(), data: chunk.toString() });
-    });
-
     // Handle process exit
-    proc.on('close', (exitCode, signal) => {
+    proc.onExit(({ exitCode, signal }) => {
+      // Process any remaining buffered data
+      if (lineBuffer.trim()) {
+        const line = stripAnsi(lineBuffer).trim();
+        if (line) {
+          try {
+            const parsed = JSON.parse(line);
+            this.handleClaudeEvent(task, parsed);
+          } catch {
+            if (line.length > 0) {
+              this.emit(task, { type: 'text', taskId, timestamp: Date.now(), data: line });
+            }
+          }
+        }
+        lineBuffer = '';
+      }
+
       if (task.timeoutTimer) clearTimeout(task.timeoutTimer);
       info.exitCode = exitCode;
       info.completedAt = Date.now();
       info.updatedAt = Date.now();
       info.status = exitCode === 0 ? 'completed' : (signal ? 'cancelled' : 'failed');
       if (exitCode !== 0 && !info.error) {
-        info.error = signal ? `Killed by ${signal}` : `Exit code ${exitCode}`;
+        info.error = signal ? `Killed by signal ${signal}` : `Exit code ${exitCode}`;
       }
       this.emit(task, { type: 'exit', taskId, timestamp: Date.now(), data: { exitCode, signal } });
 
@@ -157,17 +220,6 @@ export class AiTaskManager {
       this.recentTasks.set(taskId, { info: { ...info }, eventBuffer: [...task.eventBuffer] });
       this.tasks.delete(taskId);
       setTimeout(() => this.recentTasks.delete(taskId), 300_000); // keep 5 min
-    });
-
-    proc.on('error', (err) => {
-      if (task.timeoutTimer) clearTimeout(task.timeoutTimer);
-      info.status = 'failed';
-      info.error = err.message;
-      info.updatedAt = Date.now();
-      info.completedAt = Date.now();
-      this.emit(task, { type: 'error', taskId, timestamp: Date.now(), data: err.message });
-      this.recentTasks.set(taskId, { info: { ...info }, eventBuffer: [...task.eventBuffer] });
-      this.tasks.delete(taskId);
     });
 
     // Emit initial status
@@ -182,7 +234,7 @@ export class AiTaskManager {
     if (task.info.status !== 'waiting_approval') return false;
     if (!task.info.pendingApproval) return false;
 
-    // Write approval to Claude's stdin as JSON
+    // Write approval to Claude's stdin via PTY
     const stdinMsg = JSON.stringify({
       type: 'permission_response',
       id: response.requestId,
@@ -190,7 +242,7 @@ export class AiTaskManager {
     }) + '\n';
 
     try {
-      task.process.stdin?.write(stdinMsg);
+      task.ptyProcess.write(stdinMsg);
     } catch {
       return false;
     }
@@ -214,10 +266,10 @@ export class AiTaskManager {
     if (!task) return false;
     task.info.status = 'cancelled';
     task.info.updatedAt = Date.now();
-    task.process.kill('SIGTERM');
+    task.ptyProcess.kill('SIGTERM');
     setTimeout(() => {
       if (this.tasks.has(taskId)) {
-        task.process.kill('SIGKILL');
+        try { task.ptyProcess.kill('SIGKILL'); } catch {}
       }
     }, 5000);
     return true;
@@ -254,7 +306,7 @@ export class AiTaskManager {
 
   cancelAll(): void {
     for (const [id, task] of this.tasks) {
-      task.process.kill('SIGKILL');
+      try { task.ptyProcess.kill('SIGKILL'); } catch {}
       if (task.timeoutTimer) clearTimeout(task.timeoutTimer);
       this.tasks.delete(id);
     }
@@ -272,11 +324,23 @@ export class AiTaskManager {
     const cliType = parsed.type;
 
     if (cliType === 'assistant' || cliType === 'content_block_delta') {
-      const subtype = parsed.subtype || parsed.delta?.type;
-      if (subtype === 'thinking' || subtype === 'thinking_delta') {
-        this.emit(task, { type: 'thinking', taskId, timestamp: ts, data: parsed.text || parsed.delta?.thinking || '' });
-      } else {
-        this.emit(task, { type: 'text', taskId, timestamp: ts, data: parsed.text || parsed.delta?.text || '' });
+      // Claude CLI stream-json wraps content in message.content[]
+      const content = parsed.message?.content || [];
+      for (const block of content) {
+        if (block.type === 'thinking') {
+          this.emit(task, { type: 'thinking', taskId, timestamp: ts, data: block.thinking || '' });
+        } else if (block.type === 'text') {
+          this.emit(task, { type: 'text', taskId, timestamp: ts, data: block.text || '' });
+        }
+      }
+      // Also handle flat format (content_block_delta)
+      if (content.length === 0) {
+        const subtype = parsed.subtype || parsed.delta?.type;
+        if (subtype === 'thinking' || subtype === 'thinking_delta') {
+          this.emit(task, { type: 'thinking', taskId, timestamp: ts, data: parsed.text || parsed.delta?.thinking || '' });
+        } else if (parsed.text || parsed.delta?.text) {
+          this.emit(task, { type: 'text', taskId, timestamp: ts, data: parsed.text || parsed.delta?.text || '' });
+        }
       }
     } else if (cliType === 'tool_use') {
       this.emit(task, { type: 'tool_use', taskId, timestamp: ts, data: { name: parsed.name, input: parsed.input } });
@@ -296,13 +360,15 @@ export class AiTaskManager {
       task.info.updatedAt = ts;
       this.emit(task, { type: 'permission_request', taskId, timestamp: ts, data: approval });
     } else if (cliType === 'result') {
-      this.emit(task, { type: 'result', taskId, timestamp: ts, data: { text: parsed.text, cost: parsed.cost, duration: parsed.duration } });
+      this.emit(task, { type: 'result', taskId, timestamp: ts, data: { text: parsed.result, cost: parsed.total_cost_usd, duration: parsed.duration_ms } });
     } else if (cliType === 'error') {
       task.info.error = parsed.message || parsed.error || JSON.stringify(parsed);
       this.emit(task, { type: 'error', taskId, timestamp: ts, data: parsed.message || parsed.error || parsed });
     } else if (cliType === 'system') {
-      // System messages — forward as text
-      this.emit(task, { type: 'text', taskId, timestamp: ts, data: parsed.message || parsed.text || JSON.stringify(parsed) });
+      // System init/status — emit as system event with structured data
+      this.emit(task, { type: 'system', taskId, timestamp: ts, data: parsed });
+    } else if (cliType === 'rate_limit_event') {
+      // Rate limit info — silently ignore (not useful for consumers)
     } else {
       // Unknown event type — forward as-is
       this.emit(task, { type: 'text', taskId, timestamp: ts, data: JSON.stringify(parsed) });
