@@ -563,10 +563,18 @@ function showFollowUpInput() {
   const el = document.getElementById('ai-followup');
   if (!el) return;
   el.style.display = 'block';
+  const currentMode = selectedTask.permissionMode || 'default';
   el.innerHTML = `
     <div class="followup-bar">
       <textarea class="textarea input" id="followup-prompt" rows="2" placeholder="Send a follow-up message..."></textarea>
-      <div class="followup-actions"><button class="btn btn-primary btn-sm" id="btn-followup">Send</button></div>
+      <div class="followup-actions">
+        <select id="followup-permission" class="input" style="width:auto;font-size:0.85em;padding:4px 6px">
+          <option value="default"${currentMode === 'default' ? ' selected' : ''}>Default (Approve)</option>
+          <option value="acceptEdits"${currentMode === 'acceptEdits' ? ' selected' : ''}>Accept Edits</option>
+          <option value="bypassPermissions"${currentMode === 'bypassPermissions' ? ' selected' : ''}>Bypass All</option>
+        </select>
+        <button class="btn btn-primary btn-sm" id="btn-followup">Send</button>
+      </div>
     </div>
   `;
   document.getElementById('btn-followup').addEventListener('click', sendFollowUp);
@@ -611,7 +619,7 @@ async function sendFollowUp() {
       targetPort: port,
       targetAddress: address,
       prompt: contextPrompt,
-      permissionMode: selectedTask.permissionMode || 'default',
+      permissionMode: document.getElementById('followup-permission')?.value || selectedTask.permissionMode || 'default',
       agent: selectedTask.agent || 'auto',
     };
 
@@ -624,7 +632,8 @@ async function sendFollowUp() {
       // Hide follow-up bar, switch to new task stream
       const el = document.getElementById('ai-followup');
       if (el) { el.style.display = 'none'; el.innerHTML = ''; }
-      selectedTask = { taskId: result.taskId, port, address, agent: selectedTask.agent, permissionMode: selectedTask.permissionMode };
+      const chosenMode = document.getElementById('followup-permission')?.value || selectedTask.permissionMode;
+      selectedTask = { taskId: result.taskId, port, address, agent: selectedTask.agent, permissionMode: chosenMode };
       appendLine('system', `Follow-up dispatched: ${result.taskId.slice(0, 8)}...`);
       taskFinished = false;
       connectStream(result.taskId, port, address);

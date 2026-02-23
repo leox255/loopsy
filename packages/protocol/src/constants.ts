@@ -5,7 +5,7 @@ export const DEFAULT_PORT = 19532;
 export const MDNS_SERVICE_TYPE = '_loopsy._tcp';
 
 /** Protocol version — kept in sync with root package.json */
-export const PROTOCOL_VERSION = '1.0.19';
+export const PROTOCOL_VERSION = '1.0.21';
 
 /** Default config directory */
 export const CONFIG_DIR = '.loopsy';

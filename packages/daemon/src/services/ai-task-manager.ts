@@ -1,9 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import { realpathSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { realpathSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
-import { spawn, type ChildProcess } from 'node:child_process';
+import { spawn, execSync, type ChildProcess } from 'node:child_process';
 import * as pty from 'node-pty';
 import { which } from '../utils/which.js';
 import type {
@@ -90,11 +90,8 @@ export class AiTaskManager {
   private buildClaudeArgs(params: AiTaskParams): string[] {
     const args = ['-p', params.prompt, '--output-format', 'stream-json', '--verbose'];
 
-    if (params.permissionMode) {
-      args.push('--permission-mode', params.permissionMode);
-      if (params.permissionMode === 'bypassPermissions') {
-        args.push('--dangerously-skip-permissions');
-      }
+    if (params.permissionMode === 'bypassPermissions') {
+      args.push('--dangerously-skip-permissions');
     }
     if (params.model) {
       args.push('--model', params.model);
@@ -163,6 +160,8 @@ export class AiTaskManager {
       // Per-agent env stripping
       switch (agent) {
         case 'claude':
+          // Whitelist CLAUDE_CODE_GIT_BASH_PATH — Claude needs it on Windows to run hooks via Git Bash
+          if (key === 'CLAUDE_CODE_GIT_BASH_PATH') break;
           if (key.startsWith('CLAUDE') || key.startsWith('ANTHROPIC_') || key.startsWith('OTEL_') || key === 'MCP_') continue;
           break;
         case 'gemini':
@@ -235,25 +234,43 @@ export class AiTaskManager {
     let spawnCwd: string;
 
     // Permission hook setup — Claude only, non-bypass mode
+    let globalSettingsBackup: { path: string; content: string | null } | undefined;
     if (resolvedAgent === 'claude' && !isBypass) {
       const hookScriptPath = this.getHookScriptPath();
-      const claudeSettingsDir = join(taskTmpDir, '.claude');
-      mkdirSync(claudeSettingsDir, { recursive: true });
-      writeFileSync(join(claudeSettingsDir, 'settings.local.json'), JSON.stringify({
-        hooks: {
-          PreToolUse: [{
-            matcher: '',
-            hooks: [{
-              type: 'command',
-              command: `node ${hookScriptPath} ${taskId} ${this.daemonPort} ${this.apiKey}`,
-              timeout: 300,
-            }],
-          }],
-        },
-      }, null, 2));
+      mkdirSync(taskTmpDir, { recursive: true });
       writeFileSync(join(taskTmpDir, 'CLAUDE.md'),
         `Your actual working directory is: ${taskCwd}\n` +
         `Always use absolute paths rooted at ${taskCwd} for all file operations.\n`);
+
+      // Inject hook into user's global ~/.claude/settings.json so it works
+      // in -p mode (which skips project-level settings/workspace trust)
+      const globalSettingsPath = join(homedir(), '.claude', 'settings.json');
+      // On Windows, convert backslashes to forward slashes so Git Bash doesn't interpret them as escapes
+      const safePath = process.platform === 'win32'
+        ? hookScriptPath.replace(/\\/g, '/')
+        : hookScriptPath;
+      const hookEntry = {
+        matcher: '',
+        hooks: [{
+          type: 'command',
+          command: `node "${safePath}" ${taskId} ${this.daemonPort} ${this.apiKey}`,
+          timeout: 300,
+        }],
+      };
+      try {
+        let existingContent: string | null = null;
+        try { existingContent = readFileSync(globalSettingsPath, 'utf-8'); } catch {}
+        globalSettingsBackup = { path: globalSettingsPath, content: existingContent };
+
+        const existing = existingContent ? JSON.parse(existingContent) : {};
+        if (!existing.hooks) existing.hooks = {};
+        if (!existing.hooks.PreToolUse) existing.hooks.PreToolUse = [];
+        existing.hooks.PreToolUse.push(hookEntry);
+        mkdirSync(join(homedir(), '.claude'), { recursive: true });
+        writeFileSync(globalSettingsPath, JSON.stringify(existing, null, 2));
+      } catch {
+        // Failed to inject hook — task will run without permission control
+      }
 
       args.push('--add-dir', taskCwd);
       if (homedir() !== taskCwd) {
@@ -429,6 +446,16 @@ export class AiTaskManager {
       this.recentTasks.set(taskId, { info: { ...info }, eventBuffer: [...task.eventBuffer] });
       this.tasks.delete(taskId);
 
+      // Restore global settings if we injected a hook
+      if (globalSettingsBackup) {
+        try {
+          if (globalSettingsBackup.content === null) {
+            rmSync(globalSettingsBackup.path, { force: true });
+          } else {
+            writeFileSync(globalSettingsBackup.path, globalSettingsBackup.content);
+          }
+        } catch {}
+      }
       try { rmSync(taskTmpDir, { recursive: true, force: true }); } catch {}
     };
 
