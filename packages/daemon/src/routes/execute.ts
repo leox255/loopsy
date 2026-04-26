@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { ExecuteParamsSchema, LoopsyError, LoopsyErrorCode } from '@loopsy/protocol';
 import type { JobManager } from '../services/job-manager.js';
+import { buildCleanEnv } from '../services/job-manager.js';
 
 export function registerExecuteRoutes(app: FastifyInstance, jobManager: JobManager) {
   app.post('/api/v1/execute', async (request, reply) => {
@@ -32,7 +33,7 @@ export function registerExecuteRoutes(app: FastifyInstance, jobManager: JobManag
       const { spawn } = await import('node:child_process');
       const proc = spawn(params.command, params.args ?? [], {
         cwd: params.cwd,
-        env: params.env ? { ...process.env, ...params.env } : process.env,
+        env: buildCleanEnv(params.env),
         shell: false,
         timeout: params.timeout,
       });

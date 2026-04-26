@@ -163,9 +163,17 @@ export async function startSession(name: string): Promise<SessionInfo> {
     await writeFile(join(sessionDir, CONFIG_FILE), toYaml(sessionConfig));
 
     const daemonPath = join(__dirname, '..', '..', 'daemon', 'dist', 'main.js');
+    // Strip nesting-prevention env vars so session daemons can spawn Claude instances
+    const cleanEnv: Record<string, string> = {};
+    for (const [key, val] of Object.entries(process.env)) {
+      if (val === undefined) continue;
+      if (key === 'CLAUDECODE' || key === 'CLAUDE_CODE_ENTRY_POINT') continue;
+      cleanEnv[key] = val;
+    }
     const child = spawn('node', [daemonPath, '--data-dir', sessionDir], {
       detached: true,
       stdio: 'ignore',
+      env: cleanEnv,
     });
 
     if (!child.pid) throw new Error(`Failed to start session "${name}"`);

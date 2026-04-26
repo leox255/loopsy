@@ -3,6 +3,21 @@ import { randomUUID } from 'node:crypto';
 import type { ExecuteParams, ExecuteResult, JobInfo } from '@loopsy/protocol';
 import { LoopsyError, LoopsyErrorCode, MAX_CONCURRENT_JOBS } from '@loopsy/protocol';
 
+/** Env vars that block nested AI CLI execution — strip from child processes */
+const NESTING_BLOCK_VARS = ['CLAUDECODE', 'CLAUDE_CODE_ENTRY_POINT'];
+
+/** Build a clean env for child processes, stripping nesting-prevention vars */
+export function buildCleanEnv(extraEnv?: Record<string, string>): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [key, val] of Object.entries(process.env)) {
+    if (val === undefined) continue;
+    if (NESTING_BLOCK_VARS.includes(key)) continue;
+    env[key] = val;
+  }
+  if (extraEnv) Object.assign(env, extraEnv);
+  return env;
+}
+
 export class JobManager {
   private jobs = new Map<string, { process: ChildProcess; info: JobInfo }>();
   private maxConcurrent: number;
@@ -28,7 +43,7 @@ export class JobManager {
     return new Promise<ExecuteResult>((resolve, reject) => {
       const proc = spawn(params.command, params.args ?? [], {
         cwd: params.cwd,
-        env: params.env ? { ...process.env, ...params.env } : process.env,
+        env: buildCleanEnv(params.env),
         shell: false,
         timeout: params.timeout,
       });

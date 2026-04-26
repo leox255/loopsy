@@ -234,7 +234,10 @@ export class AiTaskManager {
     let spawnCwd: string;
 
     // Permission hook setup — Claude only, non-bypass mode
-    let globalSettingsBackup: { path: string; content: string | null } | undefined;
+    // Uses add/remove semantics (not backup/restore) so multiple concurrent
+    // tasks can each have their own hook in ~/.claude/settings.json.
+    const globalSettingsPath = join(homedir(), '.claude', 'settings.json');
+    let hookInjected = false;
     if (resolvedAgent === 'claude' && !isBypass) {
       const hookScriptPath = this.getHookScriptPath();
       mkdirSync(taskTmpDir, { recursive: true });
@@ -243,24 +246,24 @@ export class AiTaskManager {
         `Always use absolute paths rooted at ${taskCwd} for all file operations.\n`);
 
       // Inject hook into user's global ~/.claude/settings.json so it works
-      // in -p mode (which skips project-level settings/workspace trust)
-      const globalSettingsPath = join(homedir(), '.claude', 'settings.json');
-      // On Windows, convert backslashes to forward slashes so Git Bash doesn't interpret them as escapes
+      // in -p mode (which skips project-level settings/workspace trust).
+      // Each task gets its own hook entry identified by its taskId in the command.
+      // On Windows, convert backslashes to forward slashes so Git Bash doesn't interpret them as escapes.
       const safePath = process.platform === 'win32'
         ? hookScriptPath.replace(/\\/g, '/')
         : hookScriptPath;
+      const hookCommand = `node "${safePath}" ${taskId} ${this.daemonPort} ${this.apiKey}`;
       const hookEntry = {
         matcher: '',
         hooks: [{
           type: 'command',
-          command: `node "${safePath}" ${taskId} ${this.daemonPort} ${this.apiKey}`,
+          command: hookCommand,
           timeout: 300,
         }],
       };
       try {
         let existingContent: string | null = null;
         try { existingContent = readFileSync(globalSettingsPath, 'utf-8'); } catch {}
-        globalSettingsBackup = { path: globalSettingsPath, content: existingContent };
 
         const existing = existingContent ? JSON.parse(existingContent) : {};
         if (!existing.hooks) existing.hooks = {};
@@ -268,6 +271,7 @@ export class AiTaskManager {
         existing.hooks.PreToolUse.push(hookEntry);
         mkdirSync(join(homedir(), '.claude'), { recursive: true });
         writeFileSync(globalSettingsPath, JSON.stringify(existing, null, 2));
+        hookInjected = true;
       } catch {
         // Failed to inject hook — task will run without permission control
       }
@@ -446,13 +450,23 @@ export class AiTaskManager {
       this.recentTasks.set(taskId, { info: { ...info }, eventBuffer: [...task.eventBuffer] });
       this.tasks.delete(taskId);
 
-      // Restore global settings if we injected a hook
-      if (globalSettingsBackup) {
+      // Remove this task's hook from global settings (leave other tasks' hooks intact)
+      if (hookInjected) {
         try {
-          if (globalSettingsBackup.content === null) {
-            rmSync(globalSettingsBackup.path, { force: true });
-          } else {
-            writeFileSync(globalSettingsBackup.path, globalSettingsBackup.content);
+          const raw = readFileSync(globalSettingsPath, 'utf-8');
+          const settings = JSON.parse(raw);
+          if (settings.hooks?.PreToolUse) {
+            settings.hooks.PreToolUse = settings.hooks.PreToolUse.filter(
+              (entry: any) => !entry.hooks?.some((h: any) => h.command?.includes(taskId)),
+            );
+            // Clean up empty arrays
+            if (settings.hooks.PreToolUse.length === 0) delete settings.hooks.PreToolUse;
+            if (Object.keys(settings.hooks).length === 0) delete settings.hooks;
+            if (Object.keys(settings).length === 0) {
+              rmSync(globalSettingsPath, { force: true });
+            } else {
+              writeFileSync(globalSettingsPath, JSON.stringify(settings, null, 2));
+            }
           }
         } catch {}
       }

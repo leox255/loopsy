@@ -118,10 +118,18 @@ export async function sessionStartCommand(argv: any) {
   await writeFile(join(sessionDir, CONFIG_FILE), toYaml(sessionConfig));
 
   // Spawn daemon with --data-dir
+  // Strip nesting-prevention env vars so session daemons can spawn Claude instances
+  const cleanEnv: Record<string, string> = {};
+  for (const [key, val] of Object.entries(process.env)) {
+    if (val === undefined) continue;
+    if (key === 'CLAUDECODE' || key === 'CLAUDE_CODE_ENTRY_POINT') continue;
+    cleanEnv[key] = val;
+  }
   const daemonPath = daemonMainPath();
   const child = spawn('node', [daemonPath, '--data-dir', sessionDir], {
     detached: true,
     stdio: 'ignore',
+    env: cleanEnv,
   });
 
   if (child.pid) {
