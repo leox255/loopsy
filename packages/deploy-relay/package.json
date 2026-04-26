@@ -1,0 +1,43 @@
+{
+  "name": "@loopsy/deploy-relay",
+  "version": "1.0.0",
+  "description": "One-command Cloudflare Workers deploy for the Loopsy relay",
+  "type": "module",
+  "bin": {
+    "loopsy-deploy-relay": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "worker",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "node scripts/sync-worker.mjs && tsc",
+    "clean": "rm -rf dist worker",
+    "dev": "node scripts/sync-worker.mjs && tsx src/cli.ts",
+    "prepack": "node scripts/sync-worker.mjs && tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "wrangler": "^4.67.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.16.0",
+    "typescript": "^5.5.0"
+  },
+  "keywords": [
+    "loopsy",
+    "cloudflare",
+    "workers",
+    "relay",
+    "deploy"
+  ],
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/leox255/loopsy",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/leox255/loopsy.git",
+    "directory": "packages/deploy-relay"
+  }
+}

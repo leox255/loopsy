@@ -5,13 +5,12 @@
  * pair token in the URL fragment, then opens a WebSocket session. Designed
  * to run on iOS Safari + Android Chrome with no install.
  *
- * Features:
- *   - QR-pair via URL fragment, persisted in localStorage
- *   - Multiple persistent sessions (chip switcher across chats)
- *   - Voice input via Web Speech API (mic button → live dictation)
- *   - Compose box that sends text + Enter to the active session's PTY
- *   - Soft-keyboard-aware viewport using visualViewport API
+ * Design parity: tokens come from `design.ts` and match the Flutter app's
+ * `LoopsyColors` (apps/mobile/lib/theme.dart). Icons are inline SVG
+ * (HugeIcons stroke style) so we don't pull a font for ~6 glyphs.
  */
+
+import { BRAND_NAME, ICONS, TOKENS_CSS } from './design.js';
 
 export const WEB_CLIENT_HTML = /* html */ `<!doctype html>
 <html lang="en">
@@ -20,136 +19,238 @@ export const WEB_CLIENT_HTML = /* html */ `<!doctype html>
   <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <title>Loopsy</title>
+  <meta name="theme-color" content="#0B0D10" />
+  <title>${BRAND_NAME}</title>
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600&display=swap" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css" />
   <style>
-    :root {
-      color-scheme: dark;
-      --bg: #0b0d10;
-      --fg: #e7eaee;
-      --accent: #7aa2f7;
-      --good: #9ece6a;
-      --bad: #f7768e;
-      --muted: #6b7280;
-      --bar: #14171c;
-      --border: #1f242b;
-      --chip-bg: #1d2128;
-      --chip-active: #2a3340;
-    }
-    * { box-sizing: border-box; }
+    ${TOKENS_CSS}
     html, body {
-      margin: 0; padding: 0;
       width: 100%; height: 100dvh;
-      background: var(--bg); color: var(--fg);
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-      overflow: hidden;
-      overscroll-behavior: none;
+      overflow: hidden; overscroll-behavior: none;
     }
     body {
       display: flex; flex-direction: column;
       padding-top: env(safe-area-inset-top);
       padding-bottom: env(safe-area-inset-bottom);
     }
-    .bar {
-      display: flex; align-items: center; gap: 8px;
-      padding: 8px 12px;
-      background: var(--bar);
+    /* ── Top bar ──────────────────────────────────────────────────────── */
+    .topbar {
+      display: flex; align-items: center; gap: 10px;
+      padding: 10px 14px;
+      background: var(--surface);
       border-bottom: 1px solid var(--border);
       flex-shrink: 0;
     }
-    .bar select, .bar button, .bar input {
-      background: var(--chip-bg); color: var(--fg);
+    .brand {
+      display: flex; align-items: center; gap: 10px;
+      font-weight: 700; font-size: 15px;
+      letter-spacing: -0.2px;
+    }
+    .brand .logo {
+      width: 28px; height: 28px;
+      display: grid; place-items: center;
+      border-radius: 8px;
+      background: linear-gradient(135deg, var(--accent) 0%, var(--accent-dark) 100%);
+      color: white;
+    }
+    .brand .logo svg { width: 16px; height: 16px; }
+    .topbar .spacer { flex: 1; }
+    .status {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 4px 10px;
+      background: var(--surface-alt);
       border: 1px solid var(--border);
-      border-radius: 6px;
-      padding: 7px 10px;
-      font-size: 14px;
-      font-family: inherit;
+      border-radius: var(--radius-chip);
+      font-size: 11px; color: var(--muted);
+      font-weight: 500;
+      max-width: 38vw;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     }
-    .bar button { cursor: pointer; }
-    .bar button.primary { background: var(--accent); color: #0b0d10; border-color: var(--accent); font-weight: 600; }
-    .bar button:disabled { opacity: 0.5; cursor: not-allowed; }
-    .bar .spacer { flex: 1; }
-    .bar .status {
-      font-size: 12px; color: var(--muted);
-      max-width: 30vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    .status .dot {
+      width: 6px; height: 6px; border-radius: 50%;
+      background: var(--muted);
     }
-    .bar .status.ok { color: var(--good); }
-    .bar .status.err { color: var(--bad); }
-    .bar .icon-btn {
-      padding: 7px 9px; min-width: 36px;
+    .status.ok { color: var(--good); }
+    .status.ok .dot { background: var(--good); box-shadow: 0 0 6px var(--good); }
+    .status.err { color: var(--bad); }
+    .status.err .dot { background: var(--bad); }
+    .icon-btn {
+      display: inline-grid; place-items: center;
+      width: 36px; height: 36px;
+      background: var(--surface-alt);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-button);
+      color: var(--fg);
+      cursor: pointer;
+      padding: 0;
     }
-    /* Sessions chip row */
+    .icon-btn svg { width: 16px; height: 16px; }
+    .icon-btn:hover { background: var(--border); }
+    .icon-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .icon-btn.danger { color: var(--bad); }
+    /* ── Action row (agent + new) ──────────────────────────────────────── */
+    .actions {
+      display: flex; align-items: center; gap: 8px;
+      padding: 10px 14px 6px;
+      flex-shrink: 0;
+    }
+    .agent-select {
+      flex: 1;
+      background: var(--surface-alt); color: var(--fg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-button);
+      padding: 9px 12px;
+      font-family: var(--font-mono);
+      font-size: 13px;
+      font-weight: 500;
+      appearance: none;
+      -webkit-appearance: none;
+      background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'/></svg>");
+      background-repeat: no-repeat;
+      background-position: right 10px center;
+      padding-right: 30px;
+    }
+    .btn-primary {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 9px 14px;
+      background: var(--accent); color: var(--bg);
+      border: none; border-radius: var(--radius-button);
+      font-weight: 600; font-size: 13px;
+      cursor: pointer;
+      font-family: var(--font-sans);
+    }
+    .btn-primary svg { width: 14px; height: 14px; }
+    .btn-primary:hover { background: #8eb0fa; }
+    .btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
+    /* ── Sessions chips ────────────────────────────────────────────────── */
     .chips {
       display: flex; gap: 6px;
-      padding: 6px 10px;
-      background: #0f1217;
-      border-bottom: 1px solid var(--border);
+      padding: 6px 14px 10px;
       overflow-x: auto;
       flex-shrink: 0;
+      scrollbar-width: none;
     }
+    .chips::-webkit-scrollbar { display: none; }
     .chips:empty { display: none; }
     .chip {
       flex-shrink: 0;
       display: inline-flex; align-items: center; gap: 6px;
-      padding: 5px 9px;
-      background: var(--chip-bg);
+      padding: 6px 10px;
+      background: var(--surface-alt);
       border: 1px solid var(--border);
-      border-radius: 999px;
+      border-radius: var(--radius-chip);
       font-size: 12px;
+      font-family: var(--font-mono);
+      color: var(--fg);
       cursor: pointer;
       white-space: nowrap;
+      transition: background 100ms ease, border-color 100ms ease;
     }
-    .chip.active { background: var(--chip-active); border-color: var(--accent); color: #fff; }
-    .chip .x { color: var(--muted); margin-left: 4px; }
-    .chip .x:hover { color: var(--bad); }
-    .chip .live { width: 6px; height: 6px; border-radius: 50%; background: var(--good); }
+    .chip:hover { background: var(--border); }
+    .chip.active { border-color: var(--accent); color: var(--fg); background: rgba(122, 162, 247, 0.12); }
+    .chip .live { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); }
+    .chip.live-on .live { background: var(--good); box-shadow: 0 0 4px var(--good); }
+    .chip .x {
+      color: var(--muted); margin-left: 2px;
+      width: 14px; height: 14px;
+      display: grid; place-items: center;
+      border-radius: 50%;
+    }
+    .chip .x:hover { color: var(--bad); background: rgba(247,118,142,0.16); }
+    /* ── Terminal ──────────────────────────────────────────────────────── */
     #term {
       flex: 1; min-height: 0;
-      padding: 4px 6px;
-    }
-    /* Compose row */
-    .compose {
-      display: flex; align-items: center; gap: 6px;
       padding: 6px 10px;
-      background: var(--bar);
+    }
+    .xterm-viewport { background: var(--bg) !important; }
+    .xterm-viewport::-webkit-scrollbar { width: 6px; }
+    .xterm-viewport::-webkit-scrollbar-thumb { background: var(--surface-alt); border-radius: 3px; }
+    .empty-state {
+      display: flex; flex-direction: column; align-items: center;
+      gap: 10px; padding: 32px 20px;
+      color: var(--muted); text-align: center;
+    }
+    .empty-state svg { width: 32px; height: 32px; opacity: 0.6; }
+    .empty-state h3 { margin: 0; font-size: 15px; font-weight: 600; color: var(--fg); }
+    .empty-state p { margin: 0; font-size: 13px; line-height: 1.5; max-width: 280px; }
+    /* ── Compose ───────────────────────────────────────────────────────── */
+    .compose {
+      display: flex; align-items: flex-end; gap: 8px;
+      padding: 10px 14px;
+      background: var(--surface);
       border-top: 1px solid var(--border);
       flex-shrink: 0;
     }
     .compose textarea {
-      flex: 1; min-height: 36px; max-height: 96px;
-      padding: 8px 10px;
-      background: var(--chip-bg); color: var(--fg);
+      flex: 1; min-height: 38px; max-height: 96px;
+      padding: 9px 12px;
+      background: var(--surface-alt); color: var(--fg);
       border: 1px solid var(--border);
-      border-radius: 8px;
-      font-family: ui-monospace, SF Mono, Menlo, Monaco, monospace;
+      border-radius: var(--radius-button);
+      font-family: var(--font-mono);
       font-size: 14px;
       resize: none;
+      line-height: 1.4;
     }
-    .compose button {
-      background: var(--chip-bg); color: var(--fg);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 8px 10px; min-width: 40px;
-      cursor: pointer;
-    }
-    .compose button.primary { background: var(--accent); color: #0b0d10; border-color: var(--accent); font-weight: 600; }
-    .compose button.recording { background: var(--bad); border-color: var(--bad); color: #fff; }
+    .compose textarea:focus { outline: none; border-color: var(--accent); }
+    .compose .icon-btn.recording { background: var(--bad); border-color: var(--bad); color: white; }
+    .compose .icon-btn.send { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+    .compose .icon-btn.send:hover { background: #8eb0fa; }
+    /* ── Modal ─────────────────────────────────────────────────────────── */
     .modal {
       position: fixed; inset: 0;
-      background: rgba(0,0,0,0.85);
+      background: rgba(0,0,0,0.7);
+      backdrop-filter: blur(6px);
       display: flex; align-items: center; justify-content: center;
-      z-index: 100; padding: 24px;
+      z-index: 100; padding: 20px;
     }
     .modal.hidden { display: none; }
-    .modal-inner {
-      background: #14171c; border: 1px solid var(--border); border-radius: 12px;
-      padding: 20px; max-width: 420px; width: 100%;
+    .modal-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-card);
+      padding: 24px;
+      max-width: 420px; width: 100%;
     }
-    .modal h2 { margin: 0 0 12px; font-size: 18px; }
-    .modal p { margin: 0 0 12px; color: var(--muted); font-size: 14px; line-height: 1.5; }
-    .modal input { width: 100%; padding: 10px; font-size: 14px; background: var(--chip-bg); color: var(--fg); border: 1px solid var(--border); border-radius: 6px; margin-bottom: 12px; }
-    .modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
-    .modal-actions button { padding: 9px 14px; }
+    .modal-card .modal-icon {
+      width: 44px; height: 44px;
+      display: grid; place-items: center;
+      border-radius: 12px;
+      background: var(--surface-alt);
+      border: 1px solid var(--border);
+      color: var(--accent);
+      margin-bottom: 14px;
+    }
+    .modal-card .modal-icon svg { width: 22px; height: 22px; }
+    .modal-card h2 { margin: 0 0 6px; font-size: 18px; font-weight: 700; letter-spacing: -0.01em; }
+    .modal-card p { margin: 0 0 16px; color: var(--muted); font-size: 14px; line-height: 1.5; }
+    .modal-card input {
+      width: 100%;
+      padding: 11px 12px;
+      background: var(--surface-alt);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-button);
+      color: var(--fg);
+      font-family: var(--font-mono);
+      font-size: 14px;
+      margin-bottom: 16px;
+    }
+    .modal-card input:focus { outline: none; border-color: var(--accent); }
+    .modal-actions {
+      display: flex; gap: 8px; justify-content: flex-end;
+    }
+    .modal-actions button {
+      padding: 10px 16px;
+      border-radius: var(--radius-button);
+      font-weight: 600; font-size: 13px;
+      cursor: pointer; border: 1px solid var(--border);
+      background: var(--surface-alt); color: var(--fg);
+      font-family: var(--font-sans);
+    }
+    .modal-actions button.primary { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+    .modal-actions button.primary:hover { background: #8eb0fa; }
     /* iOS Safari focus zoom prevention */
     @supports (-webkit-touch-callout: none) {
       input, select, textarea { font-size: 16px !important; }
@@ -157,32 +258,42 @@ export const WEB_CLIENT_HTML = /* html */ `<!doctype html>
   </style>
 </head>
 <body>
-  <div class="bar">
-    <select id="agent" aria-label="Agent">
+  <div class="topbar">
+    <div class="brand">
+      <span class="logo">${ICONS.loopArrow}</span>
+      <span>${BRAND_NAME}</span>
+    </div>
+    <div class="spacer"></div>
+    <span id="status" class="status"><span class="dot"></span><span id="status-text">disconnected</span></span>
+    <button id="reset" class="icon-btn" title="Forget pairing" aria-label="Reset">${ICONS.refresh}</button>
+  </div>
+
+  <div class="actions">
+    <select id="agent" class="agent-select" aria-label="Agent">
       <option value="shell">shell</option>
       <option value="claude">claude</option>
       <option value="gemini">gemini</option>
       <option value="codex">codex</option>
     </select>
-    <button id="open" class="primary">New</button>
-    <button id="close" class="icon-btn" disabled aria-label="Close session">⏻</button>
-    <div class="spacer"></div>
-    <span id="status" class="status">disconnected</span>
-    <button id="reset" class="icon-btn" title="Forget pairing" aria-label="Reset">⟲</button>
+    <button id="open" class="btn-primary">${ICONS.add}<span>New</span></button>
+    <button id="close" class="icon-btn danger" disabled aria-label="Close session">${ICONS.power}</button>
   </div>
+
   <div id="chips" class="chips"></div>
   <div id="term"></div>
+
   <div class="compose">
-    <button id="mic" class="icon-btn" title="Voice input" aria-label="Voice input">🎤</button>
+    <button id="mic" class="icon-btn" title="Voice input" aria-label="Voice input">${ICONS.mic}</button>
     <textarea id="composeText" rows="1" placeholder="Type or dictate, Enter sends..."
               autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false"></textarea>
-    <button id="send" class="primary" aria-label="Send">▶</button>
+    <button id="send" class="icon-btn send" aria-label="Send">${ICONS.send}</button>
   </div>
 
   <div id="modal" class="modal hidden">
-    <div class="modal-inner">
+    <div class="modal-card">
+      <div class="modal-icon">${ICONS.loopArrow}</div>
       <h2 id="modal-title">Pair your phone</h2>
-      <p id="modal-body">Enter the pair URL from <code>loopsy mobile pair</code>.</p>
+      <p id="modal-body">Run <code style="font-family:var(--font-mono);background:var(--surface-alt);padding:1px 5px;border-radius:4px">loopsy mobile pair</code> on your Mac and paste the URL below.</p>
       <input id="modal-input" type="text" placeholder="loopsy://pair?u=...&t=..." autocomplete="off" autocapitalize="off" autocorrect="off" />
       <div class="modal-actions">
         <button id="modal-ok" class="primary">Pair</button>
@@ -212,15 +323,26 @@ export const WEB_CLIENT_HTML = /* html */ `<!doctype html>
     const $ = (id) => document.getElementById(id);
     const setStatus = (text, kind = '') => {
       const el = $('status');
-      el.textContent = text;
       el.className = 'status' + (kind ? ' ' + kind : '');
+      $('status-text').textContent = text;
     };
 
+    // Tokyo Night palette mirrored from theme.dart's loopsyTerminalTheme.
     const term = new Terminal({
       cursorBlink: true,
-      fontFamily: 'ui-monospace, SF Mono, Menlo, Monaco, monospace',
+      fontFamily: "'JetBrains Mono', ui-monospace, SF Mono, Menlo, Monaco, monospace",
       fontSize: 13,
-      theme: { background: '#0b0d10', foreground: '#e7eaee', cursor: '#7aa2f7' },
+      theme: {
+        background: '#0B0D10',
+        foreground: '#E7EAEE',
+        cursor: '#7AA2F7',
+        selectionBackground: 'rgba(122,162,247,0.32)',
+        black: '#1A1B26', red: '#F7768E', green: '#9ECE6A', yellow: '#E0AF68',
+        blue: '#7AA2F7', magenta: '#BB9AF7', cyan: '#7DCFFF', white: '#C0CAF5',
+        brightBlack: '#414868', brightRed: '#FF7A93', brightGreen: '#B9F27C',
+        brightYellow: '#FF9E64', brightBlue: '#7DA6FF', brightMagenta: '#BB9AF7',
+        brightCyan: '#0DB9D7', brightWhite: '#D8E0F2',
+      },
       convertEol: true,
       allowProposedApi: true,
     });
@@ -228,13 +350,12 @@ export const WEB_CLIENT_HTML = /* html */ `<!doctype html>
     term.loadAddon(fit);
     term.open($('term'));
     fit.fit();
-    term.writeln('Loopsy web client. Pair your phone or restore a saved pairing.');
+    term.writeln('\\x1b[2m${BRAND_NAME} web client.\\x1b[0m Pair your phone or restore a saved pairing.');
 
     // ─── State ─────────────────────────────────────────────────────────
     let pairing = null;
     /** Map<sessionId, { agent, ws, lastSeen }> */
     const sessions = new Map();
-    /** Persistent metadata mirror written to localStorage. */
     let activeSessionId = null;
 
     function loadPairing() {
@@ -246,9 +367,7 @@ export const WEB_CLIENT_HTML = /* html */ `<!doctype html>
     function loadSessions() {
       try { return JSON.parse(localStorage.getItem(SESSIONS_KEY) || '[]'); } catch { return []; }
     }
-    function saveSessions(list) {
-      localStorage.setItem(SESSIONS_KEY, JSON.stringify(list));
-    }
+    function saveSessions(list) { localStorage.setItem(SESSIONS_KEY, JSON.stringify(list)); }
     function persistSessions() {
       const list = Array.from(sessions.entries()).map(([id, s]) => ({
         id, agent: s.agent, lastSeen: s.lastSeen,
@@ -303,7 +422,7 @@ export const WEB_CLIENT_HTML = /* html */ `<!doctype html>
       savePairing(p);
       pairing = p;
       setStatus('paired', 'ok');
-      term.writeln('\\r\\n[paired with device ' + p.deviceId.slice(0, 8) + '…]');
+      term.writeln('\\r\\n\\x1b[32m✓\\x1b[0m paired with device \\x1b[1m' + p.deviceId.slice(0, 8) + '\\x1b[0m…');
     }
 
     function showModal() { $('modal').classList.remove('hidden'); $('modal-input').focus(); }
@@ -319,7 +438,7 @@ export const WEB_CLIENT_HTML = /* html */ `<!doctype html>
       hideModal();
       try { await redeem(parsed); } catch (e) {
         setStatus('error', 'err');
-        term.writeln('\\r\\n[error] ' + e.message);
+        term.writeln('\\r\\n\\x1b[31m✗\\x1b[0m ' + e.message);
         showModal();
       }
     };
@@ -356,7 +475,7 @@ export const WEB_CLIENT_HTML = /* html */ `<!doctype html>
       if (!text) return;
       const s = activeSessionId ? sessions.get(activeSessionId) : null;
       if (!s || s.ws.readyState !== 1) {
-        term.writeln('\\r\\n[no active session — tap New]');
+        term.writeln('\\r\\n\\x1b[33m⚠\\x1b[0m no active session — tap New');
         return;
       }
       s.ws.send(new TextEncoder().encode(text + '\\r'));
@@ -371,10 +490,10 @@ export const WEB_CLIENT_HTML = /* html */ `<!doctype html>
       c.innerHTML = '';
       for (const [id, s] of sessions) {
         const chip = document.createElement('span');
-        chip.className = 'chip' + (id === activeSessionId ? ' active' : '');
+        const live = s.ws.readyState === 1;
+        chip.className = 'chip' + (id === activeSessionId ? ' active' : '') + (live ? ' live-on' : '');
         const dot = document.createElement('span');
         dot.className = 'live';
-        dot.style.background = s.ws.readyState === 1 ? 'var(--good)' : 'var(--muted)';
         chip.appendChild(dot);
         const label = document.createElement('span');
         label.textContent = s.agent + ' · ' + id.slice(0, 4);
@@ -397,11 +516,9 @@ export const WEB_CLIENT_HTML = /* html */ `<!doctype html>
       if (!sessions.has(id)) return;
       activeSessionId = id;
       term.reset();
-      term.writeln('--- switched to ' + sessions.get(id).agent + ' (' + id.slice(0,8) + ') ---');
+      term.writeln('\\x1b[2m── ' + sessions.get(id).agent + ' (' + id.slice(0,8) + ') ──\\x1b[0m');
       renderChips();
       updateButtons();
-      // Trigger a redraw by sending a no-op resize so the laptop re-emits
-      // current screen state via PTY's own redraw (some TUIs respond to SIGWINCH).
       const s = sessions.get(id);
       try { s.ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows })); } catch {}
     }
@@ -416,7 +533,7 @@ export const WEB_CLIENT_HTML = /* html */ `<!doctype html>
       if (activeSessionId === id) {
         activeSessionId = sessions.keys().next().value || null;
         if (activeSessionId) switchTo(activeSessionId);
-        else { term.reset(); term.writeln('No active sessions. Tap New.'); }
+        else { term.reset(); term.writeln('\\x1b[2mNo active sessions. Tap New.\\x1b[0m'); }
       }
       renderChips();
       updateButtons();
@@ -446,7 +563,7 @@ export const WEB_CLIENT_HTML = /* html */ `<!doctype html>
       sessions.set(id, s);
       activeSessionId = id;
       term.reset();
-      term.writeln('--- ' + (fresh ? 'opening' : 'reattaching') + ' ' + agent + ' (' + id.slice(0,8) + ') ---');
+      term.writeln('\\x1b[2m── ' + (fresh ? 'opening' : 'reattaching') + ' ' + agent + ' (' + id.slice(0,8) + ') ──\\x1b[0m');
       renderChips();
       updateButtons();
       setStatus('connecting...');
@@ -457,8 +574,6 @@ export const WEB_CLIENT_HTML = /* html */ `<!doctype html>
         if (fresh) {
           ws.send(JSON.stringify({ type: 'session-open', agent, cols, rows }));
         }
-        // For reattach, the daemon will replay scrollback automatically when
-        // the relay forwards its session-attach control frame.
         persistSessions();
         renderChips();
       });
@@ -466,12 +581,11 @@ export const WEB_CLIENT_HTML = /* html */ `<!doctype html>
         if (typeof e.data === 'string') {
           try {
             const msg = JSON.parse(e.data);
-            if (msg.type === 'device-disconnected') term.writeln('\\r\\n[device disconnected]');
-            // session-ready, session-attach, session-detach all ignorable on phone
+            if (msg.type === 'device-disconnected') term.writeln('\\r\\n\\x1b[33m⚠ device disconnected\\x1b[0m');
           } catch {}
           return;
         }
-        if (id !== activeSessionId) return; // background sessions still consume buffer on daemon
+        if (id !== activeSessionId) return;
         term.write(new Uint8Array(e.data));
       });
       ws.addEventListener('close', (e) => {
@@ -515,7 +629,6 @@ export const WEB_CLIENT_HTML = /* html */ `<!doctype html>
           else interim += r[0].transcript;
         }
         const t = $('composeText');
-        // Show interim above the existing user text via placeholder hack.
         if (final) {
           t.value = (t.value + ' ' + final).trim();
         }
@@ -523,7 +636,7 @@ export const WEB_CLIENT_HTML = /* html */ `<!doctype html>
           t.placeholder = '🎙 ' + interim;
         }
       };
-      recog.onerror = (e) => {
+      recog.onerror = () => {
         recordingActive = false;
         $('mic').classList.remove('recording');
         $('composeText').placeholder = 'Type or dictate, Enter sends...';
@@ -548,7 +661,7 @@ export const WEB_CLIENT_HTML = /* html */ `<!doctype html>
         $('mic').classList.add('recording');
         $('composeText').placeholder = '🎙 listening...';
         recog.start();
-      } catch (e) {
+      } catch {
         recordingActive = false;
         $('mic').classList.remove('recording');
       }
@@ -570,7 +683,7 @@ export const WEB_CLIENT_HTML = /* html */ `<!doctype html>
         if (parsed) {
           history.replaceState(null, '', window.location.pathname);
           try { await redeem(parsed); } catch (e) {
-            term.writeln('\\r\\n[error] ' + e.message);
+            term.writeln('\\r\\n\\x1b[31m✗\\x1b[0m ' + e.message);
             showModal();
             return;
           }
@@ -578,12 +691,11 @@ export const WEB_CLIENT_HTML = /* html */ `<!doctype html>
       }
       if (!pairing) { showModal(); return; }
       setStatus('paired', 'ok');
-      // Reattach known sessions (PTYs that may still be alive on the daemon).
       const stored = loadSessions();
       if (stored.length === 0) {
-        term.writeln('Paired with device ' + pairing.deviceId.slice(0, 8) + '…  Tap "New" to open a session.');
+        term.writeln('\\x1b[32m✓\\x1b[0m paired with device \\x1b[1m' + pairing.deviceId.slice(0, 8) + '\\x1b[0m…  Tap "New" to open a session.');
       } else {
-        term.writeln('Reattaching ' + stored.length + ' session(s)...');
+        term.writeln('\\x1b[2mReattaching ' + stored.length + ' session(s)...\\x1b[0m');
         for (const meta of stored) {
           attachSession(meta.id, meta.agent, /* fresh */ false);
         }

@@ -3,6 +3,10 @@ main = "src/index.ts"
 compatibility_date = "2025-04-01"
 compatibility_flags = ["nodejs_compat"]
 
+# Keep the *.workers.dev URL alive in addition to the custom domain — paired
+# phones from the pre-loopsy.dev era keep their connections working.
+workers_dev = true
+
 # Workers Free plan supports SQLite-backed Durable Objects.
 # DeviceObject holds the persistent WebSocket from each laptop and
 # splices in/out phone session WebSockets via Hibernation API.
@@ -13,6 +17,26 @@ class_name = "DeviceObject"
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["DeviceObject"]
+
+# Custom domain binding for the founder's deployment. Both apex and `www.`
+# point to the relay so the marketing landing (`/`), web client (`/app`), and
+# WebSocket endpoints all resolve at the same hostname.
+#
+# Pre-req: the `loopsy.dev` zone must be on the same Cloudflare account as
+# this Worker. The CSP `connect-src` allow-list is host-relative, so changes
+# to this list don't require a CSP edit.
+# Pattern-based routes (vs. `custom_domain = true`). The zone has pre-existing
+# A records proxied by Cloudflare (Namecheap LiteSpeed bundle). Pattern routes
+# intercept HTTP requests on those proxied records and dispatch to this
+# Worker — no DNS surgery required. The existing records continue to absorb
+# traffic; the Worker just shadows them at the pattern.
+[[routes]]
+pattern = "loopsy.dev/*"
+zone_name = "loopsy.dev"
+
+[[routes]]
+pattern = "www.loopsy.dev/*"
+zone_name = "loopsy.dev"
 
 # Observability — show requests in dashboard tail
 [observability]

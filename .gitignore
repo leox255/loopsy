@@ -18,6 +18,10 @@ test-transfer.txt
 *.swp
 *~
 
+# Synced at build time by scripts/sync-worker.mjs — included in the published
+# tarball via package.json `files`, but not committed to the repo.
+packages/deploy-relay/worker/
+
 # Flutter / Xcode build artifacts (apps/mobile)
 apps/mobile/.dart_tool/
 apps/mobile/build/

@@ -20,6 +20,33 @@ import {
   verifyPairToken,
 } from './auth.js';
 import { WEB_CLIENT_HTML } from './web-client.js';
+import { LANDING_HTML } from './landing.js';
+
+/**
+ * Build a per-request CSP. Inline scripts only via nonce; styles still need
+ * `'unsafe-inline'` because xterm.js emits inline `<style>` at runtime, which
+ * we accept. Font + style allow-listed for Google Fonts (used by Inter +
+ * JetBrains Mono).
+ */
+function buildCsp(host: string, nonce: string): string {
+  return [
+    "default-src 'self'",
+    `script-src 'self' 'nonce-${nonce}' https://cdn.jsdelivr.net`,
+    "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://fonts.googleapis.com",
+    "font-src 'self' data: https://fonts.gstatic.com https://cdn.jsdelivr.net",
+    `connect-src 'self' wss://${host} https://cdn.jsdelivr.net`,
+    "img-src 'self' data:",
+    "frame-ancestors 'none'",
+    "base-uri 'self'",
+    "form-action 'self'",
+  ].join('; ');
+}
+
+const SECURITY_HEADERS: Record<string, string> = {
+  'x-content-type-options': 'nosniff',
+  'referrer-policy': 'strict-origin-when-cross-origin',
+  'strict-transport-security': 'max-age=15552000; includeSubDomains',
+};
 
 export { DeviceObject } from './device-object.js';
 
@@ -63,35 +90,31 @@ export default {
       });
     }
 
+    // Marketing landing page. Same CSP shape as /app so we can share the font
+    // and style allow-list. CSO #16: per-request nonce; the inline script tag
+    // for the "Copy" button must carry it or the browser rejects.
+    if (url.pathname === '/' || url.pathname === '') {
+      const nonce = base64urlEncode(crypto.getRandomValues(new Uint8Array(16)));
+      const html = LANDING_HTML.replace(/__CSP_NONCE__/g, nonce);
+      return new Response(html, {
+        headers: {
+          'content-type': 'text/html; charset=utf-8',
+          'cache-control': 'public, max-age=300',
+          'content-security-policy': buildCsp(url.host, nonce),
+          ...SECURITY_HEADERS,
+        },
+      });
+    }
+
     if (url.pathname === '/app' || url.pathname === '/app/') {
-      // CSO #16: per-request nonce-based CSP. Drops `'unsafe-inline'` for
-      // scripts. Inline `<script>` tag in the body inherits this nonce, so
-      // any future XSS payload that tries to inject a script without the
-      // matching nonce is rejected.
       const nonce = base64urlEncode(crypto.getRandomValues(new Uint8Array(16)));
       const html = WEB_CLIENT_HTML.replace(/__CSP_NONCE__/g, nonce);
       return new Response(html, {
         headers: {
           'content-type': 'text/html; charset=utf-8',
           'cache-control': 'no-cache',
-          // CSO #12 / #16: tighter CSP. Inline scripts only via nonce; styles
-          // still need 'unsafe-inline' because xterm.css ships with inline
-          // <style> emit at runtime — that one we accept. WSS connect is
-          // narrowed to the relay's own host (not `wss:` wildcard) so XSS
-          // can't ship secrets to an attacker-controlled WS.
-          'content-security-policy': [
-            "default-src 'self'",
-            `script-src 'self' 'nonce-${nonce}' https://cdn.jsdelivr.net`,
-            "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net",
-            `connect-src 'self' wss://${url.host} https://cdn.jsdelivr.net`,
-            "img-src 'self' data:",
-            "frame-ancestors 'none'",
-            "base-uri 'self'",
-            "form-action 'self'",
-          ].join('; '),
-          'x-content-type-options': 'nosniff',
-          'referrer-policy': 'strict-origin-when-cross-origin',
-          'strict-transport-security': 'max-age=15552000; includeSubDomains',
+          'content-security-policy': buildCsp(url.host, nonce),
+          ...SECURITY_HEADERS,
         },
       });
     }
