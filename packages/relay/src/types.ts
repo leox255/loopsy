@@ -1,0 +1,45 @@
+/**
+ * Shared types for the Loopsy relay.
+ *
+ * The relay sits between phones (clients) and laptops (devices).
+ * Both connect over WebSockets; the relay splices their streams.
+ */
+
+export interface Env {
+  DEVICE: DurableObjectNamespace;
+  /** Secret used to sign pair tokens (HMAC-SHA-256). Set via `wrangler secret put PAIR_TOKEN_SECRET`. */
+  PAIR_TOKEN_SECRET: string;
+}
+
+/** Logical role of a connected WebSocket attached to a DeviceObject. */
+export type Role = 'device' | 'session';
+
+/**
+ * Control frame sent as JSON text frames over the WebSockets.
+ * Binary frames carry raw PTY bytes.
+ */
+export type ControlFrame =
+  | { type: 'hello'; role: Role; sessionId?: string; agent?: 'shell' | 'claude' | 'gemini' | 'codex' }
+  | { type: 'session-open'; sessionId: string; agent: 'shell' | 'claude' | 'gemini' | 'codex'; cols: number; rows: number }
+  | { type: 'session-close'; sessionId: string; reason?: string }
+  | { type: 'session-stdout'; sessionId: string }
+  | { type: 'session-stdin'; sessionId: string }
+  | { type: 'resize'; sessionId: string; cols: number; rows: number }
+  | { type: 'signal'; sessionId: string; signal: 'SIGINT' | 'SIGTERM' | 'SIGHUP' }
+  | { type: 'error'; message: string }
+  | { type: 'heartbeat' };
+
+/**
+ * Pair token payload signed by the relay.
+ * Phones present the token to /pair/redeem to bind to a device.
+ */
+export interface PairTokenPayload {
+  /** device_id this token grants pairing access to */
+  did: string;
+  /** issued-at (seconds since epoch) */
+  iat: number;
+  /** expires-at (seconds since epoch) */
+  exp: number;
+  /** random nonce so two tokens for the same device differ */
+  nonce: string;
+}

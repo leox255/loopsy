@@ -1,0 +1,19 @@
+name = "loopsy-relay"
+main = "src/index.ts"
+compatibility_date = "2025-04-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Workers Free plan supports SQLite-backed Durable Objects.
+# DeviceObject holds the persistent WebSocket from each laptop and
+# splices in/out phone session WebSockets via Hibernation API.
+[[durable_objects.bindings]]
+name = "DEVICE"
+class_name = "DeviceObject"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["DeviceObject"]
+
+# Observability — show requests in dashboard tail
+[observability]
+enabled = true
