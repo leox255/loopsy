@@ -14,7 +14,7 @@ export const WEB_CLIENT_HTML = /* html */ `<!doctype html>
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <title>Loopsy</title>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.5.0/css/xterm.css" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css" />
   <style>
     :root {
       color-scheme: dark;
@@ -113,9 +113,17 @@ export const WEB_CLIENT_HTML = /* html */ `<!doctype html>
     </div>
   </div>
 
-  <script type="module">
-    import { Terminal } from 'https://cdn.jsdelivr.net/npm/xterm@5.5.0/+esm';
-    import { FitAddon } from 'https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/+esm';
+  <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
+  <script>
+    'use strict';
+    if (!window.Terminal || !window.FitAddon) {
+      document.body.insertAdjacentHTML('afterbegin',
+        '<div style="background:#f7768e;color:#fff;padding:10px;font-family:monospace">' +
+        'xterm failed to load from CDN. Check network and reload.</div>');
+    }
+    const Terminal = window.Terminal;
+    const FitAddon = window.FitAddon && window.FitAddon.FitAddon;
 
     const STORAGE_KEY = 'loopsy.pairing';
 
@@ -160,8 +168,8 @@ export const WEB_CLIENT_HTML = /* html */ `<!doctype html>
       const b = crypto.getRandomValues(new Uint8Array(16));
       b[6] = (b[6] & 0x0f) | 0x40;
       b[8] = (b[8] & 0x3f) | 0x80;
-      const h = [...b].map(x => x.toString(16).padStart(2, '0')).join('');
-      return \`\${h.slice(0,8)}-\${h.slice(8,12)}-\${h.slice(12,16)}-\${h.slice(16,20)}-\${h.slice(20,32)}\`;
+      const h = Array.from(b).map(x => x.toString(16).padStart(2, '0')).join('');
+      return h.slice(0,8) + '-' + h.slice(8,12) + '-' + h.slice(12,16) + '-' + h.slice(16,20) + '-' + h.slice(20,32);
     }
 
     function parsePairUrl(input) {
