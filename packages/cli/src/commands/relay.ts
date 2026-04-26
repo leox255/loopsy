@@ -128,15 +128,18 @@ export async function mobilePairCommand(argv: { ttl?: number }): Promise<void> {
   const data = (await res.json()) as PairTokenResponse;
 
   const expiresIn = Math.max(0, data.expires_at - Math.floor(Date.now() / 1000));
-  // Encode for the phone app: a small URL with relay + token
-  const payload = `loopsy://pair?u=${encodeURIComponent(config.relay.url)}&t=${encodeURIComponent(data.token)}`;
+  // The web client (served at /app) reads the pair URL from the page's hash.
+  // QR encodes a normal HTTPS URL so any phone camera/QR app can open it in
+  // the browser without needing a custom URL-scheme handler installed.
+  const innerPair = `loopsy://pair?u=${encodeURIComponent(config.relay.url)}&t=${encodeURIComponent(data.token)}`;
+  const webUrl = `${config.relay.url}/app#${encodeURIComponent(innerPair)}`;
   console.log('');
-  console.log('Scan this QR with the Loopsy mobile app to pair:');
+  console.log('Scan this QR with your phone camera to pair (opens in browser):');
   console.log('');
-  qrcode.generate(payload, { small: true }, (q: string) => console.log(q));
+  qrcode.generate(webUrl, { small: true }, (q: string) => console.log(q));
   console.log('');
-  console.log(`(Or paste this URL into the app)`);
-  console.log(`  ${payload}`);
+  console.log('Or open this link on your phone:');
+  console.log(`  ${webUrl}`);
   console.log('');
   console.log(`Token expires in ${expiresIn}s. Single use.`);
 }

@@ -19,6 +19,7 @@ import {
   signPairToken,
   verifyPairToken,
 } from './auth.js';
+import { WEB_CLIENT_HTML } from './web-client.js';
 
 export { DeviceObject } from './device-object.js';
 
@@ -59,6 +60,23 @@ export default {
         service: 'loopsy-relay',
         version: '1.0.0',
         ts: Date.now(),
+      });
+    }
+
+    if (url.pathname === '/app' || url.pathname === '/app/') {
+      return new Response(WEB_CLIENT_HTML, {
+        headers: {
+          'content-type': 'text/html; charset=utf-8',
+          'cache-control': 'no-cache',
+          // Allow xterm CSS+JS and the WSS we'll open back to ourselves.
+          'content-security-policy': [
+            "default-src 'self'",
+            "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net",
+            "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net",
+            "connect-src 'self' wss: https://cdn.jsdelivr.net",
+            "img-src 'self' data:",
+          ].join('; '),
+        },
       });
     }
 

@@ -21,12 +21,20 @@ export function timingSafeEqual(a: string, b: string): boolean {
   return diff === 0;
 }
 
-/** Extract the Bearer token from an Authorization header, or null if absent. */
+/**
+ * Extract the Bearer token from the Authorization header, or — as a fallback
+ * for browsers (which can't set WebSocket request headers) — from the
+ * `?token=…` query parameter. Returns null if neither is present.
+ */
 export function extractBearer(request: Request): string | null {
   const h = request.headers.get('Authorization') ?? request.headers.get('authorization');
-  if (!h) return null;
-  const m = /^Bearer\s+(.+)$/.exec(h);
-  return m ? m[1].trim() : null;
+  if (h) {
+    const m = /^Bearer\s+(.+)$/.exec(h);
+    if (m) return m[1].trim();
+  }
+  const url = new URL(request.url);
+  const t = url.searchParams.get('token');
+  return t ?? null;
 }
 
 /** Generate a random secret suitable for bearer auth (32 bytes, base64url). */
