@@ -19,10 +19,6 @@ import WebSocket from 'ws';
 import type { RelayConfig } from '@loopsy/protocol';
 import type { AgentKind, PtySessionManager } from './pty-session-manager.js';
 
-const PROTOCOL_TAGS = {
-  device: 'loopsy-device-v1',
-} as const;
-
 const RECONNECT_INITIAL_MS = 1000;
 const RECONNECT_MAX_MS = 30_000;
 const HEARTBEAT_MS = 25_000;
@@ -106,7 +102,7 @@ export class RelayClient {
     url.pathname = '/laptop/connect';
     url.searchParams.set('device_id', this.cfg.deviceId);
 
-    const ws = new WebSocket(url.toString(), PROTOCOL_TAGS.device, {
+    const ws = new WebSocket(url.toString(), {
       headers: { Authorization: `Bearer ${this.cfg.deviceSecret}` },
       // ws lib supports headers natively, unlike WHATWG WebSocket.
     });
@@ -232,12 +228,11 @@ export class RelayClient {
     msg: { agent?: AgentKind; cols?: number; rows?: number; cwd?: string; initialInput?: string },
   ): void {
     if (this.sessions.has(sessionId)) return;
-    const existing = this.pty.get(sessionId);
-    let actualId = sessionId;
-    if (!existing) {
-      // We allow the phone to suggest a session id, but the PTY manager
-      // mints its own. Map the suggested id to the real one in our table.
-      actualId = this.pty.spawn({
+    if (!this.pty.get(sessionId)) {
+      // Spawn with the phone-chosen id so the relay's session-routing tag
+      // matches the binary-frame session prefix on the way back.
+      this.pty.spawn({
+        id: sessionId,
         agent: msg.agent ?? 'shell',
         cols: msg.cols ?? 120,
         rows: msg.rows ?? 40,
@@ -245,14 +240,13 @@ export class RelayClient {
         initialInput: msg.initialInput,
       });
     }
-    // Attach: replay any scrollback through the relay first, then live tail.
-    const prefix = uuidToBytes(actualId);
+    const prefix = uuidToBytes(sessionId);
     const onData = (data: Buffer) => this.sendBinary(prefix, data);
-    const handle = this.pty.attach(actualId, onData);
+    const handle = this.pty.attach(sessionId, onData);
     if (!handle) return;
     if (handle.replay.length > 0) this.sendBinary(prefix, handle.replay);
-    this.sessions.set(sessionId, { sessionId: actualId, detach: handle.detach });
-    this.sendText({ type: 'session-ready', sessionId, ptyId: actualId });
+    this.sessions.set(sessionId, { sessionId, detach: handle.detach });
+    this.sendText({ type: 'session-ready', sessionId });
   }
 
   private handleSessionAttach(sessionId: string): void {

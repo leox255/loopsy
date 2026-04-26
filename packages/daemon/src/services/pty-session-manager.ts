@@ -24,6 +24,8 @@ export interface SpawnOptions {
   initialInput?: string;
   /** Optional extra args appended to the agent command (e.g. ['--model', 'claude-opus-4-7']). */
   extraArgs?: string[];
+  /** Optional explicit session id (e.g. provided by the relay client so phone-chosen UUIDs match the routing tag). */
+  id?: string;
 }
 
 export interface SessionInfo {
@@ -80,7 +82,7 @@ export class PtySessionManager {
 
   /** Spawn a new session and return its id. */
   spawn(opts: SpawnOptions): string {
-    const id = randomUUID();
+    const id = opts.id ?? randomUUID();
     const cwd = opts.cwd ?? process.cwd();
     const cols = opts.cols ?? 120;
     const rows = opts.rows ?? 40;
