@@ -24,7 +24,15 @@
  */
 
 import type { Env } from './types.js';
-import { extractBearer, generateSecret, generateUuid, timingSafeEqual } from './auth.js';
+import {
+  bearerSubprotocol,
+  extractBearer,
+  generateSecret,
+  generateUuid,
+  isOriginAllowed,
+  sha256Hex,
+  timingSafeEqual,
+} from './auth.js';
 
 /** Convert a hyphenated UUID v4 to 16 raw bytes (BE). */
 function uuidToBytes(uuid: string): Uint8Array {
@@ -48,7 +56,13 @@ const DEVICE_TAG = 'device';
 const sessionTag = (id: string) => `session:${id}`;
 
 interface PhoneRecord {
-  secret: string;
+  /**
+   * Pre-CSO-#7 records stored the raw secret. Post-fix, only `secret_hash`
+   * (SHA-256 hex) is written. We keep the optional `secret` field so the
+   * verify path can transparently migrate legacy records on first auth.
+   */
+  secret?: string;
+  secret_hash?: string;
   label?: string;
   paired_at: number;
 }
@@ -72,18 +86,26 @@ export class DeviceObject {
     if (op === 'connect-laptop') return this.handleConnectLaptop(request);
     if (op === 'connect-phone') return this.handleConnectPhone(request);
     if (op === 'verify-device-secret') return this.handleVerifyDeviceSecret(request);
+    if (op === 'list-phones') return this.handleListPhones(request);
+    if (op === 'revoke-phone') return this.handleRevokePhone(request);
+    if (op === 'phone-self-revoke') return this.handlePhoneSelfRevoke(request);
 
     return new Response('unknown op', { status: 400 });
   }
 
   /** First-time device registration: generate and persist a device_secret. */
   private async handleRegister(): Promise<Response> {
-    const existing = await this.state.storage.get<string>('device_secret');
-    if (existing) {
+    const existingHash = await this.state.storage.get<string>('device_secret_hash');
+    const existingPlain = await this.state.storage.get<string>('device_secret');
+    if (existingHash || existingPlain) {
       return Response.json({ error: 'device already registered' }, { status: 409 });
     }
     const secret = generateSecret();
-    await this.state.storage.put('device_secret', secret);
+    const hash = await sha256Hex(secret);
+    // CSO #7: store only the hash. The plaintext is returned to the client
+    // exactly once (this response). After that, only the hash exists at rest
+    // in Durable Object storage.
+    await this.state.storage.put('device_secret_hash', hash);
     return Response.json({ device_secret: secret });
   }
 
@@ -91,11 +113,25 @@ export class DeviceObject {
   private async handleVerifyDeviceSecret(request: Request): Promise<Response> {
     const token = extractBearer(request);
     if (!token) return new Response('missing bearer', { status: 401 });
-    const expected = await this.state.storage.get<string>('device_secret');
-    if (!expected || !timingSafeEqual(token, expected)) {
+    if (!(await this.checkDeviceSecret(token))) {
       return new Response('invalid', { status: 403 });
     }
     return new Response('ok', { status: 200 });
+  }
+
+  private async checkDeviceSecret(token: string): Promise<boolean> {
+    const expectedHash = await this.state.storage.get<string>('device_secret_hash');
+    if (expectedHash) {
+      const tokenHash = await sha256Hex(token);
+      return timingSafeEqual(tokenHash, expectedHash);
+    }
+    // Legacy path: pre-#7 storage held the raw secret. Migrate on first auth.
+    const legacyPlain = await this.state.storage.get<string>('device_secret');
+    if (!legacyPlain) return false;
+    if (!timingSafeEqual(token, legacyPlain)) return false;
+    await this.state.storage.put('device_secret_hash', await sha256Hex(legacyPlain));
+    await this.state.storage.delete('device_secret');
+    return true;
   }
 
   /**
@@ -116,7 +152,12 @@ export class DeviceObject {
 
     const phone_id = generateUuid();
     const phone_secret = generateSecret();
-    const rec: PhoneRecord = { secret: phone_secret, label: body.label, paired_at: Date.now() };
+    // CSO #7: store SHA-256 hash, never the raw secret.
+    const rec: PhoneRecord = {
+      secret_hash: await sha256Hex(phone_secret),
+      label: body.label,
+      paired_at: Date.now(),
+    };
     await this.state.storage.put(`phone:${phone_id}`, rec);
     // Track the nonce as used. Each entry is tiny; periodic cleanup can be
     // added later via DurableObjectState.setAlarm if we ever need it.
@@ -129,10 +170,13 @@ export class DeviceObject {
     if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') {
       return new Response('expected WebSocket upgrade', { status: 426 });
     }
+    // CSO #13: validate Origin to prevent cross-site WebSocket hijacking.
+    if (!isOriginAllowed(request, this.env.ALLOWED_ORIGINS)) {
+      return new Response('origin not allowed', { status: 403 });
+    }
     const token = extractBearer(request);
     if (!token) return new Response('missing bearer', { status: 401 });
-    const expected = await this.state.storage.get<string>('device_secret');
-    if (!expected || !timingSafeEqual(token, expected)) {
+    if (!(await this.checkDeviceSecret(token))) {
       return new Response('forbidden', { status: 403 });
     }
 
@@ -147,13 +191,18 @@ export class DeviceObject {
     const pair = new WebSocketPair();
     const [client, server] = [pair[0], pair[1]];
     this.state.acceptWebSocket(server, [DEVICE_TAG]);
-    return new Response(null, { status: 101, webSocket: client });
+    const echo = bearerSubprotocol(request);
+    const headers: HeadersInit = echo ? { 'Sec-WebSocket-Protocol': echo } : {};
+    return new Response(null, { status: 101, webSocket: client, headers });
   }
 
   /** Phone opens a session WS for a paired phone_id. Bearer = phone_secret. */
   private async handleConnectPhone(request: Request): Promise<Response> {
     if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') {
       return new Response('expected WebSocket upgrade', { status: 426 });
+    }
+    if (!isOriginAllowed(request, this.env.ALLOWED_ORIGINS)) {
+      return new Response('origin not allowed', { status: 403 });
     }
     const url = new URL(request.url);
     const phone_id = url.searchParams.get('phone_id');
@@ -164,9 +213,20 @@ export class DeviceObject {
     const token = extractBearer(request);
     if (!token) return new Response('missing bearer', { status: 401 });
     const rec = await this.state.storage.get<PhoneRecord>(`phone:${phone_id}`);
-    if (!rec || !timingSafeEqual(token, rec.secret)) {
-      return new Response('forbidden', { status: 403 });
+    if (!rec) return new Response('forbidden', { status: 403 });
+
+    // CSO #7: prefer hash compare; migrate legacy plaintext on first auth.
+    let ok = false;
+    if (rec.secret_hash) {
+      ok = timingSafeEqual(await sha256Hex(token), rec.secret_hash);
+    } else if (rec.secret) {
+      ok = timingSafeEqual(token, rec.secret);
+      if (ok) {
+        const migrated: PhoneRecord = { secret_hash: await sha256Hex(rec.secret), label: rec.label, paired_at: rec.paired_at };
+        await this.state.storage.put(`phone:${phone_id}`, migrated);
+      }
     }
+    if (!ok) return new Response('forbidden', { status: 403 });
 
     // Replace prior WS for the same session.
     for (const ws of this.state.getWebSockets(sessionTag(session_id))) {
@@ -189,7 +249,79 @@ export class DeviceObject {
         /* ignore */
       }
     }
-    return new Response(null, { status: 101, webSocket: client });
+    const echo = bearerSubprotocol(request);
+    const headers: HeadersInit = echo ? { 'Sec-WebSocket-Protocol': echo } : {};
+    return new Response(null, { status: 101, webSocket: client, headers });
+  }
+
+  /**
+   * CSO #8: list paired phones for the device owner. Requires Bearer device_secret.
+   */
+  private async handleListPhones(request: Request): Promise<Response> {
+    const token = extractBearer(request);
+    if (!token || !(await this.checkDeviceSecret(token))) {
+      return new Response('forbidden', { status: 403 });
+    }
+    const list = await this.state.storage.list({ prefix: 'phone:' });
+    const phones: Array<{ phone_id: string; label?: string; paired_at: number }> = [];
+    for (const [k, v] of list) {
+      const r = v as PhoneRecord;
+      phones.push({ phone_id: k.slice('phone:'.length), label: r.label, paired_at: r.paired_at });
+    }
+    return Response.json({ phones });
+  }
+
+  /**
+   * CSO #8: phone "forget pairing" path. Authenticated by the phone's own
+   * bearer (not device_secret). Lets the user delete their phone record
+   * from the relay when they uninstall / forget pairing in the app, without
+   * needing the laptop's device_secret.
+   */
+  private async handlePhoneSelfRevoke(request: Request): Promise<Response> {
+    const url = new URL(request.url);
+    const phone_id = url.searchParams.get('phone_id');
+    if (!phone_id) return new Response('phone_id required', { status: 400 });
+    const token = extractBearer(request);
+    if (!token) return new Response('missing bearer', { status: 401 });
+    const rec = await this.state.storage.get<PhoneRecord>(`phone:${phone_id}`);
+    if (!rec) return new Response(null, { status: 204 });
+    let ok = false;
+    if (rec.secret_hash) ok = timingSafeEqual(await sha256Hex(token), rec.secret_hash);
+    else if (rec.secret) ok = timingSafeEqual(token, rec.secret);
+    if (!ok) return new Response('forbidden', { status: 403 });
+    await this.state.storage.delete(`phone:${phone_id}`);
+    return Response.json({ ok: true });
+  }
+
+  /**
+   * CSO #8: revoke a phone. Closes any active session WS owned by the phone
+   * before deleting the storage record.
+   */
+  private async handleRevokePhone(request: Request): Promise<Response> {
+    const token = extractBearer(request);
+    if (!token || !(await this.checkDeviceSecret(token))) {
+      return new Response('forbidden', { status: 403 });
+    }
+    const url = new URL(request.url);
+    const phone_id = url.searchParams.get('phone_id');
+    if (!phone_id) return new Response('phone_id required', { status: 400 });
+    const rec = await this.state.storage.get<PhoneRecord>(`phone:${phone_id}`);
+    if (!rec) return new Response(null, { status: 204 });
+    await this.state.storage.delete(`phone:${phone_id}`);
+    // Close every session WS — we don't track per-phone session ids server-side,
+    // so close all session WSes; the legitimate phone with a different id is
+    // unaffected because its bearer still validates.
+    for (const ws of this.state.getWebSockets()) {
+      const tags = this.state.getTags(ws);
+      if (tags.some((t) => t.startsWith('session:'))) {
+        try {
+          ws.close(4003, 'phone revoked');
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+    return Response.json({ ok: true });
   }
 
   // ─── WebSocket message routing (Hibernation API) ────────────────────────

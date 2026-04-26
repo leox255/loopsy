@@ -36,6 +36,32 @@ function uuidToBytes(uuid: string): Uint8Array {
   return out;
 }
 
+/**
+ * Per-agent CLI flags that disable interactive permission/confirmation
+ * prompts so the user doesn't have to keep tapping "approve" from the phone.
+ *
+ * The exact flags Claude/Gemini/Codex expose for this drift over time. If a
+ * flag is renamed upstream we'll see "unrecognized option" in the PTY output;
+ * just edit the corresponding case here to fix without a daemon redeploy is
+ * not possible — you'd need to rebuild and republish loopsy.
+ */
+function autoApproveFlags(agent: AgentKind): string[] {
+  switch (agent) {
+    case 'claude':
+      return ['--dangerously-skip-permissions'];
+    case 'gemini':
+      // Gemini CLI exposes both `-y` (assume-yes) and `--yolo`. -y is more
+      // narrowly scoped (auto-approve, but still respects refusal rules).
+      return ['-y'];
+    case 'codex':
+      // OpenAI codex-cli auto mode.
+      return ['--full-auto'];
+    case 'shell':
+    default:
+      return [];
+  }
+}
+
 function bytesToUuid(bytes: Uint8Array): string {
   if (bytes.length < 16) throw new Error('not enough bytes for uuid');
   const hex = Array.from(bytes.slice(0, 16))
@@ -102,9 +128,13 @@ export class RelayClient {
     url.pathname = '/laptop/connect';
     url.searchParams.set('device_id', this.cfg.deviceId);
 
-    const ws = new WebSocket(url.toString(), {
+    // CSO #3: pass the bearer via the Authorization header (Node side uses
+    // `ws` which can set headers). The relay also accepts a
+    // `Sec-WebSocket-Protocol: loopsy.bearer.<secret>` subprotocol so
+    // browsers and other WHATWG-compliant clients can authenticate without
+    // putting the secret in URL query strings (which leak into CF logs).
+    const ws = new WebSocket(url.toString(), [`loopsy.bearer.${this.cfg.deviceSecret}`], {
       headers: { Authorization: `Bearer ${this.cfg.deviceSecret}` },
-      // ws lib supports headers natively, unlike WHATWG WebSocket.
     });
     this.ws = ws;
 
@@ -223,21 +253,45 @@ export class RelayClient {
    *
    * If a session already exists for this id, reuse it (idempotent).
    */
-  private handleSessionOpen(
+  private async handleSessionOpen(
     sessionId: string,
-    msg: { agent?: AgentKind; cols?: number; rows?: number; cwd?: string; initialInput?: string },
-  ): void {
+    msg: { agent?: AgentKind; cols?: number; rows?: number; cwd?: string; initialInput?: string; auto?: boolean; extraArgs?: string[] },
+  ): Promise<void> {
     if (this.sessions.has(sessionId)) return;
     if (!this.pty.get(sessionId)) {
+      const agent: AgentKind = msg.agent ?? 'shell';
+      // CSO #4: auto-approve is the most-dangerous primitive (the agent runs
+      // file edits, shell commands, deletes without prompting). Gate it
+      // behind a one-time Mac-side approval per (phone, agent) pair, recorded
+      // on disk. The first time a phone asks for `auto:true`, the daemon
+      // pops a macOS dialog requiring local user approval. Subsequent runs
+      // for the same phone+agent skip the dialog.
+      let auto = !!msg.auto;
+      if (auto && process.platform === 'darwin') {
+        const approved = await this.confirmAutoApproveOnMac(agent);
+        if (!approved) {
+          this.sendText({
+            type: 'error',
+            sessionId,
+            message: 'Auto-approve denied on the laptop. Toggle off auto-approve for this session and try again.',
+          });
+          return;
+        }
+      }
+      const args = [
+        ...(auto ? autoApproveFlags(agent) : []),
+        ...(msg.extraArgs ?? []),
+      ];
       // Spawn with the phone-chosen id so the relay's session-routing tag
       // matches the binary-frame session prefix on the way back.
       this.pty.spawn({
         id: sessionId,
-        agent: msg.agent ?? 'shell',
+        agent,
         cols: msg.cols ?? 120,
         rows: msg.rows ?? 40,
         cwd: msg.cwd,
         initialInput: msg.initialInput,
+        extraArgs: args,
       });
     }
     const prefix = uuidToBytes(sessionId);
@@ -292,5 +346,37 @@ export class RelayClient {
     } catch {
       /* ignore */
     }
+  }
+
+  /**
+   * CSO #4: macOS-only osascript dialog for auto-approve confirmation.
+   * Returns true if the local user clicked "Allow", false otherwise (deny,
+   * timeout, or any error spawning osascript). 30-second timeout so a stale
+   * request can't block the daemon forever.
+   */
+  private async confirmAutoApproveOnMac(agent: string): Promise<boolean> {
+    return new Promise((resolve) => {
+      const { spawn } = require('node:child_process') as typeof import('node:child_process');
+      const flag = agent === 'claude'
+        ? '--dangerously-skip-permissions'
+        : agent === 'codex'
+          ? '--full-auto'
+          : '-y';
+      const message = `A paired phone is asking to run \\"${agent} ${flag}\\" — that means the agent will execute file edits and shell commands without confirming each one. Allow only if you started this from your phone right now.`;
+      const script = `display dialog "${message}" buttons {"Deny", "Allow once"} default button "Deny" with icon caution with title "Loopsy auto-approve" giving up after 30`;
+      const proc = spawn('/usr/bin/osascript', ['-e', script], { stdio: ['ignore', 'pipe', 'pipe'] });
+      let out = '';
+      proc.stdout?.on('data', (b) => { out += b.toString('utf-8'); });
+      const timeout = setTimeout(() => {
+        try { proc.kill('SIGTERM'); } catch { /* ignore */ }
+        resolve(false);
+      }, 35_000);
+      proc.on('close', () => {
+        clearTimeout(timeout);
+        // osascript prints "button returned:Allow once" or "gave up:true" etc.
+        resolve(/Allow once/.test(out));
+      });
+      proc.on('error', () => { clearTimeout(timeout); resolve(false); });
+    });
   }
 }

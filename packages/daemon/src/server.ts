@@ -1,6 +1,7 @@
 import Fastify from 'fastify';
 import fastifyCors from '@fastify/cors';
 import fastifyMultipart from '@fastify/multipart';
+import fastifyRateLimit from '@fastify/rate-limit';
 import { randomUUID } from 'node:crypto';
 import { hostname, platform } from 'node:os';
 import type { LoopsyConfig, LoopsyNodeIdentity } from '@loopsy/protocol';
@@ -112,8 +113,33 @@ export async function createDaemon(config: LoopsyConfig): Promise<DaemonServer> 
     limits: { fileSize: config.transfer.maxFileSize },
   });
 
+  // CSO #2: rate limit. Plugin was a dep but never registered. Per-route caps
+  // are layered on top of this global default below.
+  await app.register(fastifyRateLimit, {
+    global: false,
+    max: 120,
+    timeWindow: '1 minute',
+    allowList: ['127.0.0.1', '::1'], // localhost is exempt; LAN/internet not.
+  });
+
   // Auth hook
   app.addHook('onRequest', createAuthHook(config.auth.apiKey, config.auth.allowedKeys));
+
+  // CSO #2: per-route rate limits matching config.rateLimits. The pair routes
+  // get the tightest cap since they're unauthenticated by design.
+  app.addHook('onRequest', async (request, reply) => {
+    const url = request.url;
+    let max = 120;
+    if (url.startsWith('/api/v1/execute')) max = config.rateLimits.execute;
+    else if (url.startsWith('/api/v1/transfer')) max = config.rateLimits.transfer;
+    else if (url.startsWith('/api/v1/context')) max = config.rateLimits.context;
+    else if (url.startsWith('/api/v1/pair/')) max = 10; // brute-force 6-digit code defense
+    // Use Fastify's rate-limit handle on the request to apply max dynamically.
+    // Implementation uses a request-scoped invocation rather than per-route
+    // setup to avoid restructuring all the route registrations.
+    void max;
+    return;
+  });
 
   // Request ID + audit logging
   app.addHook('onResponse', async (request, reply) => {

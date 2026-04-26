@@ -64,23 +64,72 @@ export default {
     }
 
     if (url.pathname === '/app' || url.pathname === '/app/') {
-      return new Response(WEB_CLIENT_HTML, {
+      // CSO #16: per-request nonce-based CSP. Drops `'unsafe-inline'` for
+      // scripts. Inline `<script>` tag in the body inherits this nonce, so
+      // any future XSS payload that tries to inject a script without the
+      // matching nonce is rejected.
+      const nonce = base64urlEncode(crypto.getRandomValues(new Uint8Array(16)));
+      const html = WEB_CLIENT_HTML.replace(/__CSP_NONCE__/g, nonce);
+      return new Response(html, {
         headers: {
           'content-type': 'text/html; charset=utf-8',
           'cache-control': 'no-cache',
-          // Allow xterm CSS+JS and the WSS we'll open back to ourselves.
+          // CSO #12 / #16: tighter CSP. Inline scripts only via nonce; styles
+          // still need 'unsafe-inline' because xterm.css ships with inline
+          // <style> emit at runtime — that one we accept. WSS connect is
+          // narrowed to the relay's own host (not `wss:` wildcard) so XSS
+          // can't ship secrets to an attacker-controlled WS.
           'content-security-policy': [
             "default-src 'self'",
-            "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net",
+            `script-src 'self' 'nonce-${nonce}' https://cdn.jsdelivr.net`,
             "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net",
-            "connect-src 'self' wss: https://cdn.jsdelivr.net",
+            `connect-src 'self' wss://${url.host} https://cdn.jsdelivr.net`,
             "img-src 'self' data:",
+            "frame-ancestors 'none'",
+            "base-uri 'self'",
+            "form-action 'self'",
           ].join('; '),
+          'x-content-type-options': 'nosniff',
+          'referrer-policy': 'strict-origin-when-cross-origin',
+          'strict-transport-security': 'max-age=15552000; includeSubDomains',
         },
       });
     }
 
     if (url.pathname === '/device/register' && request.method === 'POST') {
+      // CSO #9: optional registration secret. When the relay operator sets
+      // REGISTRATION_SECRET via wrangler, callers must include it. Without
+      // the secret set, registration is open (legacy behavior); with it set,
+      // accidental abuse from internet scanners is blocked.
+      if (env.REGISTRATION_SECRET) {
+        const offered = request.headers.get('X-Registration-Secret');
+        if (!offered || offered !== env.REGISTRATION_SECRET) {
+          return new Response('registration disabled', { status: 403 });
+        }
+      }
+      // CSO #9: cheap per-IP rate limit using the Worker's per-isolate Cache.
+      // Real production setups should add CF Rate Limiting at the dashboard
+      // level too — this is just a backstop.
+      const ip = request.headers.get('cf-connecting-ip') ?? 'unknown';
+      const cacheKey = new Request(`https://rl/${encodeURIComponent(ip)}`);
+      const cache = caches.default;
+      const cached = await cache.match(cacheKey);
+      if (cached) {
+        const count = parseInt((await cached.text()) || '0', 10) + 1;
+        if (count > 5) {
+          return new Response('too many registrations from this IP, slow down', { status: 429 });
+        }
+        await cache.put(
+          cacheKey,
+          new Response(String(count), { headers: { 'cache-control': 'max-age=60' } }),
+        );
+      } else {
+        await cache.put(
+          cacheKey,
+          new Response('1', { headers: { 'cache-control': 'max-age=60' } }),
+        );
+      }
+
       // Server-chosen device_id prevents anyone from squatting an ID.
       const device_id = generateUuid();
       const stub = deviceStub(env, device_id);
@@ -93,6 +142,42 @@ export default {
         device_id,
         device_secret,
         relay_url: `${url.protocol}//${url.host}`,
+      });
+    }
+
+    // CSO #8: phone self-revoke. Phone uses its own bearer (phone_secret) to
+    // delete its own record from the relay when the user "forgets pairing"
+    // in the Flutter app.
+    const selfRevokeMatch = /^\/device\/([^/]+)\/phones\/self$/.exec(url.pathname);
+    if (selfRevokeMatch && request.method === 'DELETE') {
+      const device_id = selfRevokeMatch[1];
+      const phone_id = url.searchParams.get('phone_id');
+      if (!phone_id) return new Response('phone_id required', { status: 400 });
+      const newUrl = new URL(request.url);
+      newUrl.searchParams.set('op', 'phone-self-revoke');
+      newUrl.searchParams.set('phone_id', phone_id);
+      return deviceStub(env, device_id).fetch(newUrl.toString(), {
+        method: 'POST',
+        headers: request.headers,
+      });
+    }
+
+    // CSO #8: phone list / revoke endpoints (laptop owner).
+    const phoneListMatch = /^\/device\/([^/]+)\/phones$/.exec(url.pathname);
+    if (phoneListMatch && request.method === 'GET') {
+      const device_id = phoneListMatch[1];
+      return forwardToDevice(env, device_id, 'list-phones', request);
+    }
+    const phoneRevokeMatch = /^\/device\/([^/]+)\/phones\/([^/]+)$/.exec(url.pathname);
+    if (phoneRevokeMatch && request.method === 'DELETE') {
+      const device_id = phoneRevokeMatch[1];
+      const phone_id = phoneRevokeMatch[2];
+      const newUrl = new URL(request.url);
+      newUrl.searchParams.set('phone_id', phone_id);
+      newUrl.searchParams.set('op', 'revoke-phone');
+      return deviceStub(env, device_id).fetch(newUrl.toString(), {
+        method: 'POST',
+        headers: request.headers,
       });
     }
 
@@ -133,19 +218,32 @@ export default {
       );
       const now = Math.floor(Date.now() / 1000);
       const nonce = base64urlEncode(crypto.getRandomValues(new Uint8Array(16)));
-      const payload: PairTokenPayload = { did: device_id, iat: now, exp: now + ttl, nonce };
+      // CSO #14: 4-digit SAS. Padded so it always renders as 4 chars.
+      const sasNum = (crypto.getRandomValues(new Uint32Array(1))[0] ?? 0) % 10000;
+      const sas = String(sasNum).padStart(4, '0');
+      const payload: PairTokenPayload = { did: device_id, iat: now, exp: now + ttl, nonce, sas };
       const tokenStr = await signPairToken(payload, env.PAIR_TOKEN_SECRET);
-      return Response.json({ token: tokenStr, expires_at: payload.exp });
+      return Response.json({ token: tokenStr, sas, expires_at: payload.exp });
     }
 
     if (url.pathname === '/pair/redeem' && request.method === 'POST') {
       if (!env.PAIR_TOKEN_SECRET) {
         return new Response('relay missing PAIR_TOKEN_SECRET', { status: 503 });
       }
-      const body = (await request.json().catch(() => ({}))) as { token?: string; label?: string };
+      const body = (await request.json().catch(() => ({}))) as { token?: string; sas?: string; label?: string };
       if (!body.token) return new Response('token required', { status: 400 });
       const payload = await verifyPairToken(body.token, env.PAIR_TOKEN_SECRET);
       if (!payload) return new Response('invalid or expired token', { status: 401 });
+
+      // CSO #14: SAS check. Tokens issued by /pair/issue carry a 4-digit SAS
+      // shown on the laptop. The phone must pass it back here. This defends
+      // against the redeem-race where a leaked QR (screenshot, OCR bot) lets
+      // an attacker pair before the legitimate user.
+      if (typeof payload.sas === 'string' && payload.sas.length > 0) {
+        if (!body.sas || body.sas !== payload.sas) {
+          return new Response('verification code mismatch', { status: 401 });
+        }
+      }
 
       // Forward to that device's DO to consume the nonce and mint a phone_secret.
       const stub = deviceStub(env, payload.did);

@@ -11,6 +11,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { execSync } from 'node:child_process';
 import * as pty from 'node-pty';
 
 export type AgentKind = 'shell' | 'claude' | 'gemini' | 'codex';
@@ -292,13 +293,34 @@ export class PtySessionManager {
     }
   }
 
+  /**
+   * CSO #15: resolve agent commands to absolute paths once, cached. Letting
+   * `node-pty` look up `claude` via `$PATH` at spawn time means an attacker
+   * who can influence the daemon's environment (env-injection in spawned
+   * children, shell rc tampering) can shadow the real binary. Resolving at
+   * startup with `command -v` pins the path to whatever was on disk when
+   * the daemon launched.
+   */
+  private static readonly _absPathCache = new Map<string, string>();
   private resolveCommand(agent: AgentKind, extraArgs: string[]): { command: string; args: string[] } {
     if (agent === 'shell') {
       const sh = process.env.SHELL || (process.platform === 'win32' ? 'pwsh.exe' : '/bin/sh');
       const loginArgs = process.platform === 'win32' ? extraArgs : ['-l', ...extraArgs];
       return { command: sh, args: loginArgs };
     }
-    // For claude/gemini/codex, let the OS resolve the binary via $PATH.
+    const cached = PtySessionManager._absPathCache.get(agent);
+    if (cached) return { command: cached, args: extraArgs };
+    try {
+      const which = process.platform === 'win32' ? 'where' : 'command -v';
+      const out = execSync(`${which} ${agent}`, { encoding: 'utf-8' }).trim().split('\n')[0];
+      if (out) {
+        PtySessionManager._absPathCache.set(agent, out);
+        return { command: out, args: extraArgs };
+      }
+    } catch {
+      // Binary not on PATH; node-pty.spawn will fail with a clear error and
+      // the relay client surfaces it back to the phone.
+    }
     return { command: agent, args: extraArgs };
   }
 }

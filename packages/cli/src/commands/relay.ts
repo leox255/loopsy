@@ -23,8 +23,20 @@ interface RegisterResponse {
   relay_url: string;
 }
 
+interface PhoneRecord {
+  phone_id: string;
+  label?: string;
+  paired_at: number;
+}
+
+interface PhonesResponse {
+  phones: PhoneRecord[];
+}
+
 interface PairTokenResponse {
   token: string;
+  /** CSO #14: 4-digit verification code shown on the laptop, entered on the phone. */
+  sas?: string;
   expires_at: number;
 }
 
@@ -134,6 +146,16 @@ export async function mobilePairCommand(argv: { ttl?: number }): Promise<void> {
   const innerPair = `loopsy://pair?u=${encodeURIComponent(config.relay.url)}&t=${encodeURIComponent(data.token)}`;
   const webUrl = `${config.relay.url}/app#${encodeURIComponent(innerPair)}`;
   console.log('');
+  if (data.sas) {
+    // CSO #14: SAS displayed PROMINENTLY so the user reads it from the laptop
+    // and types it on the phone. Defends against the redeem-race where a
+    // leaked QR alone (screenshot, OCR) would otherwise let an attacker pair.
+    console.log(`  ┌─────────────────────────────────────────┐`);
+    console.log(`  │  Verification code:   \x1b[1m${data.sas}\x1b[0m              │`);
+    console.log(`  │  Enter this on your phone after scan.   │`);
+    console.log(`  └─────────────────────────────────────────┘`);
+    console.log('');
+  }
   console.log('Scan this QR with your phone camera to pair (opens in browser):');
   console.log('');
   qrcode.generate(webUrl, { small: true }, (q: string) => console.log(q));
@@ -142,4 +164,58 @@ export async function mobilePairCommand(argv: { ttl?: number }): Promise<void> {
   console.log(`  ${webUrl}`);
   console.log('');
   console.log(`Token expires in ${expiresIn}s. Single use.`);
+}
+
+/** CSO #8: list phones currently paired to this device. */
+export async function phoneListCommand(): Promise<void> {
+  const { config } = await loadConfig();
+  if (!config.relay) {
+    console.error('No relay configured. Run "loopsy relay configure <url>" first.');
+    process.exitCode = 1;
+    return;
+  }
+  const url = `${config.relay.url}/device/${encodeURIComponent(config.relay.deviceId)}/phones`;
+  const res = await fetch(url, {
+    method: 'GET',
+    headers: { Authorization: `Bearer ${config.relay.deviceSecret}` },
+  });
+  if (!res.ok) {
+    console.error(`Failed: ${res.status} ${await res.text().catch(() => '')}`);
+    process.exitCode = 1;
+    return;
+  }
+  const data = (await res.json()) as PhonesResponse;
+  if (data.phones.length === 0) {
+    console.log('No phones paired.');
+    return;
+  }
+  console.log('');
+  console.log('Phones paired with this device:');
+  for (const p of data.phones) {
+    const date = new Date(p.paired_at).toISOString().slice(0, 19).replace('T', ' ');
+    console.log(`  ${p.phone_id}  paired ${date}  ${p.label ?? ''}`);
+  }
+  console.log('');
+  console.log('Revoke with: loopsy phone revoke <phone_id>');
+}
+
+/** CSO #8: revoke a paired phone. */
+export async function phoneRevokeCommand(argv: { phoneId: string }): Promise<void> {
+  const { config } = await loadConfig();
+  if (!config.relay) {
+    console.error('No relay configured.');
+    process.exitCode = 1;
+    return;
+  }
+  const url = `${config.relay.url}/device/${encodeURIComponent(config.relay.deviceId)}/phones/${encodeURIComponent(argv.phoneId)}`;
+  const res = await fetch(url, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${config.relay.deviceSecret}` },
+  });
+  if (!res.ok && res.status !== 204) {
+    console.error(`Failed: ${res.status} ${await res.text().catch(() => '')}`);
+    process.exitCode = 1;
+    return;
+  }
+  console.log(`Revoked phone ${argv.phoneId}. Any active session WS for that phone is closed.`);
 }

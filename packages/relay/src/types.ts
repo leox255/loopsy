@@ -9,6 +9,18 @@ export interface Env {
   DEVICE: DurableObjectNamespace;
   /** Secret used to sign pair tokens (HMAC-SHA-256). Set via `wrangler secret put PAIR_TOKEN_SECRET`. */
   PAIR_TOKEN_SECRET: string;
+  /**
+   * Optional comma-separated origin allowlist (CSO #13). E.g.
+   * `https://loopsy.dev,https://app.example.com`. Browser hits to `/app` on
+   * the relay's own host are always allowed; native apps send no Origin.
+   */
+  ALLOWED_ORIGINS?: string;
+  /**
+   * Optional registration secret (CSO #9). When set, `/device/register`
+   * requires the caller to send `X-Registration-Secret: <value>`. Set with
+   * `wrangler secret put REGISTRATION_SECRET`.
+   */
+  REGISTRATION_SECRET?: string;
 }
 
 /** Logical role of a connected WebSocket attached to a DeviceObject. */
@@ -42,4 +54,11 @@ export interface PairTokenPayload {
   exp: number;
   /** random nonce so two tokens for the same device differ */
   nonce: string;
+  /**
+   * CSO #14: short authentication string (SAS), 4 digits. Displayed on the
+   * laptop next to the QR. The phone must transmit it back during redeem so
+   * a leaked QR alone (e.g. screenshotted into a chat) can't be redeemed by
+   * an attacker who didn't see the laptop's screen.
+   */
+  sas: string;
 }

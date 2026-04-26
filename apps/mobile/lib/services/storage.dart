@@ -55,4 +55,11 @@ class Storage {
       value: jsonEncode(sessions.map((s) => s.toJson()).toList()),
     );
   }
+
+  /// Update a single session by id. No-op if not found.
+  static Future<void> updateSession(String id, SessionMeta Function(SessionMeta) mut) async {
+    final list = await readSessions();
+    final next = list.map((s) => s.id == id ? mut(s) : s).toList();
+    await writeSessions(next);
+  }
 }

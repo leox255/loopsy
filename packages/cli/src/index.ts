@@ -32,6 +32,8 @@ import {
   relayShowCommand,
   relayUnsetCommand,
   mobilePairCommand,
+  phoneListCommand,
+  phoneRevokeCommand,
 } from './commands/relay.js';
 
 yargs(hideBin(process.argv))
@@ -222,6 +224,22 @@ yargs(hideBin(process.argv))
           'Issue a pair token + render QR for the mobile app to scan',
           { ttl: { type: 'number', default: 300, describe: 'Token TTL in seconds (60-1800)' } },
           mobilePairCommand,
+        )
+        .demandCommand(1),
+    () => {},
+  )
+  // CSO #8: phone management commands.
+  .command(
+    'phone',
+    'Manage phones paired to this device via the relay',
+    (yargs) =>
+      yargs
+        .command('list', 'List paired phones', {}, phoneListCommand)
+        .command(
+          'revoke <phoneId>',
+          'Revoke a paired phone (closes any active session)',
+          { phoneId: { type: 'string', demandOption: true } },
+          phoneRevokeCommand,
         )
         .demandCommand(1),
     () => {},

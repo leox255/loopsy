@@ -44,6 +44,7 @@ dependencies:
   permission_handler: ^12.0.1       # Runtime permission prompts
   http: ^1.4.0                      # Pair token redeem
   go_router: ^16.0.0                # Declarative routing
+  hugeicons: ^0.0.11                # HugeIcons icon set
 
 dev_dependencies:
   flutter_test:
@@ -55,6 +56,26 @@ dev_dependencies:
   # package. See that file for information about deactivating specific lint
   # rules and activating additional ones.
   flutter_lints: ^6.0.0
+  flutter_launcher_icons: ^0.14.4   # Generates iOS/Android launcher icons from a PNG
+
+# Local xterm fork: upstream 4.0.0's SGR parser leaves the underline cell-flag
+# set after some control sequences (notably anything that drives Claude Code /
+# zsh's TUI), causing every glyph to render underlined on iOS. Patched in
+# third_party/xterm/lib/src/ui/painter.dart to never apply the per-cell
+# underline. Drop this override once we move to an upstream version that
+# fixes the parser.
+dependency_overrides:
+  xterm:
+    path: third_party/xterm
+
+flutter_launcher_icons:
+  image_path: "assets/branding/icon.png"
+  ios: true
+  android: "launcher_icon"
+  remove_alpha_ios: true
+  min_sdk_android: 23
+  adaptive_icon_background: "#3954c4"
+  adaptive_icon_foreground: "assets/branding/icon.png"
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
@@ -66,6 +87,16 @@ flutter:
   # included with your application, so that you can use the icons in
   # the material Icons class.
   uses-material-design: true
+
+  assets:
+    - assets/branding/icon.png
+
+  fonts:
+    - family: JetBrainsMono
+      fonts:
+        - asset: assets/fonts/JetBrainsMono-Regular.ttf
+        - asset: assets/fonts/JetBrainsMono-Bold.ttf
+          weight: 700
 
   # To add assets to your application, add an assets section, like this:
   # assets:

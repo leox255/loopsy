@@ -10,7 +10,11 @@ const DEFAULT_DATA_DIR = join(homedir(), CONFIG_DIR);
 
 export function defaultConfig(): LoopsyConfig {
   return {
-    server: { port: DEFAULT_PORT, host: '0.0.0.0' },
+    // CSO #5: bind to localhost by default. Anyone who genuinely wants LAN
+    // access opts in by setting `server.host: 0.0.0.0` in config.yaml. The
+    // dashboard at /dashboard/* is unauthenticated by design (#5), so binding
+    // wide-open exposed it to every device on the LAN.
+    server: { port: DEFAULT_PORT, host: '127.0.0.1' },
     auth: {
       apiKey: randomBytes(32).toString('hex'),
       allowedKeys: {},

@@ -22,9 +22,29 @@ export function timingSafeEqual(a: string, b: string): boolean {
 }
 
 /**
- * Extract the Bearer token from the Authorization header, or — as a fallback
- * for browsers (which can't set WebSocket request headers) — from the
- * `?token=…` query parameter. Returns null if neither is present.
+ * SHA-256 of a UTF-8 string, hex-encoded. Used to store secrets at rest in
+ * Durable Object storage (CSO #7) so a CF dashboard / wrangler-tail leak
+ * cannot directly impersonate paired phones/devices — an attacker would also
+ * need to brute-force the hash.
+ */
+export async function sha256Hex(s: string): Promise<string> {
+  const buf = new TextEncoder().encode(s);
+  const hash = await crypto.subtle.digest('SHA-256', buf);
+  let out = '';
+  for (const b of new Uint8Array(hash)) out += b.toString(16).padStart(2, '0');
+  return out;
+}
+
+/**
+ * Extract the Bearer token from the request. Order:
+ *   1. `Authorization: Bearer <token>` header (default; daemons + native apps).
+ *   2. `Sec-WebSocket-Protocol: loopsy.bearer.<token>` subprotocol — browsers
+ *      can set this on `new WebSocket(url, protocols)` and it's NOT logged in
+ *      Cloudflare's URL/query-string log paths (CSO #3 mitigation).
+ *   3. Legacy `?token=…` query param — kept for backwards compatibility with
+ *      already-paired phones, but the daemon-side relay client and the
+ *      Flutter/web clients have been updated to use (1) or (2).
+ *      Documented as deprecated in NOTES; remove in v2.
  */
 export function extractBearer(request: Request): string | null {
   const h = request.headers.get('Authorization') ?? request.headers.get('authorization');
@@ -32,9 +52,53 @@ export function extractBearer(request: Request): string | null {
     const m = /^Bearer\s+(.+)$/.exec(h);
     if (m) return m[1].trim();
   }
+  // Sec-WebSocket-Protocol can carry comma-separated subprotocols. We accept
+  // any token of the form `loopsy.bearer.<bearer>`; the server should echo
+  // the same subprotocol back in the WS upgrade response (handled in DO).
+  const subproto = request.headers.get('Sec-WebSocket-Protocol') ?? request.headers.get('sec-websocket-protocol');
+  if (subproto) {
+    for (const part of subproto.split(',')) {
+      const trimmed = part.trim();
+      if (trimmed.startsWith('loopsy.bearer.')) return trimmed.slice('loopsy.bearer.'.length);
+    }
+  }
   const url = new URL(request.url);
   const t = url.searchParams.get('token');
   return t ?? null;
+}
+
+/**
+ * If the client offered a bearer subprotocol, return the exact protocol
+ * string so the server can echo it on the upgrade response — required by
+ * the WebSocket spec when the client sent any subprotocols.
+ */
+export function bearerSubprotocol(request: Request): string | undefined {
+  const subproto = request.headers.get('Sec-WebSocket-Protocol') ?? request.headers.get('sec-websocket-protocol');
+  if (!subproto) return undefined;
+  for (const part of subproto.split(',')) {
+    const trimmed = part.trim();
+    if (trimmed.startsWith('loopsy.bearer.')) return trimmed;
+  }
+  return undefined;
+}
+
+/**
+ * Same-origin / origin-allowlist check for WS upgrades (CSO #13). We accept:
+ *   - missing Origin (native apps don't send one)
+ *   - the relay's own host (browser hits to /app)
+ *   - any explicit allowlist entries (via env var ALLOWED_ORIGINS, comma sep)
+ */
+export function isOriginAllowed(request: Request, allowList: string | undefined): boolean {
+  const origin = request.headers.get('Origin') ?? request.headers.get('origin');
+  if (!origin || origin === 'null') return true; // native apps, file://, etc.
+  const url = new URL(request.url);
+  if (origin === `${url.protocol}//${url.host}`) return true;
+  if (allowList) {
+    for (const allowed of allowList.split(',').map((s) => s.trim()).filter(Boolean)) {
+      if (origin === allowed) return true;
+    }
+  }
+  return false;
 }
 
 /** Generate a random secret suitable for bearer auth (32 bytes, base64url). */

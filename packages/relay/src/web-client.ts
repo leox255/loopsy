@@ -190,9 +190,13 @@ export const WEB_CLIENT_HTML = /* html */ `<!doctype html>
     </div>
   </div>
 
-  <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
-  <script>
+  <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"
+          integrity="sha384-xjfWUeCWdMtvpAb/SmM6lMzS6pQGcQa0loOl1d97j6Odw0vjK9nW3+dTb/bn/mwH"
+          crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"
+          integrity="sha384-dpjGwSSISUTz2taP54Bor7qkyMR20sSO9oe11UVYnGs2/YdUBf7HW30XKQx9PCzn"
+          crossorigin="anonymous"></script>
+  <script nonce="__CSP_NONCE__">
     'use strict';
     if (!window.Terminal || !window.FitAddon) {
       document.body.insertAdjacentHTML('afterbegin',
@@ -275,11 +279,15 @@ export const WEB_CLIENT_HTML = /* html */ `<!doctype html>
     }
 
     async function redeem(parsed) {
+      // CSO #14: always prompt for the 4-digit verification code shown on the
+      // laptop. Without it the relay rejects the redeem.
+      const sas = window.prompt('Enter the 4-digit code shown on your laptop:') || '';
+      if (!sas) throw new Error('Verification code required');
       setStatus('redeeming...');
       const r = await fetch(parsed.relayUrl + '/pair/redeem', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ token: parsed.token, label: navigator.userAgent.slice(0, 80) }),
+        body: JSON.stringify({ token: parsed.token, sas: sas.trim(), label: navigator.userAgent.slice(0, 80) }),
       });
       if (!r.ok) {
         const txt = await r.text();
@@ -425,12 +433,14 @@ export const WEB_CLIENT_HTML = /* html */ `<!doctype html>
     }
 
     function attachSession(id, agent, fresh) {
+      // CSO #3: never put the bearer in the URL. Browsers can pass
+      // subprotocols, which travel in the Sec-WebSocket-Protocol header and
+      // are NOT logged in CF Worker URL/query-string log paths.
       const wsUrl = pairing.relayUrl.replace(/^http/, 'ws')
         + '/phone/connect/' + pairing.deviceId
         + '?phone_id=' + encodeURIComponent(pairing.phoneId)
-        + '&session_id=' + id
-        + '&token=' + encodeURIComponent(pairing.phoneSecret);
-      const ws = new WebSocket(wsUrl);
+        + '&session_id=' + id;
+      const ws = new WebSocket(wsUrl, ['loopsy.bearer.' + pairing.phoneSecret]);
       ws.binaryType = 'arraybuffer';
       const s = { agent, ws, lastSeen: Date.now() };
       sessions.set(id, s);

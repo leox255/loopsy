@@ -3,3 +3,27 @@ dist/
 package-dist/
 *.tgz
 .DS_Store
+
+# CSO #20: gstack security reports + session state shouldn't be committed —
+# they may include URLs, paths, and internal architecture details.
+.gstack/
+
+# CSO #21: stale fixtures and one-off tooling crumbs.
+test-from-kai.txt
+test-transfer.txt
+.pnpm-buildAllowList
+
+# Backup files left by daemon config rewrites and editors.
+*.bak
+*.swp
+*~
+
+# Flutter / Xcode build artifacts (apps/mobile)
+apps/mobile/.dart_tool/
+apps/mobile/build/
+apps/mobile/.flutter-plugins
+apps/mobile/.flutter-plugins-dependencies
+apps/mobile/ios/Pods/
+apps/mobile/ios/.symlinks/
+apps/mobile/ios/Flutter/Flutter.framework/
+apps/mobile/ios/Flutter/Flutter.podspec
