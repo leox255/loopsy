@@ -1,6 +1,6 @@
 {
   "name": "@loopsy/deploy-relay",
-  "version": "1.0.0",
+  "version": "1.0.24",
   "description": "One-command Cloudflare Workers deploy for the Loopsy relay",
   "type": "module",
   "bin": {
