@@ -167,6 +167,25 @@ export interface LoopsyConfig {
     level: string;
     file?: string;
   };
+  /**
+   * Optional Cloudflare-relay registration so this daemon can serve mobile
+   * clients over the public internet. Populated by `loopsy relay configure`.
+   */
+  relay?: RelayConfig;
+}
+
+/** Loopsy relay configuration (mobile WAN access). */
+export interface RelayConfig {
+  /** Base URL of the relay deployment, e.g. https://loopsy-relay.example.workers.dev */
+  url: string;
+  /** Server-issued device ID used to address this laptop on the relay. */
+  deviceId: string;
+  /** Bearer secret the laptop authenticates with at /laptop/connect and /pair/issue. */
+  deviceSecret: string;
+  /** Default scrollback ring buffer size per session (bytes). */
+  scrollbackBytes?: number;
+  /** Idle timeout for sessions with no attached client (seconds). */
+  sessionIdleTimeoutSec?: number;
 }
 
 /** Running job info */

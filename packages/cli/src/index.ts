@@ -27,6 +27,12 @@ import { mcpAddCommand, mcpRemoveCommand, mcpStatusCommand } from './commands/mc
 import { pairCommand } from './commands/pair.js';
 import { doctorCommand } from './commands/doctor.js';
 import { updateCommand } from './commands/update.js';
+import {
+  relayConfigureCommand,
+  relayShowCommand,
+  relayUnsetCommand,
+  mobilePairCommand,
+} from './commands/relay.js';
 
 yargs(hideBin(process.argv))
   .scriptName('loopsy')
@@ -188,7 +194,39 @@ yargs(hideBin(process.argv))
   )
   .command('update', 'Update Loopsy to the latest version', {}, updateCommand)
   .command('doctor', 'Run health checks on your Loopsy installation', {}, doctorCommand)
+  .command(
+    'relay',
+    'Manage Cloudflare-relay registration for mobile WAN access',
+    (yargs) =>
+      yargs
+        .command(
+          'configure <url>',
+          'Register this device with the relay',
+          {
+            url: { type: 'string', demandOption: true, describe: 'Relay base URL (e.g. https://loopsy-relay.example.workers.dev)' },
+          },
+          relayConfigureCommand,
+        )
+        .command('show', 'Show current relay configuration', {}, relayShowCommand)
+        .command('unset', 'Remove relay configuration', {}, relayUnsetCommand)
+        .demandCommand(1),
+    () => {},
+  )
+  .command(
+    'mobile',
+    'Mobile-client commands',
+    (yargs) =>
+      yargs
+        .command(
+          'pair',
+          'Issue a pair token + render QR for the mobile app to scan',
+          { ttl: { type: 'number', default: 300, describe: 'Token TTL in seconds (60-1800)' } },
+          mobilePairCommand,
+        )
+        .demandCommand(1),
+    () => {},
+  )
   .demandCommand(1, 'You need at least one command')
   .help()
-  .version('1.0.21')
+  .version('1.0.22')
   .parse();

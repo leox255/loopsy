@@ -18,6 +18,8 @@ import { ContextStore } from './services/context-store.js';
 import { AuditLogger } from './services/audit-logger.js';
 import { AiTaskManager } from './services/ai-task-manager.js';
 import { TlsManager } from './services/tls-manager.js';
+import { PtySessionManager } from './services/pty-session-manager.js';
+import { RelayClient } from './services/relay-client.js';
 import { registerPairRoutes } from './routes/pair.js';
 import { mountDashboard } from './dashboard.js';
 
@@ -60,6 +62,26 @@ export async function createDaemon(config: LoopsyConfig): Promise<DaemonServer> 
     daemonPort: config.server.port,
     apiKey: config.auth.apiKey,
   });
+
+  // Optional outbound relay client for mobile WAN access. Activated when
+  // `loopsy relay configure` has populated config.relay.
+  const ptySessionManager = config.relay
+    ? new PtySessionManager({
+        scrollbackBytes: config.relay.scrollbackBytes,
+        idleTimeoutSec: config.relay.sessionIdleTimeoutSec,
+      })
+    : null;
+  const relayClient = config.relay && ptySessionManager
+    ? new RelayClient({
+        relay: config.relay,
+        pty: ptySessionManager,
+        logger: {
+          info: (msg, ctx) => app.log.info(ctx ?? {}, `[relay] ${msg}`),
+          warn: (msg, ctx) => app.log.warn(ctx ?? {}, `[relay] ${msg}`),
+          error: (msg, ctx) => app.log.error(ctx ?? {}, `[relay] ${msg}`),
+        },
+      })
+    : null;
 
   const auditLogger = new AuditLogger(dataDir);
   await auditLogger.init();
@@ -184,6 +206,7 @@ export async function createDaemon(config: LoopsyConfig): Promise<DaemonServer> 
 
       discovery?.start();
       healthChecker?.start();
+      relayClient?.start();
     },
 
     async stop() {
@@ -192,6 +215,8 @@ export async function createDaemon(config: LoopsyConfig): Promise<DaemonServer> 
       discovery?.stop();
       jobManager.killAll();
       aiTaskManager.cancelAll();
+      relayClient?.stop();
+      ptySessionManager?.shutdown();
       contextStore.stopExpiryCheck();
       await contextStore.save();
       await registry.save();

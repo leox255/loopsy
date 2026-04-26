@@ -1,0 +1,142 @@
+/**
+ * `loopsy relay` and `loopsy mobile pair` commands.
+ *
+ *   loopsy relay configure <url>   register this device with the relay,
+ *                                  store {url, deviceId, deviceSecret}
+ *                                  in ~/.loopsy/config.yaml
+ *   loopsy relay show              print current relay config (secret masked)
+ *   loopsy relay unset             remove relay config
+ *   loopsy mobile pair             fetch a one-time pair token + render QR
+ */
+
+import { readFile, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { homedir } from 'node:os';
+import { parse as parseYaml, stringify as toYaml } from 'yaml';
+import qrcode from 'qrcode-terminal';
+import { CONFIG_DIR, CONFIG_FILE } from '@loopsy/protocol';
+import type { LoopsyConfig, RelayConfig } from '@loopsy/protocol';
+
+interface RegisterResponse {
+  device_id: string;
+  device_secret: string;
+  relay_url: string;
+}
+
+interface PairTokenResponse {
+  token: string;
+  expires_at: number;
+}
+
+async function loadConfig(): Promise<{ config: LoopsyConfig; path: string }> {
+  const path = join(homedir(), CONFIG_DIR, CONFIG_FILE);
+  const raw = await readFile(path, 'utf-8');
+  return { config: parseYaml(raw) as LoopsyConfig, path };
+}
+
+async function saveConfig(config: LoopsyConfig, path: string): Promise<void> {
+  await writeFile(path, toYaml(config));
+}
+
+function maskSecret(s: string): string {
+  if (!s) return '';
+  if (s.length <= 8) return '****';
+  return `${s.slice(0, 4)}…${s.slice(-4)}`;
+}
+
+export async function relayConfigureCommand(argv: { url: string }): Promise<void> {
+  const url = argv.url.replace(/\/$/, '');
+  console.log(`Registering this device with the relay at ${url}...`);
+
+  const res = await fetch(`${url}/device/register`, { method: 'POST' });
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`Relay rejected register: ${res.status} ${body}`);
+  }
+  const data = (await res.json()) as RegisterResponse;
+
+  let configEntry: { config: LoopsyConfig; path: string };
+  try {
+    configEntry = await loadConfig();
+  } catch {
+    console.error('No config found at ~/.loopsy/config.yaml — run "loopsy init" first.');
+    process.exitCode = 1;
+    return;
+  }
+  const { config, path } = configEntry;
+  const relay: RelayConfig = {
+    url: data.relay_url,
+    deviceId: data.device_id,
+    deviceSecret: data.device_secret,
+  };
+  config.relay = { ...(config.relay ?? {}), ...relay };
+  await saveConfig(config, path);
+
+  console.log('');
+  console.log('Relay configured.');
+  console.log(`  url:           ${relay.url}`);
+  console.log(`  device_id:     ${relay.deviceId}`);
+  console.log(`  device_secret: ${maskSecret(relay.deviceSecret)}`);
+  console.log('');
+  console.log('Restart the daemon for the relay link to come up:');
+  console.log('  loopsy stop && loopsy start');
+}
+
+export async function relayShowCommand(): Promise<void> {
+  const { config } = await loadConfig();
+  if (!config.relay) {
+    console.log('No relay configured. Run "loopsy relay configure <url>".');
+    return;
+  }
+  console.log(`url:           ${config.relay.url}`);
+  console.log(`device_id:     ${config.relay.deviceId}`);
+  console.log(`device_secret: ${maskSecret(config.relay.deviceSecret)}`);
+}
+
+export async function relayUnsetCommand(): Promise<void> {
+  const { config, path } = await loadConfig();
+  if (!config.relay) {
+    console.log('No relay configured.');
+    return;
+  }
+  delete config.relay;
+  await saveConfig(config, path);
+  console.log('Relay configuration removed. Restart the daemon to apply.');
+}
+
+export async function mobilePairCommand(argv: { ttl?: number }): Promise<void> {
+  const { config } = await loadConfig();
+  if (!config.relay) {
+    console.error('No relay configured. Run "loopsy relay configure <url>" first.');
+    process.exitCode = 1;
+    return;
+  }
+  const ttl = Math.max(60, Math.min(argv.ttl ?? 300, 1800));
+  const url = `${config.relay.url}/pair/issue?device_id=${encodeURIComponent(config.relay.deviceId)}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${config.relay.deviceSecret}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({ ttl_seconds: ttl }),
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`Pair token request failed: ${res.status} ${body}`);
+  }
+  const data = (await res.json()) as PairTokenResponse;
+
+  const expiresIn = Math.max(0, data.expires_at - Math.floor(Date.now() / 1000));
+  // Encode for the phone app: a small URL with relay + token
+  const payload = `loopsy://pair?u=${encodeURIComponent(config.relay.url)}&t=${encodeURIComponent(data.token)}`;
+  console.log('');
+  console.log('Scan this QR with the Loopsy mobile app to pair:');
+  console.log('');
+  qrcode.generate(payload, { small: true }, (q: string) => console.log(q));
+  console.log('');
+  console.log(`(Or paste this URL into the app)`);
+  console.log(`  ${payload}`);
+  console.log('');
+  console.log(`Token expires in ${expiresIn}s. Single use.`);
+}
