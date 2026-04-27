@@ -122,6 +122,31 @@ export async function doctorCommand() {
     checks.push({ name: 'Service', status: 'warn', message: 'Not registered (daemon won\'t auto-start on login)', fix: 'loopsy enable' });
   }
 
+  // 7. GUI session alignment (macOS only)
+  if (os === 'darwin') {
+    try {
+      const consoleUser = execSync('stat -f%Su /dev/console', { encoding: 'utf-8', timeout: 2000 }).trim();
+      const daemonUser = execSync('whoami', { encoding: 'utf-8' }).trim();
+      const isRoot = daemonUser === 'root';
+      if (!consoleUser || consoleUser === 'root') {
+        checks.push({ name: 'GUI Session', status: 'warn', message: 'No console session active (headless or loginwindow)' });
+      } else if (consoleUser === daemonUser) {
+        checks.push({ name: 'GUI Session', status: 'pass', message: `Daemon user '${daemonUser}' matches console user` });
+      } else if (isRoot) {
+        checks.push({ name: 'GUI Session', status: 'pass', message: `Root daemon will route GUI commands to console user '${consoleUser}'` });
+      } else {
+        checks.push({
+          name: 'GUI Session',
+          status: 'warn',
+          message: `Daemon runs as '${daemonUser}' but console user is '${consoleUser}' — GUI commands need passwordless sudo to '${consoleUser}' or a root daemon`,
+          fix: `Reinstall daemon system-wide (sudo) or under '${consoleUser}'`,
+        });
+      }
+    } catch {
+      // stat/whoami unavailable — skip silently
+    }
+  }
+
   // Print results
   console.log('');
   console.log('Loopsy Health Check');

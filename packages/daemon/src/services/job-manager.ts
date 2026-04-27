@@ -1,7 +1,8 @@
-import { spawn, type ChildProcess } from 'node:child_process';
+import { type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import type { ExecuteParams, ExecuteResult, JobInfo } from '@loopsy/protocol';
 import { LoopsyError, LoopsyErrorCode, MAX_CONCURRENT_JOBS } from '@loopsy/protocol';
+import { launchManagedProcess } from './process-launcher.js';
 
 /** Env vars that block nested AI CLI execution — strip from child processes */
 const NESTING_BLOCK_VARS = ['CLAUDECODE', 'CLAUDE_CODE_ENTRY_POINT'];
@@ -41,12 +42,18 @@ export class JobManager {
     const startedAt = Date.now();
 
     return new Promise<ExecuteResult>((resolve, reject) => {
-      const proc = spawn(params.command, params.args ?? [], {
-        cwd: params.cwd,
-        env: buildCleanEnv(params.env),
-        shell: false,
-        timeout: params.timeout,
-      });
+      let proc: ChildProcess;
+      try {
+        ({ process: proc } = launchManagedProcess(params.command, params.args ?? [], {
+          cwd: params.cwd,
+          env: buildCleanEnv(params.env),
+          shell: false,
+          timeout: params.timeout,
+        }));
+      } catch (err) {
+        reject(err);
+        return;
+      }
 
       const info: JobInfo = {
         jobId,

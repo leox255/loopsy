@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { ExecuteParamsSchema, LoopsyError, LoopsyErrorCode } from '@loopsy/protocol';
 import type { JobManager } from '../services/job-manager.js';
 import { buildCleanEnv } from '../services/job-manager.js';
+import { launchManagedProcess } from '../services/process-launcher.js';
 
 export function registerExecuteRoutes(app: FastifyInstance, jobManager: JobManager) {
   app.post('/api/v1/execute', async (request, reply) => {
@@ -24,18 +25,28 @@ export function registerExecuteRoutes(app: FastifyInstance, jobManager: JobManag
       const params = ExecuteParamsSchema.parse(request.body);
       const fromNodeId = (request.headers['x-loopsy-node-id'] as string) ?? 'unknown';
 
+      // Spawn before writing SSE headers so a synchronous launcher error
+       // (e.g. EXEC_GUI_SESSION_UNAVAILABLE) can return a normal HTTP 400.
+      let proc;
+      try {
+        ({ process: proc } = launchManagedProcess(params.command, params.args ?? [], {
+          cwd: params.cwd,
+          env: buildCleanEnv(params.env),
+          shell: false,
+          timeout: params.timeout,
+        }));
+      } catch (err) {
+        if (err instanceof LoopsyError) {
+          reply.code(400);
+          return err.toJSON();
+        }
+        throw err;
+      }
+
       reply.raw.writeHead(200, {
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache',
         Connection: 'keep-alive',
-      });
-
-      const { spawn } = await import('node:child_process');
-      const proc = spawn(params.command, params.args ?? [], {
-        cwd: params.cwd,
-        env: buildCleanEnv(params.env),
-        shell: false,
-        timeout: params.timeout,
       });
 
       const jobId = `stream-${Date.now()}`;
