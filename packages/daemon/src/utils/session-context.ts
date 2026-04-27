@@ -1,4 +1,4 @@
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { platform, userInfo } from 'node:os';
 
 export interface SessionContext {
@@ -37,10 +37,11 @@ export function detectSessionContext(): SessionContext {
   let consoleUser: string | null = null;
   let consoleUid: number | null = null;
   try {
-    const raw = execSync('stat -f%Su /dev/console', { encoding: 'utf-8', timeout: 2000 }).trim();
+    // execFileSync (not execSync) so the OS-derived username is never shell-interpolated.
+    const raw = execFileSync('stat', ['-f%Su', '/dev/console'], { encoding: 'utf-8', timeout: 2000 }).trim();
     if (raw && raw !== 'root') {
       consoleUser = raw;
-      const uidRaw = execSync(`id -u ${raw}`, { encoding: 'utf-8', timeout: 2000 }).trim();
+      const uidRaw = execFileSync('id', ['-u', raw], { encoding: 'utf-8', timeout: 2000 }).trim();
       const parsed = Number.parseInt(uidRaw, 10);
       if (Number.isFinite(parsed)) consoleUid = parsed;
     }
