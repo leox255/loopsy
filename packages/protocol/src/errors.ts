@@ -19,6 +19,7 @@ export enum LoopsyErrorCode {
   EXEC_FAILED = 3004,
   EXEC_CANCELLED = 3005,
   EXEC_JOB_NOT_FOUND = 3006,
+  EXEC_GUI_SESSION_UNAVAILABLE = 3010,
 
   // 4xxx - Transfer errors
   TRANSFER_PATH_DENIED = 4001,
