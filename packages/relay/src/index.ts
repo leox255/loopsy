@@ -220,7 +220,10 @@ export default {
       const token = extractBearer(request);
       if (!token) return new Response('missing bearer', { status: 401 });
 
-      // Verify device_secret via the DO before signing a token.
+      // Verify device_secret via the DO before signing a token. The DO also
+      // reports whether the laptop daemon's WebSocket is currently attached
+      // — if it isn't, fail the pair-issue immediately so the user knows to
+      // restart their daemon instead of pairing into a disconnected device.
       const verifyUrl = new URL(request.url);
       verifyUrl.searchParams.set('op', 'verify-device-secret');
       const verify = await deviceStub(env, device_id).fetch(verifyUrl.toString(), {
@@ -228,6 +231,17 @@ export default {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (!verify.ok) return new Response('forbidden', { status: 403 });
+      try {
+        const v = (await verify.json()) as { ok?: boolean; online?: boolean };
+        if (v.online === false) {
+          return new Response(
+            'Daemon not connected to relay. Restart it on your laptop: `loopsy stop && loopsy start`',
+            { status: 503 },
+          );
+        }
+      } catch {
+        // Older DOs returned plain "ok" text; treat as online for backwards compat.
+      }
 
       let body: { ttl_seconds?: number } = {};
       try {

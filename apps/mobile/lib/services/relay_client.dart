@@ -37,7 +37,20 @@ Future<Pairing> redeemPairToken(ParsedPair parsed, {String? label, String? sas})
     }),
   );
   if (res.statusCode != 200) {
-    throw Exception('Pair failed: ${res.statusCode} ${res.body}');
+    // Status-aware messages so the UI shows something the user can act on
+    // instead of a raw "Pair failed: 401 …".
+    String msg;
+    switch (res.statusCode) {
+      case 401:
+        msg = 'Wrong code, expired token, or token already used.';
+        break;
+      case 403:
+        msg = 'Forbidden — relay rejected this pair.';
+        break;
+      default:
+        msg = 'Pair failed (${res.statusCode})${res.body.isNotEmpty ? ' — ${res.body}' : ''}';
+    }
+    throw Exception(msg);
   }
   final j = jsonDecode(res.body) as Map<String, dynamic>;
   return Pairing(

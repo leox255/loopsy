@@ -15,6 +15,7 @@
  * and forwards PTY output back to the relay tagged by sessionId.
  */
 
+import { spawn } from 'node:child_process';
 import WebSocket from 'ws';
 import type { RelayConfig } from '@loopsy/protocol';
 import type { AgentKind, PtySessionManager } from './pty-session-manager.js';
@@ -356,7 +357,6 @@ export class RelayClient {
    */
   private async confirmAutoApproveOnMac(agent: string): Promise<boolean> {
     return new Promise((resolve) => {
-      const { spawn } = require('node:child_process') as typeof import('node:child_process');
       const flag = agent === 'claude'
         ? '--dangerously-skip-permissions'
         : agent === 'codex'

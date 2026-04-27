@@ -116,7 +116,12 @@ export class DeviceObject {
     if (!(await this.checkDeviceSecret(token))) {
       return new Response('invalid', { status: 403 });
     }
-    return new Response('ok', { status: 200 });
+    // Also report whether the laptop daemon is currently connected via WS.
+    // /pair/issue uses this to fail fast with a useful error rather than
+    // letting the user pair successfully and then hit `device-disconnected`
+    // when they try to open a session.
+    const online = this.state.getWebSockets(DEVICE_TAG).length > 0;
+    return Response.json({ ok: true, online });
   }
 
   private async checkDeviceSecret(token: string): Promise<boolean> {
