@@ -25,6 +25,7 @@ class _PairScreenState extends State<PairScreen> {
   bool _busy = false;
   String? _error;
   bool _cameraDenied = false;
+  bool _cameraPermanentlyDenied = false;
 
   @override
   void initState() {
@@ -33,8 +34,33 @@ class _PairScreenState extends State<PairScreen> {
   }
 
   Future<void> _ensurePermission() async {
+    // Check current state before requesting — `request()` on iOS only
+    // surfaces the OS prompt the first time, so a previously-denied user
+    // gets `denied` back immediately with no UI. We have to send them to
+    // app Settings ourselves.
+    final current = await Permission.camera.status;
+    if (current.isGranted) return;
+    if (current.isPermanentlyDenied || current.isRestricted) {
+      if (mounted) setState(() {
+        _cameraDenied = true;
+        _cameraPermanentlyDenied = true;
+      });
+      return;
+    }
     final st = await Permission.camera.request();
-    if (!st.isGranted && mounted) setState(() => _cameraDenied = true);
+    if (!mounted) return;
+    if (st.isGranted) return;
+    setState(() {
+      _cameraDenied = true;
+      _cameraPermanentlyDenied = st.isPermanentlyDenied || st.isRestricted;
+    });
+  }
+
+  Future<void> _openCameraSettings() async {
+    final opened = await openAppSettings();
+    if (!opened && mounted) {
+      setState(() => _error = 'Could not open Settings. Open it manually and grant Camera access for Loopsy.');
+    }
   }
 
   @override
@@ -269,17 +295,52 @@ class _PairScreenState extends State<PairScreen> {
                         Text(_error!, style: const TextStyle(color: LoopsyColors.bad, fontSize: 13)),
                       ],
                       const SizedBox(height: 14),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: ElevatedButton.icon(
-                              onPressed: _enterManually,
-                              icon: const HugeIcon(icon: HugeIcons.strokeRoundedTextWrap, color: LoopsyColors.bg, size: 18),
-                              label: const Text('Enter URL manually'),
+                      // When camera is denied permanently (or restricted on iOS),
+                      // a re-request won't surface the OS prompt. Send the user
+                      // to Settings; otherwise just offer manual entry.
+                      if (_cameraPermanentlyDenied) ...[
+                        Row(
+                          children: [
+                            Expanded(
+                              child: ElevatedButton.icon(
+                                onPressed: _openCameraSettings,
+                                icon: const HugeIcon(icon: HugeIcons.strokeRoundedSettings02, color: LoopsyColors.bg, size: 18),
+                                label: const Text('Grant camera access'),
+                              ),
                             ),
-                          ),
-                        ],
-                      ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: OutlinedButton.icon(
+                                onPressed: _enterManually,
+                                icon: const HugeIcon(icon: HugeIcons.strokeRoundedTextWrap, color: LoopsyColors.fg, size: 18),
+                                label: const Text('Enter URL manually'),
+                                style: OutlinedButton.styleFrom(
+                                  foregroundColor: LoopsyColors.fg,
+                                  side: const BorderSide(color: LoopsyColors.border),
+                                  padding: const EdgeInsets.symmetric(vertical: 12),
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ] else ...[
+                        Row(
+                          children: [
+                            Expanded(
+                              child: ElevatedButton.icon(
+                                onPressed: _enterManually,
+                                icon: const HugeIcon(icon: HugeIcons.strokeRoundedTextWrap, color: LoopsyColors.bg, size: 18),
+                                label: const Text('Enter URL manually'),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
                     ],
                   ),
                 ),

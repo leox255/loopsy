@@ -789,92 +789,105 @@ export const WEB_CLIENT_HTML = /* html */ `<!doctype html>
       }
 
       const linkIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M2 20h20"/></svg>';
+      const lockIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>';
+      const errIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg>';
 
       let cancelled = false;
 
-      async function pairLoop(presetUrl) {
-        if (cancelled) return;
-        const initialValue = presetUrl ?? '';
-        const result = await Modal.dialog({
-          icon: linkIcon,
-          title: 'Connect to your laptop',
-          subtitle: 'Run "loopsy mobile pair" on your laptop, then paste the link below.',
-          body: '<input id="_pair_url" class="modal-input" type="text" placeholder="https://&lt;relay&gt;/app#loopsy%3A..." autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" value="' + initialValue.replace(/"/g, '&quot;') + '" /><div id="_pair_err" class="modal-error" style="display:none"></div>',
-          barrierDismissible: false,
-          actions: [
-            { label: 'Continue', variant: 'mbtn-primary', onClick: () => {
-              const el = document.getElementById('_pair_url');
-              const errEl = document.getElementById('_pair_err');
-              const value = el ? el.value.trim() : '';
-              const parsed = parsePairUrl(value);
-              if (!parsed) {
-                if (errEl) { errEl.textContent = 'Could not parse pair URL.'; errEl.style.display = ''; }
-                return undefined;
-              }
-              return { value, parsed };
-            }},
-          ],
-        });
-        if (cancelled) return;
-        if (!result) return;
-        const { parsed } = result;
+      // Step 1: get a parsed pair URL. Skip the URL dialog entirely when the
+      // page hash already carries a valid pair URL — there's no reason to
+      // make the user re-paste what we already have.
+      async function getParsedPair() {
+        if (cancelled) return null;
+        if (initialPair) return initialPair;
 
-        // Ask for the 4-digit SAS (CSO #14).
-        const sasResult = await Modal.dialog({
-          icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>',
-          title: 'Enter 4-digit code',
-          subtitle: 'Read the verification code shown on your laptop next to the QR.',
-          body: '<input id="_sas" class="modal-input" type="text" inputmode="numeric" maxlength="4" placeholder="&bull;&bull;&bull;&bull;" autocomplete="off" style="letter-spacing:10px;text-align:center;font-size:26px" />',
-          barrierDismissible: false,
-          actions: [
-            { label: 'Back', variant: 'mbtn-text', value: '__back__' },
-            { label: 'Pair', variant: 'mbtn-primary', onClick: () => {
-              const el = document.getElementById('_sas');
-              return el ? el.value.trim() : null;
-            }},
-          ],
-        });
-        if (cancelled) return;
-        if (sasResult === '__back__' || !sasResult) {
-          // Reopen the URL dialog so the user can retry without losing input.
-          return pairLoop(result.value);
-        }
-
-        try {
-          const r = await fetch(parsed.relayUrl.replace(/\\/+$/, '') + '/pair/redeem', {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ token: parsed.token, sas: sasResult, label: navigator.userAgent.slice(0, 80) }),
+        // No hash → prompt for paste. Loop until parse succeeds or cancelled.
+        while (!cancelled) {
+          const result = await Modal.dialog({
+            icon: linkIcon,
+            title: 'Connect to your laptop',
+            subtitle: 'Run "loopsy mobile pair" on your laptop, then paste the link below.',
+            body: '<input id="_pair_url" class="modal-input" type="text" placeholder="https://&lt;relay&gt;/app#loopsy%3A..." autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" /><div id="_pair_err" class="modal-error" style="display:none"></div>',
+            barrierDismissible: false,
+            actions: [
+              { label: 'Continue', variant: 'mbtn-primary', onClick: () => {
+                const el = document.getElementById('_pair_url');
+                const value = el ? el.value.trim() : '';
+                return parsePairUrl(value);
+              }},
+            ],
           });
-          if (!r.ok) { const t = await r.text(); throw new Error('Pair failed: ' + r.status + ' ' + t); }
-          const j = await r.json();
-          Storage.writePairing({
-            relayUrl: parsed.relayUrl,
-            deviceId: j.device_id,
-            phoneId: j.phone_id,
-            phoneSecret: j.phone_secret,
-          });
-          Router.navigate('home');
-        } catch (e) {
+          if (cancelled) return null;
+          if (result) return result;
+          // Parse failed — show an error toast-style dialog and loop.
           await Modal.dialog({
-            icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg>',
-            title: 'Pairing failed',
-            subtitle: e.message,
-            actions: [{ label: 'Try again', variant: 'mbtn-primary', value: true }],
+            icon: errIcon,
+            title: 'Could not parse pair URL',
+            subtitle: 'Make sure you copied the full link printed by "loopsy mobile pair".',
+            actions: [{ label: 'OK', variant: 'mbtn-primary', value: true }],
           });
-          return pairLoop(result.value);
+        }
+        return null;
+      }
+
+      // Step 2: SAS prompt + redeem. Loops on bad SAS so the user can retry
+      // without re-entering the URL.
+      async function redeemLoop(parsed) {
+        while (!cancelled) {
+          const sas = await Modal.dialog({
+            icon: lockIcon,
+            title: 'Enter 4-digit code',
+            subtitle: 'Read the verification code shown on your laptop next to the QR.',
+            body: '<input id="_sas" class="modal-input" type="text" inputmode="numeric" maxlength="4" placeholder="&bull;&bull;&bull;&bull;" autocomplete="off" style="letter-spacing:10px;text-align:center;font-size:26px" />',
+            barrierDismissible: false,
+            actions: [
+              { label: 'Pair', variant: 'mbtn-primary', onClick: () => {
+                const el = document.getElementById('_sas');
+                const v = el ? el.value.trim() : '';
+                return v.length === 4 ? v : null;
+              }},
+            ],
+          });
+          if (cancelled) return;
+          if (!sas) continue;
+
+          try {
+            const r = await fetch(parsed.relayUrl.replace(/\/+$/, '') + '/pair/redeem', {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ token: parsed.token, sas, label: navigator.userAgent.slice(0, 80) }),
+            });
+            if (!r.ok) { const t = await r.text(); throw new Error('Pair failed: ' + r.status + ' ' + t); }
+            const j = await r.json();
+            Storage.writePairing({
+              relayUrl: parsed.relayUrl,
+              deviceId: j.device_id,
+              phoneId: j.phone_id,
+              phoneSecret: j.phone_secret,
+            });
+            Router.navigate('home');
+            return;
+          } catch (e) {
+            const retry = await Modal.dialog({
+              icon: errIcon,
+              title: 'Pairing failed',
+              subtitle: e.message,
+              actions: [
+                { label: 'Cancel', variant: 'mbtn-text', value: false },
+                { label: 'Try again', variant: 'mbtn-primary', value: true },
+              ],
+            });
+            if (!retry) return;
+            // Loop back to SAS prompt.
+          }
         }
       }
 
-      // Auto-pair if the hash carried a usable URL; otherwise prompt.
-      if (initialPair) {
-        // Pre-fill but skip directly to the SAS step by passing through the
-        // URL dialog with the value populated — keeps the user in the same
-        // visual flow.
-        pairLoop(rawHash);
-      } else {
-        pairLoop('');
-      }
+      (async () => {
+        const parsed = await getParsedPair();
+        if (cancelled || !parsed) return;
+        await redeemLoop(parsed);
+      })();
 
       return function unmount() {
         cancelled = true;
