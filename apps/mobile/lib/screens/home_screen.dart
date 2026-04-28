@@ -9,6 +9,7 @@ import '../models/session_meta.dart';
 import '../services/relay_client.dart';
 import '../services/storage.dart';
 import '../theme.dart';
+import '../widgets/loopsy_modal.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -73,117 +74,142 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<bool?> _promptAutoApprove(String agent, {required bool initial}) async {
-    final flagDescription = switch (agent) {
+    final flag = switch (agent) {
       'claude' => '--dangerously-skip-permissions',
       'gemini' => '-y',
       'codex'  => '--full-auto',
       _        => '',
     };
-    return showDialog<bool>(
+    return showLoopsyDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: LoopsyColors.surface,
-        title: const Text('Auto-approve actions?'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Skip the agent\'s confirmation prompts so you don\'t have to keep tapping "yes" on the phone.',
-              style: const TextStyle(color: LoopsyColors.muted, fontSize: 13),
+      icon: HugeIcons.strokeRoundedFlash,
+      title: 'Auto-approve actions?',
+      subtitle:
+          'Skip the agent\'s confirmation prompts so you don\'t have to keep tapping "yes". '
+          'The first auto-approve session will ask for your macOS password once — after that, future sessions skip it.',
+      body: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(
+              color: LoopsyColors.surfaceAlt,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: LoopsyColors.border),
             ),
-            const SizedBox(height: 10),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-              decoration: BoxDecoration(
-                color: LoopsyColors.surfaceAlt,
-                borderRadius: BorderRadius.circular(6),
+            child: Text(
+              '$agent $flag',
+              style: const TextStyle(
+                fontFamily: 'JetBrainsMono',
+                fontSize: 12.5,
+                color: LoopsyColors.fg,
               ),
-              child: Text(
-                '$agent $flagDescription',
-                style: const TextStyle(fontFamily: 'JetBrainsMono', fontSize: 12),
+            ),
+          ),
+          const SizedBox(height: 12),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const HugeIcon(icon: HugeIcons.strokeRoundedAlert02, color: LoopsyColors.warn, size: 16),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'The agent will run file edits and shell commands without asking. Trust the prompt.',
+                  style: const TextStyle(color: LoopsyColors.warn, fontSize: 12.5, height: 1.4),
+                ),
               ),
-            ),
-            const SizedBox(height: 10),
-            Text(
-              'The agent will execute file edits, shell commands, etc. without asking. Make sure you trust the prompt.',
-              style: const TextStyle(color: LoopsyColors.warn, fontSize: 12),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Stay safe')),
-          ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Auto-approve')),
+            ],
+          ),
         ],
       ),
+      actions: [
+        LoopsyModalAction.text('Cancel', () => Navigator.pop(context)),
+        LoopsyModalAction.outlined('Stay safe', () => Navigator.pop(context, false)),
+        LoopsyModalAction.primary('Auto-approve', () => Navigator.pop(context, true)),
+      ],
     );
   }
 
   Future<String?> _pickAgent() async {
-    return showModalBottomSheet<String>(
+    return showLoopsySheet<String>(
       context: context,
-      backgroundColor: LoopsyColors.surface,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
-      ),
-      builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Padding(
-              padding: EdgeInsets.fromLTRB(20, 16, 20, 8),
-              child: Row(
-                children: [
-                  HugeIcon(icon: HugeIcons.strokeRoundedAddSquare, color: LoopsyColors.accent, size: 22),
-                  SizedBox(width: 10),
-                  Text('Start a session', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 16)),
-                ],
-              ),
-            ),
-            ..._agentTile(ctx, 'shell',  HugeIcons.strokeRoundedCommandLine,    'Bash on your laptop'),
-            ..._agentTile(ctx, 'claude', HugeIcons.strokeRoundedAiChat02,    'Claude Code'),
-            ..._agentTile(ctx, 'gemini', HugeIcons.strokeRoundedAiBrain02,   'Gemini CLI'),
-            ..._agentTile(ctx, 'codex',  HugeIcons.strokeRoundedSourceCode,  'OpenAI Codex CLI'),
-            const SizedBox(height: 12),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Future<String?> _promptName({required String initial, required String title}) async {
-    final ctl = TextEditingController(text: initial);
-    return showDialog<String>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: LoopsyColors.surface,
-        title: Text(title),
-        content: TextField(
-          controller: ctl,
-          autofocus: true,
-          decoration: const InputDecoration(hintText: 'e.g. fix logging bug'),
-          textCapitalization: TextCapitalization.sentences,
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Skip')),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(ctx, ctl.text),
-            child: const Text('Save'),
+      icon: HugeIcons.strokeRoundedAddSquare,
+      title: 'Start a session',
+      subtitle: 'Pick an agent. The session lives on your laptop and you can switch back to it anytime.',
+      body: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          LoopsyMenuTile(
+            icon: HugeIcons.strokeRoundedCommandLine,
+            title: 'shell',
+            subtitle: 'Bash on your laptop',
+            onTap: () => Navigator.pop(context, 'shell'),
+          ),
+          LoopsyMenuTile(
+            icon: HugeIcons.strokeRoundedAiChat02,
+            iconColor: LoopsyColors.accent,
+            title: 'claude',
+            subtitle: 'Claude Code',
+            onTap: () => Navigator.pop(context, 'claude'),
+          ),
+          LoopsyMenuTile(
+            icon: HugeIcons.strokeRoundedAiBrain02,
+            iconColor: LoopsyColors.accent,
+            title: 'gemini',
+            subtitle: 'Gemini CLI',
+            onTap: () => Navigator.pop(context, 'gemini'),
+          ),
+          LoopsyMenuTile(
+            icon: HugeIcons.strokeRoundedSourceCode,
+            iconColor: LoopsyColors.accent,
+            title: 'codex',
+            subtitle: 'OpenAI Codex CLI',
+            onTap: () => Navigator.pop(context, 'codex'),
           ),
         ],
       ),
     );
   }
 
-  List<Widget> _agentTile(BuildContext ctx, String agent, IconData icon, String subtitle) => [
-        ListTile(
-          leading: HugeIcon(icon: icon, color: LoopsyColors.fg),
-          title: Text(agent, style: const TextStyle(fontFamily: 'JetBrainsMono')),
-          subtitle: Text(subtitle, style: const TextStyle(color: LoopsyColors.muted, fontSize: 12)),
-          onTap: () => Navigator.pop(ctx, agent),
+  Future<String?> _promptName({required String initial, required String title}) async {
+    final ctl = TextEditingController(text: initial);
+    return showLoopsyDialog<String>(
+      context: context,
+      icon: HugeIcons.strokeRoundedEdit01,
+      title: title,
+      subtitle: 'Pick a name you\'ll recognize on the home list.',
+      body: TextField(
+        controller: ctl,
+        autofocus: true,
+        textCapitalization: TextCapitalization.sentences,
+        decoration: InputDecoration(
+          hintText: 'e.g. fix logging bug',
+          hintStyle: const TextStyle(color: LoopsyColors.muted),
+          filled: true,
+          fillColor: LoopsyColors.surfaceAlt,
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(10),
+            borderSide: const BorderSide(color: LoopsyColors.border),
+          ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(10),
+            borderSide: const BorderSide(color: LoopsyColors.border),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(10),
+            borderSide: const BorderSide(color: LoopsyColors.accent),
+          ),
         ),
-      ];
+        style: const TextStyle(color: LoopsyColors.fg),
+      ),
+      actions: [
+        LoopsyModalAction.text('Skip', () => Navigator.pop(context)),
+        LoopsyModalAction.primary('Save', () => Navigator.pop(context, ctl.text)),
+      ],
+    );
+  }
 
   Future<void> _resumeSession(SessionMeta s) async {
     if (!mounted) return;
@@ -206,34 +232,35 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _showSessionMenu(SessionMeta s) async {
-    final action = await showModalBottomSheet<String>(
+    final action = await showLoopsySheet<String>(
       context: context,
-      backgroundColor: LoopsyColors.surface,
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(18))),
-      builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: const HugeIcon(icon: HugeIcons.strokeRoundedEdit01, color: LoopsyColors.fg),
-              title: const Text('Rename'),
-              onTap: () => Navigator.pop(ctx, 'rename'),
-            ),
-            ListTile(
-              leading: const HugeIcon(icon: HugeIcons.strokeRoundedRemove01, color: LoopsyColors.warn),
-              title: const Text('Remove from list'),
-              subtitle: const Text('Keeps the laptop session running.'),
-              onTap: () => Navigator.pop(ctx, 'remove'),
-            ),
-            ListTile(
-              leading: const HugeIcon(icon: HugeIcons.strokeRoundedDelete02, color: LoopsyColors.bad),
-              title: const Text('Delete'),
-              subtitle: const Text('Stops the laptop session, removes from list.'),
-              onTap: () => Navigator.pop(ctx, 'delete'),
-            ),
-            const SizedBox(height: 8),
-          ],
-        ),
+      icon: HugeIcons.strokeRoundedMoreHorizontal,
+      title: s.name ?? s.summary ?? '${s.agent} session',
+      subtitle: 'session ${s.id.substring(0, 6)} · ${s.agent}',
+      body: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          LoopsyMenuTile(
+            icon: HugeIcons.strokeRoundedEdit01,
+            title: 'Rename',
+            onTap: () => Navigator.pop(context, 'rename'),
+          ),
+          LoopsyMenuTile(
+            icon: HugeIcons.strokeRoundedRemove01,
+            iconColor: LoopsyColors.warn,
+            title: 'Remove from list',
+            subtitle: 'Keeps the laptop session running.',
+            onTap: () => Navigator.pop(context, 'remove'),
+          ),
+          LoopsyMenuTile(
+            icon: HugeIcons.strokeRoundedDelete02,
+            iconColor: LoopsyColors.bad,
+            titleColor: LoopsyColors.bad,
+            title: 'Delete',
+            subtitle: 'Stops the laptop session and removes it.',
+            onTap: () => Navigator.pop(context, 'delete'),
+          ),
+        ],
       ),
     );
     if (action == 'rename') return _renameSession(s);
@@ -265,20 +292,18 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _resetPairing() async {
-    final ok = await showDialog<bool>(
+    final ok = await showLoopsyDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: LoopsyColors.surface,
-        title: const Text('Forget pairing?'),
-        content: const Text(
-          'You’ll need to re-scan a pair QR from your laptop to reconnect.',
-          style: TextStyle(color: LoopsyColors.muted),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-          ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Forget')),
-        ],
-      ),
+      icon: HugeIcons.strokeRoundedDelete02,
+      iconColor: LoopsyColors.bad,
+      title: 'Forget pairing?',
+      subtitle:
+          'You\'ll need to re-scan a pair QR from your laptop to reconnect. '
+          'Your auto-approve token will be wiped too.',
+      actions: [
+        LoopsyModalAction.text('Cancel', () => Navigator.pop(context, false)),
+        LoopsyModalAction.danger('Forget', () => Navigator.pop(context, true)),
+      ],
     );
     if (ok != true) return;
     // CSO #8: also revoke on the relay so the phone record stops existing

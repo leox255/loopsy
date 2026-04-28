@@ -18,6 +18,7 @@
 import WebSocket from 'ws';
 import type { RelayConfig } from '@loopsy/protocol';
 import type { AgentKind, PtySessionManager } from './pty-session-manager.js';
+import { checkAutoApprove, grantAutoApprove, verifyMacPassword } from './auto-approve.js';
 
 const RECONNECT_INITIAL_MS = 1000;
 const RECONNECT_MAX_MS = 30_000;
@@ -255,27 +256,79 @@ export class RelayClient {
    */
   private async handleSessionOpen(
     sessionId: string,
-    msg: { agent?: AgentKind; cols?: number; rows?: number; cwd?: string; initialInput?: string; auto?: boolean; extraArgs?: string[] },
+    msg: {
+      agent?: AgentKind;
+      cols?: number;
+      rows?: number;
+      cwd?: string;
+      initialInput?: string;
+      auto?: boolean;
+      extraArgs?: string[];
+      // Phone-supplied authentication for auto-approve. Either:
+      //   - sudoPassword: macOS user password (first time, mints a token)
+      //   - approveToken: token previously minted (subsequent calls)
+      // phoneId scopes the token to a specific paired phone so revocation
+      // works through `loopsy phone revoke`.
+      phoneId?: string;
+      sudoPassword?: string;
+      approveToken?: string;
+      label?: string;
+    },
   ): Promise<void> {
     if (this.sessions.has(sessionId)) return;
     if (!this.pty.get(sessionId)) {
       const agent: AgentKind = msg.agent ?? 'shell';
-      // CSO #4: auto-approve is the most-dangerous primitive (the agent runs
-      // file edits, shell commands, deletes without prompting). Gate it
-      // behind a one-time Mac-side approval per (phone, agent) pair, recorded
-      // on disk. The first time a phone asks for `auto:true`, the daemon
-      // pops a macOS dialog requiring local user approval. Subsequent runs
-      // for the same phone+agent skip the dialog.
+      // CSO #4 (revised 2026-04-27): auto-approve is the most-dangerous
+      // primitive (the agent runs file edits, shell commands, deletes
+      // without prompting). Original gate was a macOS dialog requiring
+      // physical presence at the laptop — but that defeats remote use.
+      // Replace with phone-proven knowledge of the macOS user password,
+      // verified non-interactively via `dscl . -authonly`. Per-phone token
+      // is minted on first success and used for subsequent sessions.
       let auto = !!msg.auto;
-      if (auto && process.platform === 'darwin') {
-        const approved = await this.confirmAutoApproveOnMac(agent);
-        if (!approved) {
+      if (auto) {
+        const phoneId = msg.phoneId;
+        if (!phoneId) {
           this.sendText({
-            type: 'error',
+            type: 'auto-approve-denied',
             sessionId,
-            message: 'Auto-approve denied on the laptop. Toggle off auto-approve for this session and try again.',
+            reason: 'missing-phone-id',
+            message: 'Phone did not identify itself. Re-pair and try again.',
           });
           return;
+        }
+        let granted = false;
+        let mintedToken: string | undefined;
+        if (msg.approveToken && (await checkAutoApprove(phoneId, msg.approveToken))) {
+          granted = true;
+        } else if (msg.sudoPassword) {
+          const ok = await verifyMacPassword(msg.sudoPassword);
+          if (ok) {
+            mintedToken = await grantAutoApprove(phoneId, msg.label);
+            granted = true;
+          }
+        }
+        if (!granted) {
+          this.sendText({
+            type: 'auto-approve-denied',
+            sessionId,
+            reason: msg.sudoPassword ? 'wrong-password' : 'no-credentials',
+            message: msg.sudoPassword
+              ? 'Wrong macOS password. Try again, or turn off auto-approve for this session.'
+              : 'Enter your macOS password on the phone to enable auto-approve.',
+          });
+          return;
+        }
+        if (mintedToken) {
+          // Send the freshly-minted token back to the phone exactly once.
+          // The phone caches it in secure storage and uses it on every
+          // subsequent auto-approve session-open until revoked.
+          this.sendText({
+            type: 'auto-approve-granted',
+            sessionId,
+            phoneId,
+            token: mintedToken,
+          });
         }
       }
       const args = [
@@ -348,35 +401,4 @@ export class RelayClient {
     }
   }
 
-  /**
-   * CSO #4: macOS-only osascript dialog for auto-approve confirmation.
-   * Returns true if the local user clicked "Allow", false otherwise (deny,
-   * timeout, or any error spawning osascript). 30-second timeout so a stale
-   * request can't block the daemon forever.
-   */
-  private async confirmAutoApproveOnMac(agent: string): Promise<boolean> {
-    return new Promise((resolve) => {
-      const { spawn } = require('node:child_process') as typeof import('node:child_process');
-      const flag = agent === 'claude'
-        ? '--dangerously-skip-permissions'
-        : agent === 'codex'
-          ? '--full-auto'
-          : '-y';
-      const message = `A paired phone is asking to run \\"${agent} ${flag}\\" — that means the agent will execute file edits and shell commands without confirming each one. Allow only if you started this from your phone right now.`;
-      const script = `display dialog "${message}" buttons {"Deny", "Allow once"} default button "Deny" with icon caution with title "Loopsy auto-approve" giving up after 30`;
-      const proc = spawn('/usr/bin/osascript', ['-e', script], { stdio: ['ignore', 'pipe', 'pipe'] });
-      let out = '';
-      proc.stdout?.on('data', (b) => { out += b.toString('utf-8'); });
-      const timeout = setTimeout(() => {
-        try { proc.kill('SIGTERM'); } catch { /* ignore */ }
-        resolve(false);
-      }, 35_000);
-      proc.on('close', () => {
-        clearTimeout(timeout);
-        // osascript prints "button returned:Allow once" or "gave up:true" etc.
-        resolve(/Allow once/.test(out));
-      });
-      proc.on('error', () => { clearTimeout(timeout); resolve(false); });
-    });
-  }
 }

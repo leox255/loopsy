@@ -9,6 +9,7 @@ import 'package:xterm/xterm.dart';
 import '../services/relay_client.dart';
 import '../services/storage.dart';
 import '../theme.dart';
+import '../widgets/loopsy_modal.dart';
 import '../widgets/terminal_keyboard.dart';
 
 class TerminalScreen extends StatefulWidget {
@@ -63,15 +64,28 @@ class _TerminalScreenState extends State<TerminalScreen> {
       pairing: pairing,
       sessionId: widget.sessionId,
       onPty: (bytes) => _terminal.write(utf8.decode(bytes, allowMalformed: true)),
-      onControl: (msg) {
-        if (msg['type'] == 'device-disconnected' && mounted) {
-          setState(() { _status = 'device disconnected'; _statusError = true; });
-        }
-      },
+      onControl: _handleControl,
       onClose: (code, _) {
         if (mounted) setState(() { _status = 'closed (${code ?? '?'})'; _statusError = code != 1000; });
       },
     );
+
+    // For auto-approve sessions, gate the open behind either a cached
+    // approval token or a fresh macOS-password handshake (replaces the
+    // old osascript dialog so the user never has to walk to the laptop).
+    String? approveToken;
+    String? sudoPassword;
+    if (widget.auto) {
+      approveToken = await Storage.readApproveToken();
+      if (approveToken == null) {
+        if (!mounted) return;
+        sudoPassword = await _askSudoPassword();
+        if (sudoPassword == null) {
+          if (mounted) Navigator.of(context).pop('cancelled');
+          return;
+        }
+      }
+    }
 
     // Always send session-open: the daemon dedupes by sessionId — reuses an
     // existing PTY or spawns a fresh one if nothing exists for that id (e.g.,
@@ -81,6 +95,8 @@ class _TerminalScreenState extends State<TerminalScreen> {
       cols: _terminal.viewWidth,
       rows: _terminal.viewHeight,
       auto: widget.auto,
+      approveToken: approveToken,
+      sudoPassword: sudoPassword,
     );
     if (!mounted) return;
     setState(() {
@@ -96,6 +112,123 @@ class _TerminalScreenState extends State<TerminalScreen> {
     Future.delayed(const Duration(milliseconds: 200), () {
       if (mounted) _termFocus.requestFocus();
     });
+  }
+
+  /// Inbound text control frames from the relay/daemon. We split this out
+  /// so auto-approve grant/deny messages can drive UI feedback without
+  /// crowding the bootstrap path.
+  Future<void> _handleControl(Map<String, dynamic> msg) async {
+    if (!mounted) return;
+    final type = msg['type'];
+    switch (type) {
+      case 'device-disconnected':
+        setState(() { _status = 'device disconnected'; _statusError = true; });
+        break;
+      case 'auto-approve-granted':
+        // Daemon successfully verified our sudo password and minted a token.
+        // Persist it for every future auto-approve session on this pairing.
+        final token = msg['token'];
+        if (token is String && token.isNotEmpty) {
+          await Storage.writeApproveToken(token);
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                backgroundColor: LoopsyColors.surface,
+                content: Text(
+                  'Auto-approve enabled. Future sessions skip the password.',
+                  style: TextStyle(color: LoopsyColors.fg),
+                ),
+                duration: Duration(seconds: 3),
+              ),
+            );
+          }
+        }
+        break;
+      case 'auto-approve-denied':
+        // Daemon rejected our credentials. Drop the cached token (if any)
+        // so the next attempt re-prompts for the password instead of
+        // looping on a stale token.
+        await Storage.deleteApproveToken();
+        if (mounted) {
+          setState(() {
+            _status = 'auto-approve denied';
+            _statusError = true;
+          });
+          final reason = msg['message'] is String ? msg['message'] as String : 'Auto-approve denied.';
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              backgroundColor: LoopsyColors.surface,
+              content: Text(reason, style: const TextStyle(color: LoopsyColors.bad)),
+              duration: const Duration(seconds: 4),
+            ),
+          );
+        }
+        break;
+      default:
+        // Unknown control frame — ignore for forward compatibility.
+        break;
+    }
+  }
+
+  /// Modal that asks for the macOS user password the first time a phone
+  /// requests auto-approve on a given pairing. Sent over the WSS to the
+  /// daemon, which validates with `dscl . -authonly` and mints a token in
+  /// return so we never have to ask again.
+  Future<String?> _askSudoPassword() async {
+    final ctl = TextEditingController();
+    bool obscure = true;
+    return showLoopsyDialog<String>(
+      context: context,
+      icon: HugeIcons.strokeRoundedSquareLock02,
+      title: 'Enable auto-approve',
+      subtitle:
+          'Auto-approve runs ${widget.agent} with permission prompts skipped. '
+          'Enter your laptop\'s macOS user password to unlock this. '
+          'You\'ll only be asked once per pairing.',
+      body: StatefulBuilder(
+        builder: (ctx, setSt) => TextField(
+          controller: ctl,
+          autofocus: true,
+          obscureText: obscure,
+          enableSuggestions: false,
+          autocorrect: false,
+          textInputAction: TextInputAction.done,
+          onSubmitted: (_) => Navigator.pop(context, ctl.text),
+          decoration: InputDecoration(
+            hintText: 'macOS password',
+            hintStyle: const TextStyle(color: LoopsyColors.muted),
+            filled: true,
+            fillColor: LoopsyColors.surfaceAlt,
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(10),
+              borderSide: const BorderSide(color: LoopsyColors.border),
+            ),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(10),
+              borderSide: const BorderSide(color: LoopsyColors.border),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(10),
+              borderSide: const BorderSide(color: LoopsyColors.accent),
+            ),
+            suffixIcon: IconButton(
+              icon: HugeIcon(
+                icon: obscure ? HugeIcons.strokeRoundedView : HugeIcons.strokeRoundedViewOff,
+                color: LoopsyColors.muted,
+                size: 18,
+              ),
+              onPressed: () => setSt(() => obscure = !obscure),
+              tooltip: obscure ? 'Show' : 'Hide',
+            ),
+          ),
+          style: const TextStyle(color: LoopsyColors.fg),
+        ),
+      ),
+      actions: [
+        LoopsyModalAction.text('Cancel', () => Navigator.pop(context)),
+        LoopsyModalAction.primary('Enable', () => Navigator.pop(context, ctl.text)),
+      ],
+    );
   }
 
   /// Build a one-line summary from the first user input the session sees and

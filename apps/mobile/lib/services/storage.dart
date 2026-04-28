@@ -11,6 +11,10 @@ import '../models/session_meta.dart';
 class Storage {
   static const _pairingKey = 'loopsy.pairing.v1';
   static const _sessionsKey = 'loopsy.sessions.v1';
+  // Per-pairing auto-approve token. Minted by the daemon after we send the
+  // macOS password once; reused on every subsequent auto-approve session so
+  // the user never has to retype it. Cleared on `deletePairing`.
+  static const _approveKey = 'loopsy.auto_approve.v1';
 
   static const _secure = FlutterSecureStorage(
     aOptions: AndroidOptions(encryptedSharedPreferences: true),
@@ -34,6 +38,21 @@ class Storage {
   static Future<void> deletePairing() async {
     await _secure.delete(key: _pairingKey);
     await _secure.delete(key: _sessionsKey);
+    await _secure.delete(key: _approveKey);
+  }
+
+  /// Read the cached auto-approve token for the currently-paired daemon.
+  /// Returns null if the user hasn't completed the password handshake yet.
+  static Future<String?> readApproveToken() async {
+    return _secure.read(key: _approveKey);
+  }
+
+  static Future<void> writeApproveToken(String token) async {
+    await _secure.write(key: _approveKey, value: token);
+  }
+
+  static Future<void> deleteApproveToken() async {
+    await _secure.delete(key: _approveKey);
   }
 
   static Future<List<SessionMeta>> readSessions() async {

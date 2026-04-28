@@ -79,12 +79,16 @@ class RelaySession {
   ///
   /// Set [auto] to true to launch the agent in skip-permissions mode
   /// (--dangerously-skip-permissions for claude, -y for gemini, --full-auto
-  /// for codex). The daemon ignores `auto` if a PTY is already alive.
+  /// for codex). The daemon now requires either [approveToken] (cached from
+  /// a prior grant) or [sudoPassword] (the macOS user password, sent over
+  /// the WSS exactly once so the daemon can mint a token in return).
   Future<void> open({
     required String agent,
     required int cols,
     required int rows,
     bool auto = false,
+    String? sudoPassword,
+    String? approveToken,
   }) async {
     _connect();
     sendControl({
@@ -93,6 +97,9 @@ class RelaySession {
       'cols': cols,
       'rows': rows,
       if (auto) 'auto': true,
+      if (auto) 'phoneId': pairing.phoneId,
+      if (auto && sudoPassword != null) 'sudoPassword': sudoPassword,
+      if (auto && approveToken != null) 'approveToken': approveToken,
     });
   }
 

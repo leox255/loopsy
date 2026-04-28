@@ -8,6 +8,7 @@ import '../services/pair_url.dart';
 import '../services/relay_client.dart';
 import '../services/storage.dart';
 import '../theme.dart';
+import '../widgets/loopsy_modal.dart';
 
 class PairScreen extends StatefulWidget {
   const PairScreen({super.key});
@@ -70,63 +71,88 @@ class _PairScreenState extends State<PairScreen> {
 
   Future<String?> _askSas() async {
     final ctl = TextEditingController();
-    return showDialog<String>(
+    return showLoopsyDialog<String>(
       context: context,
       barrierDismissible: false,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: LoopsyColors.surface,
-        title: const Text('Enter 4-digit code'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Read the code shown on your laptop next to the QR.',
-              style: TextStyle(color: LoopsyColors.muted, fontSize: 13),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: ctl,
-              autofocus: true,
-              keyboardType: TextInputType.number,
-              maxLength: 4,
-              decoration: const InputDecoration(hintText: '0000', counterText: ''),
-              style: const TextStyle(fontFamily: 'JetBrainsMono', fontSize: 24, letterSpacing: 6),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(ctx, ctl.text.trim()),
-            child: const Text('Pair'),
+      icon: HugeIcons.strokeRoundedSquareLock02,
+      title: 'Enter 4-digit code',
+      subtitle: 'Read the verification code shown on your laptop next to the QR.',
+      body: TextField(
+        controller: ctl,
+        autofocus: true,
+        keyboardType: TextInputType.number,
+        maxLength: 4,
+        decoration: InputDecoration(
+          hintText: '••••',
+          hintStyle: const TextStyle(color: LoopsyColors.muted, letterSpacing: 14),
+          counterText: '',
+          filled: true,
+          fillColor: LoopsyColors.surfaceAlt,
+          contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(10),
+            borderSide: const BorderSide(color: LoopsyColors.border),
           ),
-        ],
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(10),
+            borderSide: const BorderSide(color: LoopsyColors.border),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(10),
+            borderSide: const BorderSide(color: LoopsyColors.accent),
+          ),
+        ),
+        style: const TextStyle(
+          fontFamily: 'JetBrainsMono',
+          fontSize: 26,
+          letterSpacing: 14,
+          color: LoopsyColors.fg,
+        ),
+        textAlign: TextAlign.center,
       ),
+      actions: [
+        LoopsyModalAction.text('Cancel', () => Navigator.pop(context)),
+        LoopsyModalAction.primary('Pair', () => Navigator.pop(context, ctl.text.trim())),
+      ],
     );
   }
 
   Future<void> _enterManually() async {
-    final controller = TextEditingController();
-    final result = await showDialog<String>(
+    final ctl = TextEditingController();
+    final result = await showLoopsyDialog<String>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: LoopsyColors.surface,
-        title: const Text('Enter pair URL'),
-        content: TextField(
-          controller: controller,
-          decoration: const InputDecoration(hintText: 'loopsy://pair?u=…&t=…'),
-          autofocus: true,
-          autocorrect: false,
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(ctx, controller.text.trim()),
-            child: const Text('Pair'),
+      icon: HugeIcons.strokeRoundedTextWrap,
+      title: 'Enter pair link',
+      subtitle: 'Paste the link printed by `loopsy mobile pair` on your laptop.',
+      body: TextField(
+        controller: ctl,
+        autofocus: true,
+        autocorrect: false,
+        keyboardType: TextInputType.url,
+        decoration: InputDecoration(
+          hintText: 'https://<your-relay>/app#loopsy%3A…',
+          hintStyle: const TextStyle(color: LoopsyColors.muted, fontSize: 12),
+          filled: true,
+          fillColor: LoopsyColors.surfaceAlt,
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(10),
+            borderSide: const BorderSide(color: LoopsyColors.border),
           ),
-        ],
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(10),
+            borderSide: const BorderSide(color: LoopsyColors.border),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(10),
+            borderSide: const BorderSide(color: LoopsyColors.accent),
+          ),
+        ),
+        style: const TextStyle(fontFamily: 'JetBrainsMono', fontSize: 13, color: LoopsyColors.fg),
       ),
+      actions: [
+        LoopsyModalAction.text('Cancel', () => Navigator.pop(context)),
+        LoopsyModalAction.primary('Next', () => Navigator.pop(context, ctl.text.trim())),
+      ],
     );
     if (result != null && result.isNotEmpty) await _consume(result);
   }

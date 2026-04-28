@@ -217,5 +217,23 @@ export async function phoneRevokeCommand(argv: { phoneId: string }): Promise<voi
     process.exitCode = 1;
     return;
   }
+  // Also drop the local auto-approve token for this phone — otherwise a
+  // stolen-then-revoked phone would still hold a valid sudo-equivalent.
+  // Inline the file-edit instead of importing from daemon to keep the CLI
+  // free of daemon-runtime deps.
+  try {
+    const { promises: fsp } = await import('node:fs');
+    const { join } = await import('node:path');
+    const { homedir } = await import('node:os');
+    const path = join(homedir(), '.loopsy', 'auto-approve.json');
+    const raw = await fsp.readFile(path, 'utf8').catch(() => '');
+    if (raw) {
+      const store = JSON.parse(raw) as Record<string, unknown>;
+      if (argv.phoneId in store) {
+        delete store[argv.phoneId];
+        await fsp.writeFile(path, JSON.stringify(store, null, 2) + '\n', { mode: 0o600 });
+      }
+    }
+  } catch { /* best-effort; server-side revoke already succeeded */ }
   console.log(`Revoked phone ${argv.phoneId}. Any active session WS for that phone is closed.`);
 }
