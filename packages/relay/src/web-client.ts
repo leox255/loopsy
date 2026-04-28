@@ -1,13 +1,18 @@
 /**
  * Inline HTML+JS web client for the Loopsy relay.
  *
- * Served at `/app` on the Worker. Loads xterm.js from a CDN, redeems any
- * pair token in the URL fragment, then opens a WebSocket session. Designed
- * to run on iOS Safari + Android Chrome with no install.
+ * Served at `/app` on the Worker. Loads xterm.js from CDN, implements a
+ * three-view router (#pair, #home, #session/<id>) that mirrors the Flutter
+ * mobile app screen flow. All design tokens come from design.ts.
  *
- * Design parity: tokens come from `design.ts` and match the Flutter app's
- * `LoopsyColors` (apps/mobile/lib/theme.dart). Icons are inline SVG
- * (HugeIcons stroke style) so we don't pull a font for ~6 glyphs.
+ * JS module structure (single IIFE):
+ *   Storage.*          — localStorage read/write for pairing, sessions, token
+ *   Modal.*            — showLoopsyDialog / showLoopsySheet helpers (Promise-based)
+ *   Router.*           — hash-based view router; calls mount/unmount on view objs
+ *   RelayConn          — WebSocket wrapper; survives view transitions
+ *   PairView           — #pair: redeem token from hash, persist pairing
+ *   HomeView           — #home: paired-device card + sessions list
+ *   SessionView        — #session/<id>: xterm.js terminal + compose + voice
  */
 
 import { BRAND_NAME, ICONS, TOKENS_CSS } from './design.js';
@@ -35,7 +40,7 @@ export const WEB_CLIENT_HTML = /* html */ `<!doctype html>
       padding-top: env(safe-area-inset-top);
       padding-bottom: env(safe-area-inset-bottom);
     }
-    /* ── Top bar ──────────────────────────────────────────────────────── */
+    /* ── Shared topbar ────────────────────────────────────────────── */
     .topbar {
       display: flex; align-items: center; gap: 10px;
       padding: 10px 14px;
@@ -43,93 +48,169 @@ export const WEB_CLIENT_HTML = /* html */ `<!doctype html>
       border-bottom: 1px solid var(--border);
       flex-shrink: 0;
     }
-    .brand {
-      display: flex; align-items: center; gap: 10px;
-      font-weight: 700; font-size: 15px;
-      letter-spacing: -0.2px;
+    .topbar-title {
+      font-weight: 600; font-size: 17px; letter-spacing: -0.2px;
+      flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     }
-    .brand .logo {
+    .brand-logo {
       width: 28px; height: 28px;
       display: grid; place-items: center;
       border-radius: 8px;
       background: linear-gradient(135deg, var(--accent) 0%, var(--accent-dark) 100%);
-      color: white;
+      color: white; flex-shrink: 0;
     }
-    .brand .logo svg { width: 16px; height: 16px; }
-    .topbar .spacer { flex: 1; }
-    .status {
-      display: inline-flex; align-items: center; gap: 6px;
-      padding: 4px 10px;
-      background: var(--surface-alt);
-      border: 1px solid var(--border);
-      border-radius: var(--radius-chip);
-      font-size: 11px; color: var(--muted);
-      font-weight: 500;
-      max-width: 38vw;
-      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-    }
-    .status .dot {
-      width: 6px; height: 6px; border-radius: 50%;
-      background: var(--muted);
-    }
-    .status.ok { color: var(--good); }
-    .status.ok .dot { background: var(--good); box-shadow: 0 0 6px var(--good); }
-    .status.err { color: var(--bad); }
-    .status.err .dot { background: var(--bad); }
+    .brand-logo svg { width: 16px; height: 16px; }
     .icon-btn {
       display: inline-grid; place-items: center;
       width: 36px; height: 36px;
       background: var(--surface-alt);
       border: 1px solid var(--border);
       border-radius: var(--radius-button);
-      color: var(--fg);
-      cursor: pointer;
-      padding: 0;
+      color: var(--fg); cursor: pointer; padding: 0; flex-shrink: 0;
     }
-    .icon-btn svg { width: 16px; height: 16px; }
+    .icon-btn svg { width: 18px; height: 18px; }
     .icon-btn:hover { background: var(--border); }
     .icon-btn:disabled { opacity: 0.4; cursor: not-allowed; }
     .icon-btn.danger { color: var(--bad); }
-    /* ── Action row (agent + new) ──────────────────────────────────────── */
-    .actions {
-      display: flex; align-items: center; gap: 8px;
-      padding: 10px 14px 6px;
-      flex-shrink: 0;
-    }
-    .agent-select {
-      flex: 1;
-      background: var(--surface-alt); color: var(--fg);
-      border: 1px solid var(--border);
-      border-radius: var(--radius-button);
-      padding: 9px 12px;
-      font-family: var(--font-mono);
-      font-size: 13px;
-      font-weight: 500;
-      appearance: none;
-      -webkit-appearance: none;
-      background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'/></svg>");
-      background-repeat: no-repeat;
-      background-position: right 10px center;
-      padding-right: 30px;
-    }
-    .btn-primary {
+    /* ── Status chip ──────────────────────────────────────────────── */
+    .status-chip {
       display: inline-flex; align-items: center; gap: 6px;
-      padding: 9px 14px;
-      background: var(--accent); color: var(--bg);
-      border: none; border-radius: var(--radius-button);
-      font-weight: 600; font-size: 13px;
-      cursor: pointer;
-      font-family: var(--font-sans);
+      padding: 3px 10px;
+      background: var(--surface-alt); border: 1px solid var(--border);
+      border-radius: var(--radius-chip);
+      font-size: 11px; color: var(--muted); font-weight: 500;
+      max-width: 38vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     }
-    .btn-primary svg { width: 14px; height: 14px; }
-    .btn-primary:hover { background: #8eb0fa; }
-    .btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
-    /* ── Sessions chips ────────────────────────────────────────────────── */
+    .status-chip .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); flex-shrink: 0; }
+    .status-chip.ok { color: var(--good); }
+    .status-chip.ok .dot { background: var(--good); box-shadow: 0 0 6px var(--good); }
+    .status-chip.err { color: var(--bad); }
+    .status-chip.err .dot { background: var(--bad); }
+    /* ── Agent icon badge ─────────────────────────────────────────── */
+    .agent-badge {
+      display: inline-flex; align-items: center; gap: 4px;
+      padding: 2px 8px;
+      background: var(--surface-alt);
+      border-radius: 6px;
+      font-family: var(--font-mono); font-size: 11px; color: var(--muted);
+    }
+    /* ── Scrollable content area ──────────────────────────────────── */
+    #view {
+      flex: 1; min-height: 0; overflow-y: auto;
+      overscroll-behavior: contain;
+    }
+    /* ── Home view ────────────────────────────────────────────────── */
+    .home-body {
+      padding: 8px 16px 96px;
+      display: flex; flex-direction: column; gap: 0;
+    }
+    /* Paired device card */
+    .device-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-card);
+      padding: 16px;
+      margin-bottom: 24px;
+    }
+    .device-card-row {
+      display: flex; align-items: center; gap: 12px;
+    }
+    .icon-tile {
+      flex-shrink: 0;
+      display: grid; place-items: center;
+      border-radius: 10px;
+      background: var(--surface-alt);
+      border: 1px solid var(--border);
+    }
+    .icon-tile.sz36 { width: 36px; height: 36px; }
+    .icon-tile.sz36 svg { width: 18px; height: 18px; }
+    .icon-tile.sz40 { width: 40px; height: 40px; }
+    .icon-tile.sz40 svg { width: 20px; height: 20px; }
+    .icon-tile.accent { color: var(--accent); }
+    .device-card-info { flex: 1; overflow: hidden; }
+    .device-card-label { color: var(--muted); font-size: 12px; }
+    .device-card-id {
+      font-family: var(--font-mono); font-size: 12px;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .device-card-url-row {
+      display: flex; align-items: center; gap: 6px; margin-top: 10px;
+      color: var(--muted); font-size: 11px; overflow: hidden;
+    }
+    .device-card-url-row svg { width: 14px; height: 14px; flex-shrink: 0; }
+    .device-card-url-row span {
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    /* Sessions section */
+    .section-header {
+      padding: 4px 4px 8px;
+      font-size: 13px; font-weight: 600; color: var(--muted);
+    }
+    .empty-sessions {
+      display: flex; flex-direction: column; align-items: center;
+      gap: 12px; padding: 24px 0; color: var(--muted); text-align: center;
+    }
+    .empty-sessions svg { width: 36px; height: 36px; opacity: 0.5; }
+    .empty-sessions p { margin: 0; font-size: 12px; }
+    /* Session card */
+    .session-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-card);
+      margin-bottom: 10px;
+      cursor: pointer;
+      transition: background 120ms ease;
+      overflow: hidden;
+    }
+    .session-card:hover { background: #1a1d23; }
+    .session-card-inner {
+      display: flex; align-items: flex-start; gap: 14px;
+      padding: 14px;
+    }
+    .session-card-body { flex: 1; overflow: hidden; }
+    .session-card-name {
+      font-weight: 600; font-size: 15px;
+      overflow: hidden; text-overflow: ellipsis;
+      display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+    }
+    .session-card-meta {
+      display: flex; align-items: center; gap: 8px; margin-top: 4px;
+      flex-wrap: wrap;
+    }
+    .session-id-mono { font-family: var(--font-mono); font-size: 11px; color: var(--muted); }
+    .session-summary-text {
+      font-size: 11px; color: var(--muted);
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1;
+    }
+    /* FAB */
+    .fab {
+      position: fixed; bottom: calc(20px + env(safe-area-inset-bottom)); right: 20px;
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 14px 20px;
+      background: var(--accent); color: var(--bg);
+      border: none; border-radius: 14px;
+      font-weight: 600; font-size: 15px; cursor: pointer;
+      box-shadow: 0 4px 20px rgba(122,162,247,0.35);
+      font-family: var(--font-sans);
+      z-index: 10;
+    }
+    .fab svg { width: 18px; height: 18px; }
+    .fab:hover { background: #8eb0fa; }
+    /* ── Terminal view ────────────────────────────────────────────── */
+    #term-wrap {
+      flex: 1; min-height: 0;
+      padding: 6px 10px;
+      display: none;
+    }
+    #term-wrap.active { display: block; }
+    .xterm-viewport { background: var(--bg) !important; }
+    .xterm-viewport::-webkit-scrollbar { width: 6px; }
+    .xterm-viewport::-webkit-scrollbar-thumb { background: var(--surface-alt); border-radius: 3px; }
+    /* ── Session chips (terminal view) ───────────────────────────── */
     .chips {
       display: flex; gap: 6px;
       padding: 6px 14px 10px;
-      overflow-x: auto;
-      flex-shrink: 0;
+      overflow-x: auto; flex-shrink: 0;
       scrollbar-width: none;
     }
     .chips::-webkit-scrollbar { display: none; }
@@ -137,50 +218,21 @@ export const WEB_CLIENT_HTML = /* html */ `<!doctype html>
     .chip {
       flex-shrink: 0;
       display: inline-flex; align-items: center; gap: 6px;
-      padding: 6px 10px;
-      background: var(--surface-alt);
-      border: 1px solid var(--border);
+      padding: 5px 10px;
+      background: var(--surface-alt); border: 1px solid var(--border);
       border-radius: var(--radius-chip);
-      font-size: 12px;
-      font-family: var(--font-mono);
-      color: var(--fg);
-      cursor: pointer;
-      white-space: nowrap;
-      transition: background 100ms ease, border-color 100ms ease;
+      font-size: 12px; font-family: var(--font-mono);
+      color: var(--fg); cursor: pointer; white-space: nowrap;
     }
     .chip:hover { background: var(--border); }
-    .chip.active { border-color: var(--accent); color: var(--fg); background: rgba(122, 162, 247, 0.12); }
+    .chip.active { border-color: var(--accent); background: rgba(122,162,247,0.12); }
     .chip .live { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); }
     .chip.live-on .live { background: var(--good); box-shadow: 0 0 4px var(--good); }
-    .chip .x {
-      color: var(--muted); margin-left: 2px;
-      width: 14px; height: 14px;
-      display: grid; place-items: center;
-      border-radius: 50%;
-    }
-    .chip .x:hover { color: var(--bad); background: rgba(247,118,142,0.16); }
-    /* ── Terminal ──────────────────────────────────────────────────────── */
-    #term {
-      flex: 1; min-height: 0;
-      padding: 6px 10px;
-    }
-    .xterm-viewport { background: var(--bg) !important; }
-    .xterm-viewport::-webkit-scrollbar { width: 6px; }
-    .xterm-viewport::-webkit-scrollbar-thumb { background: var(--surface-alt); border-radius: 3px; }
-    .empty-state {
-      display: flex; flex-direction: column; align-items: center;
-      gap: 10px; padding: 32px 20px;
-      color: var(--muted); text-align: center;
-    }
-    .empty-state svg { width: 32px; height: 32px; opacity: 0.6; }
-    .empty-state h3 { margin: 0; font-size: 15px; font-weight: 600; color: var(--fg); }
-    .empty-state p { margin: 0; font-size: 13px; line-height: 1.5; max-width: 280px; }
-    /* ── Compose ───────────────────────────────────────────────────────── */
+    /* ── Compose bar ──────────────────────────────────────────────── */
     .compose {
       display: flex; align-items: flex-end; gap: 8px;
       padding: 10px 14px;
-      background: var(--surface);
-      border-top: 1px solid var(--border);
+      background: var(--surface); border-top: 1px solid var(--border);
       flex-shrink: 0;
     }
     .compose textarea {
@@ -189,68 +241,175 @@ export const WEB_CLIENT_HTML = /* html */ `<!doctype html>
       background: var(--surface-alt); color: var(--fg);
       border: 1px solid var(--border);
       border-radius: var(--radius-button);
-      font-family: var(--font-mono);
-      font-size: 14px;
-      resize: none;
-      line-height: 1.4;
+      font-family: var(--font-mono); font-size: 14px;
+      resize: none; line-height: 1.4;
     }
     .compose textarea:focus { outline: none; border-color: var(--accent); }
-    .compose .icon-btn.recording { background: var(--bad); border-color: var(--bad); color: white; }
-    .compose .icon-btn.send { background: var(--accent); border-color: var(--accent); color: var(--bg); }
-    .compose .icon-btn.send:hover { background: #8eb0fa; }
-    /* ── Modal ─────────────────────────────────────────────────────────── */
-    .modal {
+    .icon-btn.recording { background: var(--bad); border-color: var(--bad); color: white; }
+    .icon-btn.send-btn { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+    .icon-btn.send-btn:hover { background: #8eb0fa; }
+    /* ── Pair view ────────────────────────────────────────────────── */
+    .pair-body {
+      padding: 32px 20px 20px;
+      display: flex; flex-direction: column; align-items: center; gap: 24px;
+      max-width: 480px; margin: 0 auto;
+    }
+    .pair-hero {
+      display: flex; flex-direction: column; align-items: center; gap: 14px;
+      text-align: center;
+    }
+    .pair-hero-icon {
+      width: 64px; height: 64px;
+      display: grid; place-items: center;
+      background: linear-gradient(135deg, var(--accent) 0%, var(--accent-dark) 100%);
+      border-radius: 18px; color: white;
+    }
+    .pair-hero-icon svg { width: 32px; height: 32px; }
+    .pair-hero h1 { margin: 0; font-size: 22px; font-weight: 700; }
+    .pair-hero p { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.5; max-width: 320px; }
+    .pair-card {
+      width: 100%;
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius-card); padding: 20px;
+    }
+    .pair-card-label {
+      font-size: 12px; font-weight: 600; color: var(--muted);
+      text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 10px;
+    }
+    .pair-cmd {
+      background: var(--surface-alt); border: 1px solid var(--border);
+      border-radius: var(--radius-button);
+      padding: 12px 14px;
+      font-family: var(--font-mono); font-size: 14px;
+      margin-bottom: 12px;
+    }
+    .pair-input {
+      width: 100%;
+      padding: 11px 12px;
+      background: var(--surface-alt); color: var(--fg);
+      border: 1px solid var(--border); border-radius: var(--radius-button);
+      font-family: var(--font-mono); font-size: 14px;
+      margin-bottom: 12px;
+    }
+    .pair-input:focus { outline: none; border-color: var(--accent); }
+    .pair-error { color: var(--bad); font-size: 13px; margin-top: 8px; }
+    .btn-primary {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 11px 18px;
+      background: var(--accent); color: var(--bg);
+      border: none; border-radius: var(--radius-button);
+      font-weight: 600; font-size: 14px; cursor: pointer;
+      font-family: var(--font-sans); width: 100%; justify-content: center;
+    }
+    .btn-primary svg { width: 16px; height: 16px; }
+    .btn-primary:hover { background: #8eb0fa; }
+    .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+    /* ── Modal system ─────────────────────────────────────────────── */
+    .modal-overlay {
       position: fixed; inset: 0;
       background: rgba(0,0,0,0.7);
       backdrop-filter: blur(6px);
       display: flex; align-items: center; justify-content: center;
-      z-index: 100; padding: 20px;
+      z-index: 200; padding: 20px;
     }
-    .modal.hidden { display: none; }
     .modal-card {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: var(--radius-card);
-      padding: 24px;
-      max-width: 420px; width: 100%;
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 20px; padding: 20px;
+      max-width: 460px; width: 100%;
+      max-height: calc(100dvh - 80px); overflow-y: auto;
     }
-    .modal-card .modal-icon {
+    .sheet-overlay {
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,0.7);
+      backdrop-filter: blur(6px);
+      display: flex; align-items: flex-end; justify-content: center;
+      z-index: 200; padding: 12px;
+    }
+    .sheet-card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 20px; padding: 20px;
+      max-width: 460px; width: 100%;
+      max-height: 85dvh; overflow-y: auto;
+      animation: slideUp 140ms ease;
+    }
+    @keyframes slideUp {
+      from { transform: translateY(40px); opacity: 0; }
+      to   { transform: translateY(0);    opacity: 1; }
+    }
+    .modal-icon {
       width: 44px; height: 44px;
       display: grid; place-items: center;
-      border-radius: 12px;
-      background: var(--surface-alt);
-      border: 1px solid var(--border);
-      color: var(--accent);
-      margin-bottom: 14px;
+      background: var(--surface-alt); border: 1px solid var(--border);
+      border-radius: 12px; color: var(--accent); margin-bottom: 14px;
     }
-    .modal-card .modal-icon svg { width: 22px; height: 22px; }
-    .modal-card h2 { margin: 0 0 6px; font-size: 18px; font-weight: 700; letter-spacing: -0.01em; }
-    .modal-card p { margin: 0 0 16px; color: var(--muted); font-size: 14px; line-height: 1.5; }
-    .modal-card input {
-      width: 100%;
-      padding: 11px 12px;
-      background: var(--surface-alt);
-      border: 1px solid var(--border);
-      border-radius: var(--radius-button);
-      color: var(--fg);
-      font-family: var(--font-mono);
-      font-size: 14px;
-      margin-bottom: 16px;
+    .modal-icon svg { width: 22px; height: 22px; }
+    .modal-title { margin: 0 0 6px; font-size: 18px; font-weight: 700; letter-spacing: -0.01em; }
+    .modal-subtitle { margin: 0 0 16px; color: var(--muted); font-size: 13.5px; line-height: 1.45; }
+    .modal-body { margin-bottom: 18px; }
+    .modal-actions { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
+    /* modal action button variants */
+    .mbtn {
+      padding: 10px 16px; border-radius: var(--radius-button);
+      font-weight: 600; font-size: 13px; cursor: pointer;
+      font-family: var(--font-sans); border: 1px solid transparent;
+      white-space: nowrap;
     }
-    .modal-card input:focus { outline: none; border-color: var(--accent); }
-    .modal-actions {
-      display: flex; gap: 8px; justify-content: flex-end;
-    }
-    .modal-actions button {
-      padding: 10px 16px;
-      border-radius: var(--radius-button);
-      font-weight: 600; font-size: 13px;
-      cursor: pointer; border: 1px solid var(--border);
+    .mbtn-text { background: transparent; color: var(--muted); border-color: transparent; }
+    .mbtn-text:hover { background: var(--surface-alt); }
+    .mbtn-outlined { background: transparent; color: var(--fg); border-color: var(--border); }
+    .mbtn-outlined:hover { background: var(--surface-alt); }
+    .mbtn-primary { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+    .mbtn-primary:hover { background: #8eb0fa; }
+    .mbtn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+    .mbtn-danger { background: var(--bad); color: #fff; border-color: var(--bad); }
+    .mbtn-danger:hover { background: #f98da1; }
+    /* modal input */
+    .modal-input {
+      width: 100%; padding: 11px 12px;
       background: var(--surface-alt); color: var(--fg);
-      font-family: var(--font-sans);
+      border: 1px solid var(--border); border-radius: var(--radius-button);
+      font-family: var(--font-mono); font-size: 14px;
     }
-    .modal-actions button.primary { background: var(--accent); color: var(--bg); border-color: var(--accent); }
-    .modal-actions button.primary:hover { background: #8eb0fa; }
+    .modal-input:focus { outline: none; border-color: var(--accent); }
+    .modal-input.pw-input { padding-right: 44px; }
+    .pw-wrap { position: relative; }
+    .pw-toggle {
+      position: absolute; right: 10px; top: 50%; transform: translateY(-50%);
+      background: none; border: none; cursor: pointer;
+      color: var(--muted); padding: 4px; display: grid; place-items: center;
+    }
+    .pw-toggle svg { width: 16px; height: 16px; }
+    /* menu tiles */
+    .menu-tile {
+      display: flex; align-items: center; gap: 14px;
+      padding: 12px 4px; border-radius: 12px; cursor: pointer;
+    }
+    .menu-tile:hover { background: var(--surface-alt); }
+    .menu-tile-icon {
+      width: 36px; height: 36px; flex-shrink: 0;
+      display: grid; place-items: center;
+      background: var(--surface-alt); border: 1px solid var(--border);
+      border-radius: 10px;
+    }
+    .menu-tile-icon svg { width: 18px; height: 18px; }
+    .menu-tile-body { flex: 1; }
+    .menu-tile-title { font-size: 15px; font-weight: 600; }
+    .menu-tile-sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
+    /* code snippet in auto-approve dialog */
+    .code-block {
+      background: var(--surface-alt); border: 1px solid var(--border);
+      border-radius: 8px; padding: 10px 12px;
+      font-family: var(--font-mono); font-size: 12.5px; color: var(--fg);
+      margin-bottom: 12px;
+    }
+    .warn-row {
+      display: flex; align-items: flex-start; gap: 8px;
+      color: var(--warn); font-size: 12.5px; line-height: 1.4;
+    }
+    .warn-row svg { width: 16px; height: 16px; flex-shrink: 0; margin-top: 1px; }
+    /* helper text below modal inputs */
+    .modal-helper { font-size: 12px; color: var(--muted); margin-top: 6px; }
+    .modal-helper.bad { color: var(--bad); }
     /* iOS Safari focus zoom prevention */
     @supports (-webkit-touch-callout: none) {
       input, select, textarea { font-size: 16px !important; }
@@ -258,48 +417,18 @@ export const WEB_CLIENT_HTML = /* html */ `<!doctype html>
   </style>
 </head>
 <body>
-  <div class="topbar">
-    <div class="brand">
-      <span class="logo">${ICONS.loopArrow}</span>
-      <span>${BRAND_NAME}</span>
-    </div>
-    <div class="spacer"></div>
-    <span id="status" class="status"><span class="dot"></span><span id="status-text">disconnected</span></span>
-    <button id="reset" class="icon-btn" title="Forget pairing" aria-label="Reset">${ICONS.refresh}</button>
-  </div>
-
-  <div class="actions">
-    <select id="agent" class="agent-select" aria-label="Agent">
-      <option value="shell">shell</option>
-      <option value="claude">claude</option>
-      <option value="gemini">gemini</option>
-      <option value="codex">codex</option>
-    </select>
-    <button id="open" class="btn-primary">${ICONS.add}<span>New</span></button>
-    <button id="close" class="icon-btn danger" disabled aria-label="Close session">${ICONS.power}</button>
-  </div>
-
-  <div id="chips" class="chips"></div>
-  <div id="term"></div>
-
-  <div class="compose">
-    <button id="mic" class="icon-btn" title="Voice input" aria-label="Voice input">${ICONS.mic}</button>
-    <textarea id="composeText" rows="1" placeholder="Type or dictate, Enter sends..."
-              autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false"></textarea>
-    <button id="send" class="icon-btn send" aria-label="Send">${ICONS.send}</button>
-  </div>
-
-  <div id="modal" class="modal hidden">
-    <div class="modal-card">
-      <div class="modal-icon">${ICONS.loopArrow}</div>
-      <h2 id="modal-title">Pair your phone</h2>
-      <p id="modal-body">Run <code style="font-family:var(--font-mono);background:var(--surface-alt);padding:1px 5px;border-radius:4px">loopsy mobile pair</code> on your Mac and paste the URL below.</p>
-      <input id="modal-input" type="text" placeholder="loopsy://pair?u=...&t=..." autocomplete="off" autocapitalize="off" autocorrect="off" />
-      <div class="modal-actions">
-        <button id="modal-ok" class="primary">Pair</button>
-      </div>
-    </div>
-  </div>
+  <!-- topbar is rendered by each view into this slot -->
+  <div id="topbar-slot"></div>
+  <!-- chips strip: only visible in session view -->
+  <div id="chips" class="chips" style="display:none"></div>
+  <!-- main scrollable view area -->
+  <div id="view"></div>
+  <!-- xterm terminal node: lives outside #view so it can flex-fill properly -->
+  <div id="term-wrap"></div>
+  <!-- compose bar: only in session view -->
+  <div id="compose-slot"></div>
+  <!-- modal layer (managed by Modal.*) -->
+  <div id="modal-layer"></div>
 
   <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"
           integrity="sha384-xjfWUeCWdMtvpAb/SmM6lMzS6pQGcQa0loOl1d97j6Odw0vjK9nW3+dTb/bn/mwH"
@@ -308,399 +437,1121 @@ export const WEB_CLIENT_HTML = /* html */ `<!doctype html>
           integrity="sha384-dpjGwSSISUTz2taP54Bor7qkyMR20sSO9oe11UVYnGs2/YdUBf7HW30XKQx9PCzn"
           crossorigin="anonymous"></script>
   <script nonce="__CSP_NONCE__">
-    'use strict';
-    if (!window.Terminal || !window.FitAddon) {
-      document.body.insertAdjacentHTML('afterbegin',
-        '<div style="background:#f7768e;color:#fff;padding:10px;font-family:monospace">' +
-        'xterm failed to load from CDN. Check network and reload.</div>');
-    }
-    const Terminal = window.Terminal;
-    const FitAddon = window.FitAddon && window.FitAddon.FitAddon;
+  'use strict';
+  (function () {
 
-    const STORAGE_KEY = 'loopsy.pairing';
-    const SESSIONS_KEY = 'loopsy.sessions';
+  // ── CDN guard ────────────────────────────────────────────────────────────
+  if (!window.Terminal || !window.FitAddon) {
+    document.body.insertAdjacentHTML('afterbegin',
+      '<div style="background:#f7768e;color:#fff;padding:10px 14px;font-family:monospace;position:fixed;top:0;left:0;right:0;z-index:999">' +
+      'xterm failed to load from CDN. Check network and reload.</div>');
+  }
+  const Terminal = window.Terminal;
+  const FitAddon = window.FitAddon && window.FitAddon.FitAddon;
 
-    const $ = (id) => document.getElementById(id);
-    const setStatus = (text, kind = '') => {
-      const el = $('status');
-      el.className = 'status' + (kind ? ' ' + kind : '');
-      $('status-text').textContent = text;
-    };
+  // ── Storage ──────────────────────────────────────────────────────────────
+  // Keys mirror apps/mobile/lib/services/storage.dart exactly.
+  const PAIRING_KEY  = 'loopsy.pairing.v1';
+  const SESSIONS_KEY = 'loopsy.sessions.v1';
+  const APPROVE_KEY  = 'loopsy.auto_approve.v1';
 
-    // Tokyo Night palette mirrored from theme.dart's loopsyTerminalTheme.
-    const term = new Terminal({
-      cursorBlink: true,
-      fontFamily: "'JetBrains Mono', ui-monospace, SF Mono, Menlo, Monaco, monospace",
-      fontSize: 13,
-      theme: {
-        background: '#0B0D10',
-        foreground: '#E7EAEE',
-        cursor: '#7AA2F7',
-        selectionBackground: 'rgba(122,162,247,0.32)',
-        black: '#1A1B26', red: '#F7768E', green: '#9ECE6A', yellow: '#E0AF68',
-        blue: '#7AA2F7', magenta: '#BB9AF7', cyan: '#7DCFFF', white: '#C0CAF5',
-        brightBlack: '#414868', brightRed: '#FF7A93', brightGreen: '#B9F27C',
-        brightYellow: '#FF9E64', brightBlue: '#7DA6FF', brightMagenta: '#BB9AF7',
-        brightCyan: '#0DB9D7', brightWhite: '#D8E0F2',
-      },
-      convertEol: true,
-      allowProposedApi: true,
-    });
-    const fit = new FitAddon();
-    term.loadAddon(fit);
-    term.open($('term'));
-    fit.fit();
-    term.writeln('\\x1b[2m${BRAND_NAME} web client.\\x1b[0m Pair your phone or restore a saved pairing.');
-
-    // ─── State ─────────────────────────────────────────────────────────
-    let pairing = null;
-    /** Map<sessionId, { agent, ws, lastSeen }> */
-    const sessions = new Map();
-    let activeSessionId = null;
-
-    function loadPairing() {
-      try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null'); } catch { return null; }
-    }
-    function savePairing(p) { localStorage.setItem(STORAGE_KEY, JSON.stringify(p)); }
-    function clearPairing() { localStorage.removeItem(STORAGE_KEY); }
-
-    function loadSessions() {
-      try { return JSON.parse(localStorage.getItem(SESSIONS_KEY) || '[]'); } catch { return []; }
-    }
-    function saveSessions(list) { localStorage.setItem(SESSIONS_KEY, JSON.stringify(list)); }
-    function persistSessions() {
-      const list = Array.from(sessions.entries()).map(([id, s]) => ({
-        id, agent: s.agent, lastSeen: s.lastSeen,
-      }));
-      saveSessions(list);
-    }
-
-    function uuidV4() {
-      if (crypto.randomUUID) return crypto.randomUUID();
-      const b = crypto.getRandomValues(new Uint8Array(16));
-      b[6] = (b[6] & 0x0f) | 0x40;
-      b[8] = (b[8] & 0x3f) | 0x80;
-      const h = Array.from(b).map(x => x.toString(16).padStart(2, '0')).join('');
-      return h.slice(0,8) + '-' + h.slice(8,12) + '-' + h.slice(12,16) + '-' + h.slice(16,20) + '-' + h.slice(20,32);
-    }
-
-    function parsePairUrl(input) {
-      try {
-        const cleaned = input.replace(/^loopsy:\\/\\//, 'https://');
-        const u = new URL(cleaned);
-        const token = u.searchParams.get('t');
-        const relayUrl = decodeURIComponent(u.searchParams.get('u') || '');
-        if (!token || !relayUrl) return null;
-        return { token, relayUrl };
-      } catch {
-        return null;
-      }
-    }
-
-    async function redeem(parsed) {
-      // CSO #14: always prompt for the 4-digit verification code shown on the
-      // laptop. Without it the relay rejects the redeem.
-      const sas = window.prompt('Enter the 4-digit code shown on your laptop:') || '';
-      if (!sas) throw new Error('Verification code required');
-      setStatus('redeeming...');
-      const r = await fetch(parsed.relayUrl + '/pair/redeem', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ token: parsed.token, sas: sas.trim(), label: navigator.userAgent.slice(0, 80) }),
-      });
-      if (!r.ok) {
-        const txt = await r.text();
-        throw new Error('Pair failed: ' + r.status + ' ' + txt);
-      }
-      const j = await r.json();
-      const p = {
-        relayUrl: parsed.relayUrl,
-        deviceId: j.device_id,
-        phoneId: j.phone_id,
-        phoneSecret: j.phone_secret,
-      };
-      savePairing(p);
-      pairing = p;
-      setStatus('paired', 'ok');
-      term.writeln('\\r\\n\\x1b[32m✓\\x1b[0m paired with device \\x1b[1m' + p.deviceId.slice(0, 8) + '\\x1b[0m…');
-    }
-
-    function showModal() { $('modal').classList.remove('hidden'); $('modal-input').focus(); }
-    function hideModal() { $('modal').classList.add('hidden'); }
-
-    $('modal-ok').onclick = async () => {
-      const v = $('modal-input').value.trim();
-      const parsed = parsePairUrl(v);
-      if (!parsed) {
-        alert('Could not parse pair URL. Expected loopsy://pair?u=...&t=...');
-        return;
-      }
-      hideModal();
-      try { await redeem(parsed); } catch (e) {
-        setStatus('error', 'err');
-        term.writeln('\\r\\n\\x1b[31m✗\\x1b[0m ' + e.message);
-        showModal();
-      }
-    };
-
-    $('reset').onclick = () => {
-      if (!confirm('Forget this pairing and close all sessions?')) return;
-      for (const s of sessions.values()) try { s.ws.close(1000, 'reset'); } catch {}
-      sessions.clear();
-      activeSessionId = null;
+  const Storage = {
+    readPairing() {
+      try { return JSON.parse(localStorage.getItem(PAIRING_KEY) || 'null'); } catch { return null; }
+    },
+    writePairing(p) { localStorage.setItem(PAIRING_KEY, JSON.stringify(p)); },
+    /** Also wipes sessions + approve token, mirrors Storage.deletePairing(). */
+    deletePairing() {
+      localStorage.removeItem(PAIRING_KEY);
       localStorage.removeItem(SESSIONS_KEY);
-      clearPairing();
-      pairing = null;
-      term.reset();
-      term.writeln('Pairing cleared.');
-      renderChips();
-      updateButtons();
-      setStatus('disconnected');
-      showModal();
-    };
+      localStorage.removeItem(APPROVE_KEY);
+    },
+    readSessions() {
+      try { return JSON.parse(localStorage.getItem(SESSIONS_KEY) || '[]'); } catch { return []; }
+    },
+    writeSessions(list) { localStorage.setItem(SESSIONS_KEY, JSON.stringify(list)); },
+    updateSession(id, fn) {
+      const list = Storage.readSessions().map(s => s.id === id ? fn(s) : s);
+      Storage.writeSessions(list);
+    },
+    readApproveToken() { return localStorage.getItem(APPROVE_KEY) || null; },
+    writeApproveToken(t) { localStorage.setItem(APPROVE_KEY, t); },
+    deleteApproveToken() { localStorage.removeItem(APPROVE_KEY); },
+  };
 
-    $('open').onclick = () => openNewSession($('agent').value);
-    $('close').onclick = () => closeActive();
-    $('send').onclick = () => sendCompose();
-    $('composeText').addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault();
-        sendCompose();
+  // ── Utilities ────────────────────────────────────────────────────────────
+  function uuidV4() {
+    if (crypto.randomUUID) return crypto.randomUUID();
+    const b = crypto.getRandomValues(new Uint8Array(16));
+    b[6] = (b[6] & 0x0f) | 0x40; b[8] = (b[8] & 0x3f) | 0x80;
+    const h = Array.from(b).map(x => x.toString(16).padStart(2, '0')).join('');
+    return h.slice(0,8)+'-'+h.slice(8,12)+'-'+h.slice(12,16)+'-'+h.slice(16,20)+'-'+h.slice(20);
+  }
+
+  function parsePairUrl(input) {
+    try {
+      const cleaned = input.trim().replace(/^loopsy:\\/\\//, 'https://');
+      const u = new URL(cleaned);
+      const token = u.searchParams.get('t');
+      const relayUrl = decodeURIComponent(u.searchParams.get('u') || '');
+      if (!token || !relayUrl) return null;
+      return { token, relayUrl };
+    } catch { return null; }
+  }
+
+  function agentFlag(agent) {
+    if (agent === 'claude') return '--dangerously-skip-permissions';
+    if (agent === 'gemini') return '-y';
+    if (agent === 'codex')  return '--full-auto';
+    return '';
+  }
+
+  // ── Modal helpers ────────────────────────────────────────────────────────
+  // Port of loopsy_modal.dart. showLoopsyDialog/showLoopsySheet return a
+  // Promise that resolves to the value passed to resolve() by an action button.
+  const Modal = (() => {
+    const layer = document.getElementById('modal-layer');
+
+    function buildCard(opts, isSheet) {
+      const card = document.createElement('div');
+      card.className = isSheet ? 'sheet-card' : 'modal-card';
+      // icon
+      if (opts.icon) {
+        const ic = document.createElement('div');
+        ic.className = 'modal-icon';
+        if (opts.iconColor) ic.style.color = opts.iconColor;
+        ic.innerHTML = opts.icon;
+        card.appendChild(ic);
       }
-    });
-
-    function sendCompose() {
-      const t = $('composeText');
-      const text = t.value;
-      if (!text) return;
-      const s = activeSessionId ? sessions.get(activeSessionId) : null;
-      if (!s || s.ws.readyState !== 1) {
-        term.writeln('\\r\\n\\x1b[33m⚠\\x1b[0m no active session — tap New');
-        return;
+      // title
+      const h = document.createElement('h2');
+      h.className = 'modal-title'; h.textContent = opts.title;
+      card.appendChild(h);
+      // subtitle
+      if (opts.subtitle) {
+        const p = document.createElement('p');
+        p.className = 'modal-subtitle'; p.textContent = opts.subtitle;
+        card.appendChild(p);
       }
-      s.ws.send(new TextEncoder().encode(text + '\\r'));
-      t.value = '';
-      t.style.height = 'auto';
-    }
-
-    // ─── Sessions ───────────────────────────────────────────────────────
-
-    function renderChips() {
-      const c = $('chips');
-      c.innerHTML = '';
-      for (const [id, s] of sessions) {
-        const chip = document.createElement('span');
-        const live = s.ws.readyState === 1;
-        chip.className = 'chip' + (id === activeSessionId ? ' active' : '') + (live ? ' live-on' : '');
-        const dot = document.createElement('span');
-        dot.className = 'live';
-        chip.appendChild(dot);
-        const label = document.createElement('span');
-        label.textContent = s.agent + ' · ' + id.slice(0, 4);
-        chip.appendChild(label);
-        const x = document.createElement('span');
-        x.className = 'x';
-        x.textContent = '×';
-        x.onclick = (ev) => { ev.stopPropagation(); closeSession(id); };
-        chip.appendChild(x);
-        chip.onclick = () => switchTo(id);
-        c.appendChild(chip);
+      // body (HTML string or DOM node)
+      if (opts.body) {
+        const bd = document.createElement('div');
+        bd.className = 'modal-body';
+        if (typeof opts.body === 'string') bd.innerHTML = opts.body;
+        else bd.appendChild(opts.body);
+        card.appendChild(bd);
       }
+      return card;
     }
 
-    function updateButtons() {
-      $('close').disabled = !activeSessionId;
-    }
-
-    function switchTo(id) {
-      if (!sessions.has(id)) return;
-      activeSessionId = id;
-      term.reset();
-      term.writeln('\\x1b[2m── ' + sessions.get(id).agent + ' (' + id.slice(0,8) + ') ──\\x1b[0m');
-      renderChips();
-      updateButtons();
-      const s = sessions.get(id);
-      try { s.ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows })); } catch {}
-    }
-
-    function closeSession(id) {
-      const s = sessions.get(id);
-      if (!s) return;
-      try { s.ws.send(JSON.stringify({ type: 'session-close' })); } catch {}
-      try { s.ws.close(1000, 'user-close'); } catch {}
-      sessions.delete(id);
-      persistSessions();
-      if (activeSessionId === id) {
-        activeSessionId = sessions.keys().next().value || null;
-        if (activeSessionId) switchTo(activeSessionId);
-        else { term.reset(); term.writeln('\\x1b[2mNo active sessions. Tap New.\\x1b[0m'); }
-      }
-      renderChips();
-      updateButtons();
-    }
-
-    function closeActive() {
-      if (activeSessionId) closeSession(activeSessionId);
-    }
-
-    function openNewSession(agent) {
-      if (!pairing) { showModal(); return; }
-      const id = uuidV4();
-      attachSession(id, agent, /* fresh */ true);
-    }
-
-    function attachSession(id, agent, fresh) {
-      // CSO #3: never put the bearer in the URL. Browsers can pass
-      // subprotocols, which travel in the Sec-WebSocket-Protocol header and
-      // are NOT logged in CF Worker URL/query-string log paths.
-      const wsUrl = pairing.relayUrl.replace(/^http/, 'ws')
-        + '/phone/connect/' + pairing.deviceId
-        + '?phone_id=' + encodeURIComponent(pairing.phoneId)
-        + '&session_id=' + id;
-      const ws = new WebSocket(wsUrl, ['loopsy.bearer.' + pairing.phoneSecret]);
-      ws.binaryType = 'arraybuffer';
-      const s = { agent, ws, lastSeen: Date.now() };
-      sessions.set(id, s);
-      activeSessionId = id;
-      term.reset();
-      term.writeln('\\x1b[2m── ' + (fresh ? 'opening' : 'reattaching') + ' ' + agent + ' (' + id.slice(0,8) + ') ──\\x1b[0m');
-      renderChips();
-      updateButtons();
-      setStatus('connecting...');
-
-      ws.addEventListener('open', () => {
-        setStatus('connected', 'ok');
-        const cols = term.cols, rows = term.rows;
-        if (fresh) {
-          ws.send(JSON.stringify({ type: 'session-open', agent, cols, rows }));
+    function show(opts, isSheet) {
+      return new Promise((resolve) => {
+        const overlay = document.createElement('div');
+        overlay.className = isSheet ? 'sheet-overlay' : 'modal-overlay';
+        const card = buildCard(opts, isSheet);
+        // actions
+        const actRow = document.createElement('div');
+        actRow.className = 'modal-actions';
+        (opts.actions || []).forEach(a => {
+          const btn = document.createElement('button');
+          btn.className = 'mbtn ' + (a.variant || 'mbtn-text');
+          btn.textContent = a.label;
+          if (a.disabled) btn.disabled = true;
+          btn.onclick = () => {
+            // if action has a custom click, it drives the value
+            const val = a.onClick ? a.onClick() : a.value;
+            overlay.remove();
+            resolve(val);
+          };
+          actRow.appendChild(btn);
+        });
+        card.appendChild(actRow);
+        // close on overlay click unless barrierDismissible=false
+        if (opts.barrierDismissible !== false) {
+          overlay.addEventListener('click', (e) => {
+            if (e.target === overlay) { overlay.remove(); resolve(undefined); }
+          });
         }
-        persistSessions();
-        renderChips();
+        overlay.appendChild(card);
+        layer.appendChild(overlay);
+        // auto-focus first input
+        requestAnimationFrame(() => {
+          const inp = card.querySelector('input,textarea');
+          if (inp) inp.focus();
+        });
       });
+    }
+
+    return {
+      dialog: (opts) => show(opts, false),
+      sheet:  (opts) => show(opts, true),
+    };
+  })();
+
+  // ── RelayConn ─────────────────────────────────────────────────────────────
+  // Single WebSocket per session. Multiple sessions each have their own conn.
+  // Mirrors RelaySession in relay_client.dart.
+  class RelayConn {
+    constructor({ pairing, sessionId, onPty, onControl, onClose }) {
+      this._pairing = pairing;
+      this._sessionId = sessionId;
+      this._onPty = onPty;
+      this._onControl = onControl;
+      this._onClose = onClose;
+      this._ws = null;
+      this._closed = false;
+    }
+    get isOpen() { return this._ws !== null && this._ws.readyState === 1 && !this._closed; }
+
+    connect() {
+      const p = this._pairing;
+      const wsBase = p.relayUrl.replace(/^http/, 'ws');
+      const url = wsBase
+        + '/phone/connect/' + encodeURIComponent(p.deviceId)
+        + '?phone_id=' + encodeURIComponent(p.phoneId)
+        + '&session_id=' + encodeURIComponent(this._sessionId);
+      // CSO #3: secret in subprotocol header, not URL.
+      const ws = new WebSocket(url, ['loopsy.bearer.' + p.phoneSecret]);
+      ws.binaryType = 'arraybuffer';
+      this._ws = ws;
       ws.addEventListener('message', (e) => {
         if (typeof e.data === 'string') {
-          try {
-            const msg = JSON.parse(e.data);
-            if (msg.type === 'device-disconnected') term.writeln('\\r\\n\\x1b[33m⚠ device disconnected\\x1b[0m');
-          } catch {}
-          return;
+          try { this._onControl && this._onControl(JSON.parse(e.data)); } catch {}
+        } else {
+          this._onPty && this._onPty(new Uint8Array(e.data));
         }
-        if (id !== activeSessionId) return;
-        term.write(new Uint8Array(e.data));
       });
       ws.addEventListener('close', (e) => {
-        s.lastSeen = Date.now();
-        if (id === activeSessionId) setStatus('closed (' + e.code + ')');
-        renderChips();
+        if (this._closed) return;
+        this._closed = true;
+        this._onClose && this._onClose(e.code, e.reason);
       });
       ws.addEventListener('error', () => {
-        if (id === activeSessionId) setStatus('error', 'err');
+        if (this._closed) return;
+        this._closed = true;
+        this._onClose && this._onClose(null, null);
       });
     }
 
-    // ─── PTY ↔ xterm wiring ────────────────────────────────────────────
-
-    term.onData((data) => {
-      const s = activeSessionId ? sessions.get(activeSessionId) : null;
-      if (!s || s.ws.readyState !== 1) return;
-      s.ws.send(new TextEncoder().encode(data));
-    });
-    term.onResize(({ cols, rows }) => {
-      const s = activeSessionId ? sessions.get(activeSessionId) : null;
-      if (!s || s.ws.readyState !== 1) return;
-      s.ws.send(JSON.stringify({ type: 'resize', cols, rows }));
-    });
-
-    // ─── Voice input (Web Speech API) ──────────────────────────────────
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    let recog = null;
-    let recordingActive = false;
-    if (SpeechRecognition) {
-      recog = new SpeechRecognition();
-      recog.continuous = false;
-      recog.interimResults = true;
-      recog.lang = navigator.language || 'en-US';
-      recog.onresult = (e) => {
-        let interim = '';
-        let final = '';
-        for (let i = e.resultIndex; i < e.results.length; i++) {
-          const r = e.results[i];
-          if (r.isFinal) final += r[0].transcript;
-          else interim += r[0].transcript;
-        }
-        const t = $('composeText');
-        if (final) {
-          t.value = (t.value + ' ' + final).trim();
-        }
-        if (interim) {
-          t.placeholder = '🎙 ' + interim;
-        }
-      };
-      recog.onerror = () => {
-        recordingActive = false;
-        $('mic').classList.remove('recording');
-        $('composeText').placeholder = 'Type or dictate, Enter sends...';
-      };
-      recog.onend = () => {
-        recordingActive = false;
-        $('mic').classList.remove('recording');
-        $('composeText').placeholder = 'Type or dictate, Enter sends...';
-      };
-    } else {
-      $('mic').disabled = true;
-      $('mic').title = 'Speech recognition not supported in this browser';
+    sendOpen({ agent, cols, rows, auto, approveToken, sudoPassword, phoneId }) {
+      const msg = { type: 'session-open', agent, cols, rows };
+      if (auto)           msg.auto = true;
+      if (phoneId)        msg.phoneId = phoneId;
+      if (approveToken)   msg.approveToken = approveToken;
+      if (sudoPassword)   msg.sudoPassword = sudoPassword;
+      this._send(JSON.stringify(msg));
     }
-    $('mic').onclick = () => {
-      if (!recog) return;
-      if (recordingActive) {
-        try { recog.stop(); } catch {}
-        return;
-      }
-      try {
-        recordingActive = true;
-        $('mic').classList.add('recording');
-        $('composeText').placeholder = '🎙 listening...';
-        recog.start();
-      } catch {
-        recordingActive = false;
-        $('mic').classList.remove('recording');
+    sendStdin(data) { if (this.isOpen) this._ws.send(data); }
+    sendControl(msg) { this._send(JSON.stringify(msg)); }
+    resize(cols, rows) { this.sendControl({ type: 'resize', cols, rows }); }
+    kill() { this.sendControl({ type: 'session-close' }); this.close(); }
+    close(code = 1000, reason = 'user-close') {
+      if (this._closed) return;
+      this._closed = true;
+      try { this._ws && this._ws.close(code, reason); } catch {}
+    }
+    _send(data) { if (this.isOpen) { try { this._ws.send(data); } catch {} } }
+  }
+
+  // ── xterm singleton ──────────────────────────────────────────────────────
+  // We create xterm once and move it around so it doesn't re-init on navigation.
+  let _term = null, _fit = null;
+  function getTerm() {
+    if (!_term) {
+      _term = new Terminal({
+        cursorBlink: true,
+        fontFamily: "'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Monaco, monospace",
+        fontSize: 13,
+        theme: {
+          background: '#0B0D10', foreground: '#E7EAEE', cursor: '#7AA2F7',
+          selectionBackground: 'rgba(122,162,247,0.32)',
+          black: '#1A1B26', red: '#F7768E', green: '#9ECE6A', yellow: '#E0AF68',
+          blue: '#7AA2F7', magenta: '#BB9AF7', cyan: '#7DCFFF', white: '#C0CAF5',
+          brightBlack: '#414868', brightRed: '#FF7A93', brightGreen: '#B9F27C',
+          brightYellow: '#FF9E64', brightBlue: '#7DA6FF', brightMagenta: '#BB9AF7',
+          brightCyan: '#0DB9D7', brightWhite: '#D8E0F2',
+        },
+        convertEol: true, allowProposedApi: true,
+      });
+      _fit = new FitAddon();
+      _term.loadAddon(_fit);
+    }
+    return { term: _term, fit: _fit };
+  }
+
+  // ── Summary capture (mirrors terminal_screen.dart _captureSummary) ───────
+  function makeSummaryCapturer(sessionId) {
+    let captured = false;
+    let buf = '';
+    return function capture(bytes) {
+      if (captured) return;
+      for (const b of bytes) {
+        if (b === 0x0d || b === 0x0a) {
+          const s = buf.trim();
+          buf = '';
+          if (!s) continue;
+          captured = true;
+          Storage.updateSession(sessionId, m => ({ ...m, summary: s }));
+          return;
+        }
+        if (b === 0x7f) { buf = buf.slice(0, -1); continue; }
+        if (b < 0x20) continue;
+        buf += String.fromCharCode(b);
+        if (buf.length > 200) {
+          captured = true;
+          Storage.updateSession(sessionId, m => ({ ...m, summary: buf.trim() }));
+          return;
+        }
       }
     };
+  }
 
-    // ─── Soft-keyboard / viewport handling ─────────────────────────────
-    function handleResize() { try { fit.fit(); } catch {} }
-    window.addEventListener('resize', handleResize);
-    if (window.visualViewport) {
-      window.visualViewport.addEventListener('resize', handleResize);
-    }
+  // ── Router ───────────────────────────────────────────────────────────────
+  let _currentUnmount = null;
 
-    // ─── Kickoff ────────────────────────────────────────────────────────
-    (async () => {
-      pairing = loadPairing();
+  const Router = {
+    init() {
+      window.addEventListener('hashchange', () => Router.render());
+      Router.render();
+    },
+    navigate(hash) {
+      window.location.hash = hash;
+    },
+    render() {
+      if (_currentUnmount) { _currentUnmount(); _currentUnmount = null; }
       const hash = window.location.hash.replace(/^#/, '');
-      if (hash) {
-        const parsed = parsePairUrl(decodeURIComponent(hash));
-        if (parsed) {
-          history.replaceState(null, '', window.location.pathname);
-          try { await redeem(parsed); } catch (e) {
-            term.writeln('\\r\\n\\x1b[31m✗\\x1b[0m ' + e.message);
-            showModal();
-            return;
+      // Pair hash: loopsy://pair?u=...&t=...
+      if (hash.startsWith('loopsy%3A') || hash.startsWith('loopsy:')) {
+        _currentUnmount = PairView.mount(decodeURIComponent(hash));
+        return;
+      }
+      if (hash === 'pair' || !hash) {
+        // check for existing pairing
+        const p = Storage.readPairing();
+        if (p) { Router.navigate('home'); return; }
+        _currentUnmount = PairView.mount(null);
+        return;
+      }
+      if (hash === 'home') {
+        const p = Storage.readPairing();
+        if (!p) { Router.navigate('pair'); return; }
+        _currentUnmount = HomeView.mount(p);
+        return;
+      }
+      if (hash.startsWith('session/')) {
+        const id = hash.slice('session/'.length);
+        const p = Storage.readPairing();
+        if (!p) { Router.navigate('pair'); return; }
+        const sessions = Storage.readSessions();
+        const meta = sessions.find(s => s.id === id) || null;
+        _currentUnmount = SessionView.mount(p, id, meta);
+        return;
+      }
+      // fallback
+      Router.navigate('home');
+    },
+  };
+
+  // ── PairView ─────────────────────────────────────────────────────────────
+  const PairView = {
+    mount(rawHash) {
+      const topbar = document.getElementById('topbar-slot');
+      const view   = document.getElementById('view');
+      const chips  = document.getElementById('chips');
+      const cSlot  = document.getElementById('compose-slot');
+      const termW  = document.getElementById('term-wrap');
+      chips.style.display = 'none';
+      cSlot.innerHTML = '';
+      termW.classList.remove('active');
+      view.style.display = '';
+      view.style.overflowY = 'auto';
+
+      // topbar
+      topbar.innerHTML = '';
+      const tb = document.createElement('div');
+      tb.className = 'topbar';
+      tb.innerHTML = '<div class="brand-logo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.5 4l4 4-4 4"/><path d="M3.5 11.5V10a2 2 0 0 1 2-2H18.5"/><path d="M9.5 20l-4-4 4-4"/><path d="M20.5 12.5V14a2 2 0 0 1-2 2H5.5"/></svg></div>'
+        + '<span class="topbar-title">${BRAND_NAME}</span>';
+      topbar.appendChild(tb);
+
+      // body
+      view.innerHTML = '';
+      const body = document.createElement('div');
+      body.className = 'pair-body';
+
+      // hero
+      const hero = document.createElement('div');
+      hero.className = 'pair-hero';
+      hero.innerHTML = '<div class="pair-hero-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M2 20h20"/></svg></div>'
+        + '<h1>Connect to your laptop</h1>'
+        + '<p>Run <code style="font-family:var(--font-mono);background:var(--surface-alt);padding:2px 6px;border-radius:4px">loopsy mobile pair</code> on your laptop, then paste the link below.</p>';
+      body.appendChild(hero);
+
+      // card
+      const card = document.createElement('div');
+      card.className = 'pair-card';
+      const lbl = document.createElement('div');
+      lbl.className = 'pair-card-label'; lbl.textContent = 'Pair URL';
+      const inp = document.createElement('input');
+      inp.className = 'pair-input'; inp.type = 'text';
+      inp.placeholder = 'https://<relay>/app#loopsy%3A...';
+      inp.autocomplete = 'off'; inp.autocapitalize = 'none'; inp.autocorrect = 'off';
+      const errEl = document.createElement('div');
+      errEl.className = 'pair-error'; errEl.style.display = 'none';
+      const btn = document.createElement('button');
+      btn.className = 'btn-primary'; btn.textContent = 'Continue';
+      card.appendChild(lbl); card.appendChild(inp); card.appendChild(errEl); card.appendChild(btn);
+      body.appendChild(card);
+      view.appendChild(body);
+
+      // pre-fill if rawHash is a pair URL
+      if (rawHash) {
+        const parsed = parsePairUrl(rawHash);
+        if (parsed) inp.value = rawHash;
+        // strip the hash so back doesn't re-trigger
+        history.replaceState(null, '', window.location.pathname + '#pair');
+      }
+
+      let busy = false;
+      async function doPair(urlText) {
+        if (busy) return;
+        const parsed = parsePairUrl(urlText);
+        if (!parsed) { errEl.textContent = 'Could not parse pair URL.'; errEl.style.display = ''; return; }
+        errEl.style.display = 'none';
+        // Ask for 4-digit SAS code (CSO #14)
+        const sasResult = await Modal.dialog({
+          icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>',
+          title: 'Enter 4-digit code',
+          subtitle: 'Read the verification code shown on your laptop next to the QR.',
+          body: '<input id="_sas" class="modal-input" type="text" inputmode="numeric" maxlength="4" placeholder="&bull;&bull;&bull;&bull;" autocomplete="off" style="letter-spacing:10px;text-align:center;font-size:26px" />',
+          barrierDismissible: false,
+          actions: [
+            { label: 'Cancel', variant: 'mbtn-text', value: null },
+            { label: 'Pair', variant: 'mbtn-primary', onClick: () => {
+              const el = document.getElementById('_sas');
+              return el ? el.value.trim() : null;
+            }},
+          ],
+        });
+        if (!sasResult) return;
+        busy = true; btn.disabled = true; btn.textContent = 'Pairing...';
+        try {
+          const r = await fetch(parsed.relayUrl.replace(/\\/+$/, '') + '/pair/redeem', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ token: parsed.token, sas: sasResult, label: navigator.userAgent.slice(0, 80) }),
+          });
+          if (!r.ok) { const t = await r.text(); throw new Error('Pair failed: ' + r.status + ' ' + t); }
+          const j = await r.json();
+          Storage.writePairing({
+            relayUrl: parsed.relayUrl,
+            deviceId: j.device_id,
+            phoneId: j.phone_id,
+            phoneSecret: j.phone_secret,
+          });
+          Router.navigate('home');
+        } catch (e) {
+          errEl.textContent = e.message; errEl.style.display = '';
+          btn.disabled = false; btn.textContent = 'Continue';
+          busy = false;
+        }
+      }
+
+      btn.onclick = () => doPair(inp.value.trim());
+      inp.addEventListener('keydown', e => { if (e.key === 'Enter') doPair(inp.value.trim()); });
+
+      // auto-pair if hash came with a full url
+      if (rawHash) {
+        const parsed = parsePairUrl(rawHash);
+        if (parsed) doPair(rawHash);
+      }
+
+      return function unmount() { topbar.innerHTML = ''; view.innerHTML = ''; };
+    },
+  };
+
+  // ── HomeView ──────────────────────────────────────────────────────────────
+  const HomeView = {
+    mount(pairing) {
+      const topbar = document.getElementById('topbar-slot');
+      const view   = document.getElementById('view');
+      const chips  = document.getElementById('chips');
+      const cSlot  = document.getElementById('compose-slot');
+      const termW  = document.getElementById('term-wrap');
+      chips.style.display = 'none';
+      cSlot.innerHTML = '';
+      termW.classList.remove('active');
+      view.style.display = '';
+      view.style.overflowY = 'auto';
+
+      // topbar
+      topbar.innerHTML = '';
+      const tb = document.createElement('div');
+      tb.className = 'topbar';
+      const logo = document.createElement('span');
+      logo.className = 'brand-logo';
+      logo.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.5 4l4 4-4 4"/><path d="M3.5 11.5V10a2 2 0 0 1 2-2H18.5"/><path d="M9.5 20l-4-4 4-4"/><path d="M20.5 12.5V14a2 2 0 0 1-2 2H5.5"/></svg>';
+      const title = document.createElement('span');
+      title.className = 'topbar-title'; title.textContent = '${BRAND_NAME}';
+      const settingsBtn = document.createElement('button');
+      settingsBtn.className = 'icon-btn'; settingsBtn.title = 'Settings';
+      settingsBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06-.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>';
+      tb.appendChild(logo); tb.appendChild(title); tb.appendChild(settingsBtn);
+      topbar.appendChild(tb);
+
+      let sessions = Storage.readSessions();
+
+      function render() {
+        view.innerHTML = '';
+        const body = document.createElement('div');
+        body.className = 'home-body';
+
+        // ── Device card ──────────────────────────────────────────────
+        const dc = document.createElement('div');
+        dc.className = 'device-card';
+        const dcRow = document.createElement('div');
+        dcRow.className = 'device-card-row';
+        const tile = document.createElement('div');
+        tile.className = 'icon-tile sz36 accent';
+        tile.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M2 20h20"/></svg>';
+        const info = document.createElement('div');
+        info.className = 'device-card-info';
+        const lbl = document.createElement('div');
+        lbl.className = 'device-card-label'; lbl.textContent = 'Paired laptop';
+        const idEl = document.createElement('div');
+        idEl.className = 'device-card-id'; idEl.textContent = pairing.deviceId;
+        info.appendChild(lbl); info.appendChild(idEl);
+        dcRow.appendChild(tile); dcRow.appendChild(info);
+        const urlRow = document.createElement('div');
+        urlRow.className = 'device-card-url-row';
+        urlRow.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a14 14 0 0 1 0 18a14 14 0 0 1 0-18"/></svg>';
+        const urlSpan = document.createElement('span');
+        urlSpan.textContent = pairing.relayUrl;
+        urlRow.appendChild(urlSpan);
+        dc.appendChild(dcRow); dc.appendChild(urlRow);
+        body.appendChild(dc);
+
+        // ── Sessions header ──────────────────────────────────────────
+        const sh = document.createElement('div');
+        sh.className = 'section-header'; sh.textContent = 'Sessions';
+        body.appendChild(sh);
+
+        // ── Session list ─────────────────────────────────────────────
+        if (sessions.length === 0) {
+          const es = document.createElement('div');
+          es.className = 'empty-sessions';
+          es.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 17 9 12 4 7"/><path d="M12 19h8"/></svg>'
+            + '<p>No sessions yet. Tap + to start one.</p>';
+          body.appendChild(es);
+        } else {
+          sessions.forEach(s => {
+            const card = _buildSessionCard(s, pairing, () => {
+              sessions = Storage.readSessions();
+              render();
+            });
+            body.appendChild(card);
+          });
+        }
+
+        // ── FAB ──────────────────────────────────────────────────────
+        const fab = document.createElement('button');
+        fab.className = 'fab';
+        fab.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>New session';
+        fab.onclick = () => _newSession(pairing, () => { sessions = Storage.readSessions(); render(); });
+        body.appendChild(fab);
+
+        view.appendChild(body);
+      }
+
+      settingsBtn.onclick = () => _resetPairing(pairing);
+      render();
+
+      return function unmount() { topbar.innerHTML = ''; view.innerHTML = ''; };
+    },
+  };
+
+  function _sessionDisplayName(s) {
+    if (s.name && s.name.trim()) return s.name.trim();
+    if (s.summary && s.summary.trim()) {
+      const t = s.summary.trim();
+      return t.length > 60 ? t.slice(0, 60) + '\\u2026' : t;
+    }
+    return s.agent + ' session';
+  }
+
+  function _agentIconSvg(agent) {
+    if (agent === 'claude') return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M9 10h.01M12 10h.01M15 10h.01"/></svg>';
+    if (agent === 'gemini') return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96-.46 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 1.98-3A2.5 2.5 0 0 1 9.5 2Z"/><path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96-.46 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24 2.5 2.5 0 0 0-1.98-3A2.5 2.5 0 0 0 14.5 2Z"/></svg>';
+    if (agent === 'codex')  return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>';
+    return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 17 9 12 4 7"/><path d="M12 19h8"/></svg>';
+  }
+
+  function _buildSessionCard(s, pairing, onRefresh) {
+    const card = document.createElement('div');
+    card.className = 'session-card';
+    const inner = document.createElement('div');
+    inner.className = 'session-card-inner';
+
+    const tile = document.createElement('div');
+    tile.className = 'icon-tile sz40 accent';
+    tile.innerHTML = _agentIconSvg(s.agent);
+
+    const bdy = document.createElement('div');
+    bdy.className = 'session-card-body';
+    const nm = document.createElement('div');
+    nm.className = 'session-card-name'; nm.textContent = _sessionDisplayName(s);
+    const meta = document.createElement('div');
+    meta.className = 'session-card-meta';
+    const badge = document.createElement('span');
+    badge.className = 'agent-badge'; badge.textContent = s.agent;
+    const sid = document.createElement('span');
+    sid.className = 'session-id-mono'; sid.textContent = s.id.slice(0, 6);
+    meta.appendChild(badge); meta.appendChild(sid);
+    // show summary if we also have a custom name
+    if (s.name && s.summary) {
+      const sumEl = document.createElement('span');
+      sumEl.className = 'session-summary-text'; sumEl.textContent = s.summary;
+      meta.appendChild(sumEl);
+    }
+    bdy.appendChild(nm); bdy.appendChild(meta);
+
+    const more = document.createElement('button');
+    more.className = 'icon-btn'; more.title = 'More';
+    more.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg>';
+
+    inner.appendChild(tile); inner.appendChild(bdy); inner.appendChild(more);
+    card.appendChild(inner);
+
+    card.onclick = (e) => {
+      if (e.target.closest('.icon-btn')) return;
+      Router.navigate('session/' + s.id);
+    };
+    more.onclick = (e) => { e.stopPropagation(); _showSessionMenu(s, pairing, onRefresh); };
+    return card;
+  }
+
+  async function _newSession(pairing, onRefresh) {
+    // 1. pick agent
+    const agent = await _pickAgent();
+    if (!agent) return;
+    // 2. auto-approve dialog (only for non-shell agents)
+    let auto = false;
+    if (agent !== 'shell') {
+      const res = await _promptAutoApprove(agent);
+      if (res === undefined || res === null) return; // cancelled
+      auto = res;
+    }
+    // 3. name dialog
+    const name = await _promptName('', 'Name this session?');
+    // name can be null (skipped) — that's fine
+    const id = uuidV4();
+    const meta = {
+      id, agent,
+      lastUsedMs: Date.now(),
+      name: (name && name.trim()) ? name.trim() : undefined,
+      auto,
+    };
+    const sessions = Storage.readSessions();
+    Storage.writeSessions([meta, ...sessions]);
+    if (onRefresh) onRefresh();
+    Router.navigate('session/' + id);
+  }
+
+  // Agent picker sheet — imperative so tile taps can resolve the promise directly.
+  function _pickAgent() {
+    return new Promise(resolve => {
+      const layer = document.getElementById('modal-layer');
+      const overlay = document.createElement('div');
+      overlay.className = 'sheet-overlay';
+      const card = document.createElement('div');
+      card.className = 'sheet-card';
+      card.innerHTML = '<div class="modal-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg></div>'
+        + '<h2 class="modal-title">Start a session</h2>'
+        + '<p class="modal-subtitle">Pick an agent. The session lives on your laptop and you can switch back to it anytime.</p>';
+
+      const agents = [
+        { agent: 'shell',  label: 'shell',  sub: 'Bash on your laptop',  icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 17 9 12 4 7"/><path d="M12 19h8"/></svg>', color: 'var(--fg)' },
+        { agent: 'claude', label: 'claude', sub: 'Claude Code',           icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M9 10h.01M12 10h.01M15 10h.01"/></svg>', color: 'var(--accent)' },
+        { agent: 'gemini', label: 'gemini', sub: 'Gemini CLI',            icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96-.46 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 1.98-3A2.5 2.5 0 0 1 9.5 2Z"/><path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96-.46 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24 2.5 2.5 0 0 0-1.98-3A2.5 2.5 0 0 0 14.5 2Z"/></svg>', color: 'var(--accent)' },
+        { agent: 'codex',  label: 'codex',  sub: 'OpenAI Codex CLI',      icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>', color: 'var(--accent)' },
+      ];
+      agents.forEach(({ agent, label, sub, icon, color }) => {
+        const tile = document.createElement('div');
+        tile.className = 'menu-tile';
+        tile.innerHTML = '<div class="menu-tile-icon" style="color:' + color + '">' + icon + '</div>'
+          + '<div class="menu-tile-body"><div class="menu-tile-title">' + label + '</div>'
+          + (sub ? '<div class="menu-tile-sub">' + sub + '</div>' : '') + '</div>';
+        tile.onclick = () => { overlay.remove(); resolve(agent); };
+        card.appendChild(tile);
+      });
+      const actRow = document.createElement('div');
+      actRow.className = 'modal-actions';
+      const cancelBtn = document.createElement('button');
+      cancelBtn.className = 'mbtn mbtn-text'; cancelBtn.textContent = 'Cancel';
+      cancelBtn.onclick = () => { overlay.remove(); resolve(null); };
+      actRow.appendChild(cancelBtn);
+      card.appendChild(actRow);
+      overlay.addEventListener('click', e => { if (e.target === overlay) { overlay.remove(); resolve(null); } });
+      overlay.appendChild(card);
+      layer.appendChild(overlay);
+    });
+  }
+
+  async function _promptAutoApprove(agent) {
+    const flag = agentFlag(agent);
+    const bodyEl = document.createElement('div');
+    bodyEl.innerHTML = '<div class="code-block">' + agent + (flag ? ' ' + flag : '') + '</div>'
+      + '<div class="warn-row"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>'
+      + '<span>The agent will run file edits and shell commands without asking. Trust the prompt.</span></div>';
+    return Modal.dialog({
+      icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4 14h7l-1 8 9-12h-7l1-8Z"/></svg>',
+      title: 'Auto-approve actions?',
+      subtitle: "Skip the agent's confirmation prompts. The first auto-approve session will ask for your macOS password once.",
+      body: bodyEl,
+      actions: [
+        { label: 'Cancel', variant: 'mbtn-text', value: undefined },
+        { label: 'Stay safe', variant: 'mbtn-outlined', value: false },
+        { label: 'Auto-approve', variant: 'mbtn-primary', value: true },
+      ],
+    });
+  }
+
+  async function _promptName(initial, title) {
+    return new Promise(resolve => {
+      const layer = document.getElementById('modal-layer');
+      const overlay = document.createElement('div');
+      overlay.className = 'modal-overlay';
+      const card = document.createElement('div');
+      card.className = 'modal-card';
+      card.innerHTML = '<div class="modal-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5Z"/></svg></div>'
+        + '<h2 class="modal-title">' + title + '</h2>'
+        + '<p class="modal-subtitle">Pick a name you\'ll recognise on the home list.</p>';
+      const inp = document.createElement('input');
+      inp.className = 'modal-input'; inp.type = 'text';
+      inp.placeholder = 'e.g. fix logging bug';
+      inp.value = initial || '';
+      inp.autocomplete = 'off';
+      inp.style.marginBottom = '18px';
+      const actRow = document.createElement('div');
+      actRow.className = 'modal-actions';
+      const skip = document.createElement('button');
+      skip.className = 'mbtn mbtn-text'; skip.textContent = 'Skip';
+      skip.onclick = () => { overlay.remove(); resolve(null); };
+      const save = document.createElement('button');
+      save.className = 'mbtn mbtn-primary'; save.textContent = 'Save';
+      save.onclick = () => { overlay.remove(); resolve(inp.value); };
+      inp.addEventListener('keydown', e => { if (e.key === 'Enter') { overlay.remove(); resolve(inp.value); } });
+      actRow.appendChild(skip); actRow.appendChild(save);
+      card.appendChild(inp); card.appendChild(actRow);
+      overlay.addEventListener('click', e => { if (e.target === overlay) { overlay.remove(); resolve(null); } });
+      overlay.appendChild(card);
+      layer.appendChild(overlay);
+      requestAnimationFrame(() => inp.focus());
+    });
+  }
+
+  async function _showSessionMenu(s, pairing, onRefresh) {
+    const action = await new Promise(resolve => {
+      const layer = document.getElementById('modal-layer');
+      const overlay = document.createElement('div');
+      overlay.className = 'sheet-overlay';
+      const card = document.createElement('div');
+      card.className = 'sheet-card';
+      card.innerHTML = '<div class="modal-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg></div>'
+        + '<h2 class="modal-title">' + _sessionDisplayName(s) + '</h2>'
+        + '<p class="modal-subtitle">session ' + s.id.slice(0,6) + ' &bull; ' + s.agent + '</p>';
+
+      const menuItems = [
+        { key: 'rename', label: 'Rename', sub: null, color: 'var(--fg)', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5Z"/></svg>' },
+        { key: 'remove', label: 'Remove from list', sub: 'Keeps the laptop session running.', color: 'var(--warn)', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M3 12h12"/><path d="M3 18h9"/><path d="M17 16l4 4m0-4l-4 4"/></svg>' },
+        { key: 'delete', label: 'Delete', sub: 'Stops the laptop session and removes it.', color: 'var(--bad)', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>' },
+      ];
+      menuItems.forEach(({ key, label, sub, color, icon }) => {
+        const tile = document.createElement('div');
+        tile.className = 'menu-tile';
+        tile.innerHTML = '<div class="menu-tile-icon" style="color:' + color + '">' + icon + '</div>'
+          + '<div class="menu-tile-body"><div class="menu-tile-title" style="color:' + color + '">' + label + '</div>'
+          + (sub ? '<div class="menu-tile-sub">' + sub + '</div>' : '') + '</div>';
+        tile.onclick = () => { overlay.remove(); resolve(key); };
+        card.appendChild(tile);
+      });
+      const actRow = document.createElement('div');
+      actRow.className = 'modal-actions';
+      const cancelBtn = document.createElement('button');
+      cancelBtn.className = 'mbtn mbtn-text'; cancelBtn.textContent = 'Cancel';
+      cancelBtn.onclick = () => { overlay.remove(); resolve(null); };
+      actRow.appendChild(cancelBtn); card.appendChild(actRow);
+      overlay.addEventListener('click', e => { if (e.target === overlay) { overlay.remove(); resolve(null); } });
+      overlay.appendChild(card);
+      layer.appendChild(overlay);
+    });
+
+    if (action === 'rename') {
+      const name = await _promptName(s.name || s.summary || '', 'Rename session');
+      if (name !== null) {
+        Storage.updateSession(s.id, m => ({ ...m, name: name.trim() || undefined }));
+        if (onRefresh) onRefresh();
+      }
+    } else if (action === 'remove') {
+      const sessions = Storage.readSessions().filter(e => e.id !== s.id);
+      Storage.writeSessions(sessions);
+      if (onRefresh) onRefresh();
+    } else if (action === 'delete') {
+      // best-effort kill via WS
+      try {
+        const conn = new RelayConn({
+          pairing, sessionId: s.id,
+          onPty: () => {}, onControl: () => {}, onClose: () => {},
+        });
+        conn.connect();
+        setTimeout(() => { try { conn.kill(); } catch {} }, 100);
+      } catch {}
+      const sessions = Storage.readSessions().filter(e => e.id !== s.id);
+      Storage.writeSessions(sessions);
+      if (onRefresh) onRefresh();
+    }
+  }
+
+  async function _resetPairing(pairing) {
+    const ok = await Modal.dialog({
+      icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>',
+      iconColor: 'var(--bad)',
+      title: 'Forget pairing?',
+      subtitle: "You'll need to re-paste a pair link to reconnect. Your auto-approve token will be wiped too.",
+      actions: [
+        { label: 'Cancel', variant: 'mbtn-text', value: false },
+        { label: 'Forget', variant: 'mbtn-danger', value: true },
+      ],
+    });
+    if (!ok) return;
+    // CSO #8: revoke server-side (best-effort)
+    try {
+      await fetch(
+        pairing.relayUrl.replace(/\\/+$/, '') + '/device/' + encodeURIComponent(pairing.deviceId) + '/phones/self?phone_id=' + encodeURIComponent(pairing.phoneId),
+        { method: 'DELETE', headers: { Authorization: 'Bearer ' + pairing.phoneSecret } },
+      );
+    } catch {}
+    Storage.deletePairing();
+    Router.navigate('pair');
+  }
+
+  // ── SessionView ───────────────────────────────────────────────────────────
+  const SessionView = {
+    mount(pairing, sessionId, meta) {
+      const topbar = document.getElementById('topbar-slot');
+      const view   = document.getElementById('view');
+      const chipsEl = document.getElementById('chips');
+      const cSlot  = document.getElementById('compose-slot');
+      const termW  = document.getElementById('term-wrap');
+
+      // Hide scrollable view; show terminal node
+      view.style.display = 'none';
+      chipsEl.style.display = 'none'; // session view uses topbar status only
+      termW.classList.add('active');
+
+      // ── xterm ────────────────────────────────────────────────────────
+      const { term, fit } = getTerm();
+      // Detach from any previous parent
+      if (term.element && term.element.parentNode && term.element.parentNode !== termW) {
+        term.element.parentNode.removeChild(term.element);
+      }
+      if (!term.element) {
+        term.open(termW);
+      } else if (!termW.contains(term.element)) {
+        termW.appendChild(term.element);
+      }
+      termW.style.flex = '1';
+      termW.style.minHeight = '0';
+
+      const agent = meta ? meta.agent : 'shell';
+      const auto  = meta ? !!meta.auto : false;
+
+      let status = 'connecting...';
+      let statusErr = false;
+
+      // ── Topbar ───────────────────────────────────────────────────────
+      topbar.innerHTML = '';
+      const tb = document.createElement('div');
+      tb.className = 'topbar';
+
+      const backBtn = document.createElement('button');
+      backBtn.className = 'icon-btn'; backBtn.title = 'Back';
+      backBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/></svg>';
+      backBtn.onclick = () => Router.navigate('home');
+
+      const titleEl = document.createElement('span');
+      titleEl.className = 'topbar-title';
+      const titleInner = document.createElement('span');
+      titleInner.style.cssText = 'display:flex;align-items:center;gap:8px';
+      titleInner.innerHTML = '<span style="color:var(--accent)">' + _agentIconSvg(agent) + '</span>'
+        + '<span style="font-family:var(--font-mono);font-size:14px">' + agent + '</span>'
+        + '<span style="width:4px;height:4px;border-radius:50%;background:var(--muted);display:inline-block"></span>'
+        + '<span style="font-family:var(--font-mono);font-size:12px;color:var(--muted)">' + sessionId.slice(0,6) + '</span>';
+      titleEl.appendChild(titleInner);
+
+      const statusChip = document.createElement('span');
+      statusChip.className = 'status-chip';
+      const dot = document.createElement('span'); dot.className = 'dot';
+      const statusText = document.createElement('span'); statusText.textContent = status;
+      statusChip.appendChild(dot); statusChip.appendChild(statusText);
+
+      const moreBtn = document.createElement('button');
+      moreBtn.className = 'icon-btn'; moreBtn.title = 'Session menu';
+      moreBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg>';
+      moreBtn.onclick = () => {
+        if (meta) _showSessionMenu(meta, pairing, () => {});
+      };
+
+      tb.appendChild(backBtn); tb.appendChild(titleEl); tb.appendChild(statusChip); tb.appendChild(moreBtn);
+      topbar.appendChild(tb);
+
+      function setStatus(text, kind) {
+        status = text; statusErr = (kind === 'err');
+        statusText.textContent = text;
+        statusChip.className = 'status-chip' + (kind ? ' ' + kind : '');
+      }
+
+      // ── Compose ──────────────────────────────────────────────────────
+      cSlot.innerHTML = '';
+      const compose = document.createElement('div');
+      compose.className = 'compose';
+      const micBtn = document.createElement('button');
+      micBtn.className = 'icon-btn'; micBtn.title = 'Voice input';
+      micBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M19 10a7 7 0 0 1-14 0"/><path d="M12 17v4"/></svg>';
+      const textarea = document.createElement('textarea');
+      textarea.rows = 1;
+      textarea.placeholder = 'Type or dictate, Enter sends...';
+      textarea.autocomplete = 'off'; textarea.autocapitalize = 'none';
+      textarea.autocorrect = 'off'; textarea.spellcheck = false;
+      const sendBtn = document.createElement('button');
+      sendBtn.className = 'icon-btn send-btn'; sendBtn.title = 'Send';
+      sendBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4 20-7Z"/></svg>';
+      compose.appendChild(micBtn); compose.appendChild(textarea); compose.appendChild(sendBtn);
+      cSlot.appendChild(compose);
+
+      // ── WS + session open ────────────────────────────────────────────
+      const capturer = makeSummaryCapturer(sessionId);
+      let conn = null;
+
+      function openConn(sudoPassword, approveToken) {
+        conn = new RelayConn({
+          pairing, sessionId,
+          onPty: (bytes) => {
+            term.write(bytes);
+          },
+          onControl: handleControl,
+          onClose: (code) => {
+            setStatus('closed (' + (code ?? '?') + ')', code !== 1000 ? 'err' : '');
+          },
+        });
+        conn.connect();
+        conn._ws.addEventListener('open', () => {
+          setStatus('connected', 'ok');
+          const cols = term.cols || 120, rows = term.rows || 40;
+          conn.sendOpen({ agent, cols, rows, auto, approveToken, sudoPassword, phoneId: pairing.phoneId });
+          fit.fit();
+        });
+      }
+
+      async function handleControl(msg) {
+        if (msg.type === 'device-disconnected') {
+          setStatus('device disconnected', 'err');
+        } else if (msg.type === 'auto-approve-granted') {
+          const token = msg.token;
+          if (token) {
+            Storage.writeApproveToken(token);
+            // Brief toast: write to terminal
+            term.writeln('\\r\\n\\x1b[32mAuto-approve enabled. Future sessions skip the password.\\x1b[0m\\r\\n');
           }
+        } else if (msg.type === 'auto-approve-denied') {
+          Storage.deleteApproveToken();
+          setStatus('auto-approve denied', 'err');
+          const reason = msg.message || 'Auto-approve denied.';
+          // Show password dialog again with error inline
+          const pw = await _askSudoPassword(agent, reason);
+          if (!pw) return;
+          // Reconnect with new password
+          conn.close();
+          openConn(pw, null);
         }
       }
-      if (!pairing) { showModal(); return; }
-      setStatus('paired', 'ok');
-      const stored = loadSessions();
-      if (stored.length === 0) {
-        term.writeln('\\x1b[32m✓\\x1b[0m paired with device \\x1b[1m' + pairing.deviceId.slice(0, 8) + '\\x1b[0m…  Tap "New" to open a session.');
+
+      // bootstrap: for auto sessions, check cached token
+      async function bootstrap() {
+        term.reset();
+        fit.fit();
+        if (auto) {
+          const cached = Storage.readApproveToken();
+          if (cached) {
+            openConn(null, cached);
+          } else {
+            const pw = await _askSudoPassword(agent, null);
+            if (!pw) {
+              setStatus('cancelled', 'err');
+              return;
+            }
+            openConn(pw, null);
+          }
+        } else {
+          openConn(null, null);
+        }
+      }
+
+      bootstrap();
+
+      // ── xterm I/O wiring ─────────────────────────────────────────────
+      const onData = term.onData((data) => {
+        if (!conn || !conn.isOpen) return;
+        const bytes = new TextEncoder().encode(data);
+        conn.sendStdin(bytes);
+        capturer(bytes);
+      });
+      const onResize = term.onResize(({ cols, rows }) => {
+        if (conn && conn.isOpen) conn.resize(cols, rows);
+      });
+
+      // ── Send compose ──────────────────────────────────────────────────
+      function sendCompose() {
+        const text = textarea.value;
+        if (!text) return;
+        if (!conn || !conn.isOpen) {
+          term.writeln('\\r\\n\\x1b[33mNo active session\\x1b[0m');
+          return;
+        }
+        const bytes = new TextEncoder().encode(text + '\\r');
+        conn.sendStdin(bytes);
+        capturer(bytes);
+        textarea.value = '';
+        textarea.style.height = 'auto';
+      }
+      sendBtn.onclick = sendCompose;
+      textarea.addEventListener('keydown', e => {
+        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendCompose(); }
+      });
+      textarea.addEventListener('input', () => {
+        textarea.style.height = 'auto';
+        textarea.style.height = Math.min(textarea.scrollHeight, 96) + 'px';
+      });
+
+      // ── Voice input ───────────────────────────────────────────────────
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      let recog = null;
+      let recordingActive = false;
+      if (SpeechRecognition) {
+        recog = new SpeechRecognition();
+        recog.continuous = false; recog.interimResults = true;
+        recog.lang = navigator.language || 'en-US';
+        recog.onresult = (e) => {
+          let final = '';
+          for (let i = e.resultIndex; i < e.results.length; i++) {
+            const r = e.results[i];
+            if (r.isFinal) final += r[0].transcript;
+            else textarea.placeholder = 'Listening: ' + r[0].transcript;
+          }
+          if (final) textarea.value = (textarea.value + ' ' + final).trim();
+        };
+        recog.onerror = recog.onend = () => {
+          recordingActive = false;
+          micBtn.classList.remove('recording');
+          textarea.placeholder = 'Type or dictate, Enter sends...';
+        };
       } else {
-        term.writeln('\\x1b[2mReattaching ' + stored.length + ' session(s)...\\x1b[0m');
-        for (const meta of stored) {
-          attachSession(meta.id, meta.agent, /* fresh */ false);
-        }
+        micBtn.disabled = true;
+        micBtn.title = 'Speech recognition not supported';
       }
-    })();
+      micBtn.onclick = () => {
+        if (!recog) return;
+        if (recordingActive) { try { recog.stop(); } catch {} return; }
+        try {
+          recordingActive = true;
+          micBtn.classList.add('recording');
+          textarea.placeholder = 'Listening...';
+          recog.start();
+        } catch { recordingActive = false; micBtn.classList.remove('recording'); }
+      };
+
+      // ── Resize handling ───────────────────────────────────────────────
+      function handleResize() { try { fit.fit(); } catch {} }
+      window.addEventListener('resize', handleResize);
+      if (window.visualViewport) window.visualViewport.addEventListener('resize', handleResize);
+      requestAnimationFrame(() => fit.fit());
+
+      return function unmount() {
+        window.removeEventListener('resize', handleResize);
+        if (window.visualViewport) window.visualViewport.removeEventListener('resize', handleResize);
+        onData.dispose(); onResize.dispose();
+        if (recog) { try { recog.stop(); } catch {} }
+        if (conn) conn.close();
+        topbar.innerHTML = '';
+        cSlot.innerHTML = '';
+        view.style.display = '';
+        termW.classList.remove('active');
+      };
+    },
+  };
+
+  // ── Auto-approve password prompt ─────────────────────────────────────────
+  function _askSudoPassword(agent, errorMsg) {
+    return new Promise(resolve => {
+      const layer = document.getElementById('modal-layer');
+      const overlay = document.createElement('div');
+      overlay.className = 'modal-overlay';
+      const card = document.createElement('div');
+      card.className = 'modal-card';
+      card.innerHTML = '<div class="modal-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></div>'
+        + '<h2 class="modal-title">Enable auto-approve</h2>'
+        + '<p class="modal-subtitle">Auto-approve runs ' + agent + ' with permission prompts skipped. Enter your laptop\'s macOS password. You\'ll only be asked once per pairing.</p>';
+
+      const pwWrap = document.createElement('div');
+      pwWrap.className = 'pw-wrap';
+      const inp = document.createElement('input');
+      inp.className = 'modal-input pw-input'; inp.type = 'password';
+      inp.placeholder = 'macOS password'; inp.autocomplete = 'off';
+      const toggle = document.createElement('button');
+      toggle.type = 'button'; toggle.className = 'pw-toggle';
+      toggle.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8Z"/><circle cx="12" cy="12" r="3"/></svg>';
+      let obscure = true;
+      toggle.onclick = () => {
+        obscure = !obscure;
+        inp.type = obscure ? 'password' : 'text';
+        toggle.innerHTML = obscure
+          ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8Z"/><circle cx="12" cy="12" r="3"/></svg>'
+          : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>';
+      };
+      pwWrap.appendChild(inp); pwWrap.appendChild(toggle);
+      card.appendChild(pwWrap);
+
+      if (errorMsg) {
+        const helper = document.createElement('div');
+        helper.className = 'modal-helper bad'; helper.textContent = errorMsg;
+        helper.style.marginTop = '6px';
+        card.appendChild(helper);
+      }
+
+      const actRow = document.createElement('div');
+      actRow.className = 'modal-actions';
+      actRow.style.marginTop = '18px';
+      const cancelBtn = document.createElement('button');
+      cancelBtn.className = 'mbtn mbtn-text'; cancelBtn.textContent = 'Cancel';
+      cancelBtn.onclick = () => { overlay.remove(); resolve(null); };
+      const enableBtn = document.createElement('button');
+      enableBtn.className = 'mbtn mbtn-primary'; enableBtn.textContent = 'Enable auto-approve';
+      enableBtn.onclick = () => { overlay.remove(); resolve(inp.value); };
+      inp.addEventListener('keydown', e => {
+        if (e.key === 'Enter') { overlay.remove(); resolve(inp.value); }
+      });
+      actRow.appendChild(cancelBtn); actRow.appendChild(enableBtn);
+      card.appendChild(actRow);
+      overlay.appendChild(card);
+      layer.appendChild(overlay);
+      requestAnimationFrame(() => inp.focus());
+    });
+  }
+
+  // ── Boot ─────────────────────────────────────────────────────────────────
+  Router.init();
+
+  })();
   </script>
 </body>
 </html>`;
