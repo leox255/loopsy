@@ -753,6 +753,9 @@ export const WEB_CLIENT_HTML = /* html */ `<!doctype html>
   };
 
   // ── PairView ─────────────────────────────────────────────────────────────
+  // Renders an empty page (just the brand topbar) and immediately opens a
+  // dialog popup asking for the pair URL — matching the WIP design. The dialog
+  // can't be dismissed; pair is the only way out of this view.
   const PairView = {
     mount(rawHash) {
       const topbar = document.getElementById('topbar-slot');
@@ -766,7 +769,7 @@ export const WEB_CLIENT_HTML = /* html */ `<!doctype html>
       view.style.display = '';
       view.style.overflowY = 'auto';
 
-      // topbar
+      // Topbar — brand only.
       topbar.innerHTML = '';
       const tb = document.createElement('div');
       tb.className = 'topbar';
@@ -774,51 +777,48 @@ export const WEB_CLIENT_HTML = /* html */ `<!doctype html>
         + '<span class="topbar-title">${BRAND_NAME}</span>';
       topbar.appendChild(tb);
 
-      // body
+      // Empty body — the dialog is the page.
       view.innerHTML = '';
-      const body = document.createElement('div');
-      body.className = 'pair-body';
 
-      // hero
-      const hero = document.createElement('div');
-      hero.className = 'pair-hero';
-      hero.innerHTML = '<div class="pair-hero-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M2 20h20"/></svg></div>'
-        + '<h1>Connect to your laptop</h1>'
-        + '<p>Run <code style="font-family:var(--font-mono);background:var(--surface-alt);padding:2px 6px;border-radius:4px">loopsy mobile pair</code> on your laptop, then paste the link below.</p>';
-      body.appendChild(hero);
-
-      // card
-      const card = document.createElement('div');
-      card.className = 'pair-card';
-      const lbl = document.createElement('div');
-      lbl.className = 'pair-card-label'; lbl.textContent = 'Pair URL';
-      const inp = document.createElement('input');
-      inp.className = 'pair-input'; inp.type = 'text';
-      inp.placeholder = 'https://<relay>/app#loopsy%3A...';
-      inp.autocomplete = 'off'; inp.autocapitalize = 'none'; inp.autocorrect = 'off';
-      const errEl = document.createElement('div');
-      errEl.className = 'pair-error'; errEl.style.display = 'none';
-      const btn = document.createElement('button');
-      btn.className = 'btn-primary'; btn.textContent = 'Continue';
-      card.appendChild(lbl); card.appendChild(inp); card.appendChild(errEl); card.appendChild(btn);
-      body.appendChild(card);
-      view.appendChild(body);
-
-      // pre-fill if rawHash is a pair URL
+      // Strip the raw hash from the address bar so back/refresh don't
+      // re-trigger pairing with a stale token; we already captured it.
+      const initialPair = rawHash ? parsePairUrl(rawHash) : null;
       if (rawHash) {
-        const parsed = parsePairUrl(rawHash);
-        if (parsed) inp.value = rawHash;
-        // strip the hash so back doesn't re-trigger
         history.replaceState(null, '', window.location.pathname + '#pair');
       }
 
-      let busy = false;
-      async function doPair(urlText) {
-        if (busy) return;
-        const parsed = parsePairUrl(urlText);
-        if (!parsed) { errEl.textContent = 'Could not parse pair URL.'; errEl.style.display = ''; return; }
-        errEl.style.display = 'none';
-        // Ask for 4-digit SAS code (CSO #14)
+      const linkIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M2 20h20"/></svg>';
+
+      let cancelled = false;
+
+      async function pairLoop(presetUrl) {
+        if (cancelled) return;
+        const initialValue = presetUrl ?? '';
+        const result = await Modal.dialog({
+          icon: linkIcon,
+          title: 'Connect to your laptop',
+          subtitle: 'Run <code style="font-family:var(--font-mono);background:var(--surface-alt);padding:1px 6px;border-radius:4px">loopsy mobile pair</code> on your laptop, then paste the link.',
+          body: '<input id="_pair_url" class="modal-input" type="text" placeholder="https://&lt;relay&gt;/app#loopsy%3A..." autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" value="' + initialValue.replace(/"/g, '&quot;') + '" /><div id="_pair_err" class="modal-error" style="display:none"></div>',
+          barrierDismissible: false,
+          actions: [
+            { label: 'Continue', variant: 'mbtn-primary', onClick: () => {
+              const el = document.getElementById('_pair_url');
+              const errEl = document.getElementById('_pair_err');
+              const value = el ? el.value.trim() : '';
+              const parsed = parsePairUrl(value);
+              if (!parsed) {
+                if (errEl) { errEl.textContent = 'Could not parse pair URL.'; errEl.style.display = ''; }
+                return undefined;
+              }
+              return { value, parsed };
+            }},
+          ],
+        });
+        if (cancelled) return;
+        if (!result) return;
+        const { parsed } = result;
+
+        // Ask for the 4-digit SAS (CSO #14).
         const sasResult = await Modal.dialog({
           icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>',
           title: 'Enter 4-digit code',
@@ -826,15 +826,19 @@ export const WEB_CLIENT_HTML = /* html */ `<!doctype html>
           body: '<input id="_sas" class="modal-input" type="text" inputmode="numeric" maxlength="4" placeholder="&bull;&bull;&bull;&bull;" autocomplete="off" style="letter-spacing:10px;text-align:center;font-size:26px" />',
           barrierDismissible: false,
           actions: [
-            { label: 'Cancel', variant: 'mbtn-text', value: null },
+            { label: 'Back', variant: 'mbtn-text', value: '__back__' },
             { label: 'Pair', variant: 'mbtn-primary', onClick: () => {
               const el = document.getElementById('_sas');
               return el ? el.value.trim() : null;
             }},
           ],
         });
-        if (!sasResult) return;
-        busy = true; btn.disabled = true; btn.textContent = 'Pairing...';
+        if (cancelled) return;
+        if (sasResult === '__back__' || !sasResult) {
+          // Reopen the URL dialog so the user can retry without losing input.
+          return pairLoop(result.value);
+        }
+
         try {
           const r = await fetch(parsed.relayUrl.replace(/\\/+$/, '') + '/pair/redeem', {
             method: 'POST',
@@ -851,22 +855,31 @@ export const WEB_CLIENT_HTML = /* html */ `<!doctype html>
           });
           Router.navigate('home');
         } catch (e) {
-          errEl.textContent = e.message; errEl.style.display = '';
-          btn.disabled = false; btn.textContent = 'Continue';
-          busy = false;
+          await Modal.dialog({
+            icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg>',
+            title: 'Pairing failed',
+            subtitle: e.message,
+            actions: [{ label: 'Try again', variant: 'mbtn-primary', value: true }],
+          });
+          return pairLoop(result.value);
         }
       }
 
-      btn.onclick = () => doPair(inp.value.trim());
-      inp.addEventListener('keydown', e => { if (e.key === 'Enter') doPair(inp.value.trim()); });
-
-      // auto-pair if hash came with a full url
-      if (rawHash) {
-        const parsed = parsePairUrl(rawHash);
-        if (parsed) doPair(rawHash);
+      // Auto-pair if the hash carried a usable URL; otherwise prompt.
+      if (initialPair) {
+        // Pre-fill but skip directly to the SAS step by passing through the
+        // URL dialog with the value populated — keeps the user in the same
+        // visual flow.
+        pairLoop(rawHash);
+      } else {
+        pairLoop('');
       }
 
-      return function unmount() { topbar.innerHTML = ''; view.innerHTML = ''; };
+      return function unmount() {
+        cancelled = true;
+        topbar.innerHTML = '';
+        view.innerHTML = '';
+      };
     },
   };
 

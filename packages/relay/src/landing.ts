@@ -1,8 +1,13 @@
 /**
  * Marketing landing page served at `/`.
  *
- * Same design tokens as the Flutter app and the web client. The CSP nonce
- * placeholder `__CSP_NONCE__` is replaced per-request before sending.
+ * Visual language mirrors the Loopsy dashboard's AI-task detail view: a
+ * browser-chrome sub-bar at the top, mono-caps section labels, "task card"
+ * panels with status pills and metadata strips, italic muted preambles, and
+ * green-bordered output blocks for results.
+ *
+ * The CSP nonce placeholder `__CSP_NONCE__` is replaced per-request before
+ * sending.
  */
 
 import { BRAND_NAME, BRAND_TAGLINE, GITHUB_URL, ICONS, TOKENS_CSS } from './design.js';
@@ -19,410 +24,682 @@ export const LANDING_HTML = /* html */ `<!doctype html>
   <meta property="og:description" content="Control your laptop's terminal from your phone. Open source." />
   <meta property="og:type" content="website" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&display=swap" />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" />
   <style>
     ${TOKENS_CSS}
     body {
       min-height: 100dvh;
       display: flex; flex-direction: column;
-      background: radial-gradient(ellipse at top, rgba(122,162,247,0.08), transparent 60%), var(--bg);
+      padding-bottom: 76px;  /* space for fixed bottom tabs */
     }
-    main { flex: 1; }
-    .container { max-width: 920px; margin: 0 auto; padding: 0 24px; }
+    .container { max-width: 760px; margin: 0 auto; padding: 0 16px; width: 100%; }
 
-    header.nav {
-      padding: 18px 0;
+    /* ── Top bar: brand + GitHub link ─────────────────────────────────── */
+    .topbar {
+      padding: 14px 0;
       border-bottom: 1px solid var(--border);
-      backdrop-filter: blur(8px);
     }
-    header.nav .container {
+    .topbar .container {
       display: flex; align-items: center; justify-content: space-between;
     }
     .brand {
       display: flex; align-items: center; gap: 10px;
-      font-weight: 700; font-size: 17px;
-      letter-spacing: -0.2px;
+      font-weight: 700; font-size: 15px; letter-spacing: -0.2px;
     }
     .brand .logo {
-      width: 32px; height: 32px;
+      width: 28px; height: 28px;
       display: grid; place-items: center;
-      border-radius: 9px;
-      background: linear-gradient(135deg, var(--accent) 0%, var(--accent-dark) 100%);
+      border-radius: 8px;
+      background: linear-gradient(135deg, var(--accent), var(--accent-dark));
       color: white;
     }
-    .brand .logo svg { width: 18px; height: 18px; }
-    nav.links { display: flex; gap: 6px; align-items: center; }
-    nav.links a {
-      padding: 8px 12px;
-      border-radius: var(--radius-button);
-      color: var(--fg);
-      font-size: 14px; font-weight: 500;
+    .brand .logo svg { width: 16px; height: 16px; }
+    .topbar a.icon {
+      display: inline-grid; place-items: center;
+      width: 32px; height: 32px;
+      color: var(--muted);
+      border-radius: 8px;
     }
-    nav.links a:hover { background: var(--surface); text-decoration: none; }
-    nav.links a.icon { display: inline-grid; place-items: center; padding: 8px; }
-    nav.links a.icon svg { width: 18px; height: 18px; color: var(--muted); }
-    nav.links a.icon:hover svg { color: var(--fg); }
-    nav.links a.cta {
-      background: var(--accent); color: var(--bg);
-      font-weight: 600;
-    }
-    nav.links a.cta:hover { background: #8eb0fa; text-decoration: none; }
+    .topbar a.icon:hover { color: var(--fg); background: var(--surface); text-decoration: none; }
+    .topbar a.icon svg { width: 16px; height: 16px; }
 
-    /* Hero */
-    section.hero { padding: 96px 0 64px; text-align: center; }
-    .eyebrow {
-      display: inline-flex; align-items: center; gap: 8px;
-      padding: 6px 12px;
-      border-radius: var(--radius-chip);
+    /* ── Browser-chrome sub-bar — \`LOOPSY // SECTION   12:00:00\` ─────── */
+    .chrome {
+      padding: 10px 0;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      font-family: var(--font-mono);
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    .chrome .container {
+      display: flex; align-items: center; gap: 14px;
+    }
+    .chrome .brand-id { color: var(--accent); font-weight: 600; }
+    .chrome .sep { color: var(--muted); }
+    .chrome .section-id { color: var(--fg); font-weight: 600; }
+    .chrome .clock { margin-left: auto; color: var(--muted); }
+
+    /* ── Section ──────────────────────────────────────────────────────── */
+    section.panel { padding: 20px 0 8px; }
+    .section-label {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin: 0 0 14px;
+      padding: 0 4px;
+    }
+
+    /* ── Task card (the dashboard task-detail panel) ──────────────────── */
+    .task {
       background: var(--surface);
       border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 18px;
+      margin-bottom: 14px;
+    }
+    .task-header {
+      display: flex; align-items: center; gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 10px;
+    }
+    .pill {
+      display: inline-flex; align-items: center; gap: 5px;
+      padding: 3px 9px;
+      border-radius: 999px;
+      font-family: var(--font-mono);
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    .pill.live    { background: rgba(122,162,247,0.14); color: var(--accent); border: 1px solid rgba(122,162,247,0.4); }
+    .pill.live .dot { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 6px var(--accent); }
+    .pill.done    { background: rgba(158,206,106,0.12); color: var(--good); border: 1px solid rgba(158,206,106,0.4); }
+    .pill.done svg { width: 11px; height: 11px; }
+    .pill.queued  { background: var(--surface-alt); color: var(--muted); border: 1px solid var(--border); }
+    .pill.warn    { background: rgba(224,175,104,0.14); color: var(--warn); border: 1px solid rgba(224,175,104,0.4); }
+
+    .task-id {
+      font-family: var(--font-mono);
+      font-size: 11px;
       color: var(--muted);
-      font-size: 12px; font-weight: 500;
-      margin-bottom: 24px;
+      letter-spacing: 0.04em;
     }
-    .eyebrow .dot {
-      width: 6px; height: 6px; border-radius: 50%;
-      background: var(--good); box-shadow: 0 0 8px var(--good);
+    .task-title {
+      margin: 0 0 8px;
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: -0.01em;
+      line-height: 1.25;
     }
-    h1 {
-      font-size: clamp(36px, 6vw, 56px);
+    .task-title.hero {
+      font-size: clamp(28px, 5vw, 36px);
       line-height: 1.05;
-      letter-spacing: -0.02em;
-      font-weight: 800;
-      margin: 0 0 20px;
+      margin: 6px 0 4px;
     }
-    h1 .accent {
-      background: linear-gradient(135deg, var(--accent) 0%, #BB9AF7 100%);
+    .task-title .accent {
+      background: linear-gradient(135deg, var(--accent), #BB9AF7);
       -webkit-background-clip: text; background-clip: text;
       -webkit-text-fill-color: transparent;
     }
-    .lead {
-      font-size: 17px; line-height: 1.55;
+    .task-meta {
+      font-family: var(--font-mono);
+      font-size: 11px;
       color: var(--muted);
-      max-width: 600px; margin: 0 auto 32px;
+      letter-spacing: 0.02em;
+      margin-bottom: 14px;
     }
-    .cta-row {
-      display: flex; gap: 12px; justify-content: center;
-      flex-wrap: wrap;
-    }
-    .os-note {
-      margin-top: 28px;
+    .task-meta .key { color: var(--fg); opacity: 0.7; }
+    .task-meta .sep { color: var(--border); padding: 0 4px; }
+
+    /* Italic muted preamble — agent's "intent" block from Design 2 */
+    .preamble {
+      font-style: italic;
       color: var(--muted);
+      font-size: 13px;
+      line-height: 1.55;
+      padding: 10px 12px;
+      background: rgba(158,206,106,0.04);
+      border-left: 2px solid rgba(158,206,106,0.4);
+      border-radius: 4px;
+      margin-bottom: 12px;
+    }
+
+    /* Green-bordered output block — the "result" panel */
+    .output {
+      padding: 12px 14px;
+      background: rgba(158,206,106,0.06);
+      border: 1px solid rgba(158,206,106,0.4);
+      border-radius: 8px;
+      font-size: 13.5px;
+      line-height: 1.55;
+    }
+    .output strong { color: var(--good); font-weight: 600; }
+    .output code {
+      background: rgba(0,0,0,0.3);
+      padding: 1px 5px; border-radius: 4px;
       font-size: 12px;
-      letter-spacing: 0.04em;
     }
-    .os-note .mono { font-family: var(--font-mono); }
+    .output ul { margin: 6px 0 0; padding-left: 18px; }
+    .output li { margin: 2px 0; }
+
+    /* Stat strip — \`Cost: $0 · Setup: 30s\` */
+    .stats {
+      margin-top: 12px;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--muted);
+      letter-spacing: 0.02em;
+    }
+    .stats .key { opacity: 0.7; }
+    .stats .sep { padding: 0 6px; color: var(--border); }
+
+    /* ── Buttons / actions ────────────────────────────────────────────── */
+    .actions {
+      display: flex; gap: 8px; flex-wrap: wrap;
+      padding: 0 4px 8px;
+    }
     .btn {
-      display: inline-flex; align-items: center; gap: 8px;
-      padding: 12px 18px;
-      border-radius: var(--radius-button);
-      font-weight: 600; font-size: 15px;
-      transition: transform 100ms ease, background 100ms ease;
+      display: inline-flex; align-items: center; gap: 7px;
+      padding: 10px 14px;
+      border-radius: 10px;
+      font-weight: 600; font-size: 13px;
+      font-family: var(--font-mono);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
       cursor: pointer;
+      border: 1px solid var(--border);
+      transition: transform 100ms ease, background 100ms ease;
     }
     .btn:hover { text-decoration: none; transform: translateY(-1px); }
-    .btn.primary { background: var(--accent); color: var(--bg); }
+    .btn.primary { background: var(--accent); color: var(--bg); border-color: var(--accent); }
     .btn.primary:hover { background: #8eb0fa; }
-    .btn.secondary {
-      background: var(--surface); color: var(--fg);
-      border: 1px solid var(--border);
-    }
+    .btn.secondary { background: var(--surface); color: var(--fg); }
     .btn.secondary:hover { background: var(--surface-alt); }
-    .btn svg { width: 16px; height: 16px; }
+    .btn svg { width: 13px; height: 13px; }
 
-    /* Section header */
-    h2 {
-      font-size: 26px;
-      letter-spacing: -0.02em;
-      font-weight: 700;
-      margin: 0 0 12px;
-    }
-    .section { padding: 56px 0; border-top: 1px solid var(--border); }
-    .section-lead { color: var(--muted); margin: 0 0 32px; max-width: 560px; font-size: 15px; line-height: 1.55; }
-
-    /* Card grid */
-    .grid { display: grid; gap: 16px; }
-    .grid.cols-2 { grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
-    .grid.cols-3 { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
-    .card {
-      padding: 20px;
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: var(--radius-card);
-    }
-    .card .icon-tile {
-      width: 40px; height: 40px;
-      display: grid; place-items: center;
-      border-radius: var(--radius-button);
-      background: var(--surface-alt);
-      border: 1px solid var(--border);
-      margin-bottom: 14px;
-      color: var(--accent);
-    }
-    .card .icon-tile svg { width: 22px; height: 22px; }
-    .card h3 { margin: 0 0 6px; font-size: 16px; font-weight: 600; }
-    .card p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
-
-    /* App badges */
-    .badges { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
-    .badge {
-      display: flex; align-items: center; gap: 12px;
-      padding: 14px 16px;
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: var(--radius-card);
-      opacity: 0.85;
-    }
-    .badge .icon { color: var(--fg); }
-    .badge .icon svg { width: 26px; height: 26px; }
-    .badge .meta { display: flex; flex-direction: column; gap: 2px; }
-    .badge .meta .where { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; }
-    .badge .meta .what { font-weight: 600; font-size: 14px; }
-    .badge .pill {
-      margin-left: auto;
-      padding: 3px 8px;
-      background: var(--surface-alt);
-      border: 1px solid var(--border);
-      border-radius: var(--radius-chip);
-      font-size: 11px; color: var(--muted); font-weight: 500;
-    }
-
-    /* Code block */
-    .codeblock {
+    /* ── Code / terminal block ────────────────────────────────────────── */
+    .terminal {
       position: relative;
-      padding: 18px 20px;
       background: #0a0c0f;
       border: 1px solid var(--border);
-      border-radius: var(--radius-card);
+      border-radius: 8px;
+      padding: 14px 16px;
+      margin-bottom: 8px;
       overflow-x: auto;
     }
-    .codeblock pre {
-      margin: 0; font-family: var(--font-mono); font-size: 14px;
-      color: var(--fg); white-space: pre;
-    }
-    .codeblock .prompt { color: var(--muted); user-select: none; }
+    .terminal pre { margin: 0; font-family: var(--font-mono); font-size: 13px; line-height: 1.6; }
+    .terminal .prompt { color: var(--muted); user-select: none; }
+    .terminal .out { color: var(--good); }
     .copy-btn {
-      position: absolute; top: 12px; right: 12px;
-      padding: 6px 10px;
+      position: absolute; top: 10px; right: 10px;
+      padding: 4px 9px;
       background: var(--surface);
       border: 1px solid var(--border);
       border-radius: 6px;
-      color: var(--muted); font-size: 11px;
-      cursor: pointer; font-family: var(--font-sans);
+      color: var(--muted);
+      font-family: var(--font-mono);
+      font-size: 10px;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      cursor: pointer;
     }
     .copy-btn:hover { color: var(--fg); }
     .copy-btn.copied { color: var(--good); border-color: var(--good); }
 
-    /* How it works */
-    ol.steps {
-      list-style: none; padding: 0; margin: 0;
-      display: grid; gap: 12px;
+    /* ── Bottom tab navigation ────────────────────────────────────────── */
+    /*
+     * Mobile browsers collapse their URL bar on scroll. \`position: fixed;
+     * bottom: 0\` anchors to the LAYOUT viewport (which stays the original
+     * size), so as the visual viewport grows, a gap opens below the tabbar.
+     * Fix: pin the top edge to a JS-tracked \`--vv-bottom\` (visual viewport
+     * bottom in layout-viewport coordinates). CSS fallback below uses
+     * \`bottom: 0\` for browsers without visualViewport support.
+     */
+    .tabbar {
+      position: fixed;
+      left: 0; right: 0;
+      bottom: 0;  /* fallback */
+      top: var(--tabbar-top, auto);  /* JS sets this on browsers w/ visualViewport */
+      background: rgba(11,13,16,0.92);
+      backdrop-filter: blur(12px);
+      border-top: 1px solid var(--border);
+      z-index: 50;
+      padding-bottom: env(safe-area-inset-bottom);
+      will-change: top;
     }
-    ol.steps li {
-      display: flex; gap: 14px;
-      padding: 16px;
+    .tabbar .tabs {
+      max-width: 760px; margin: 0 auto;
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      padding: 8px 4px;
+    }
+    .tabbar a {
+      display: flex; flex-direction: column; align-items: center; gap: 4px;
+      padding: 8px 4px;
+      color: var(--muted);
+      font-family: var(--font-mono);
+      font-size: 9.5px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      font-weight: 600;
+      border-radius: 8px;
+    }
+    .tabbar a:hover { color: var(--fg); text-decoration: none; }
+    .tabbar a svg { width: 18px; height: 18px; }
+    .tabbar a.active { color: var(--accent); }
+    .tabbar a.active::before {
+      content: "";
+      position: absolute; top: 0;
+      width: 28px; height: 2px;
+      background: var(--accent);
+      border-radius: 1px;
+    }
+    .tabbar a { position: relative; }
+
+    /* OS row */
+    .os-row {
+      display: flex; gap: 6px; flex-wrap: wrap;
+      padding: 0 4px 4px;
+      font-family: var(--font-mono);
+      font-size: 10.5px;
+      color: var(--muted);
+      letter-spacing: 0.06em;
+    }
+    .os-row .os {
+      padding: 3px 8px;
       background: var(--surface);
       border: 1px solid var(--border);
-      border-radius: var(--radius-card);
-      align-items: flex-start;
+      border-radius: 6px;
     }
-    ol.steps .num {
-      width: 28px; height: 28px;
+
+    /* App-status rows */
+    .status-row {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border);
+    }
+    .status-row:last-child { border-bottom: none; }
+    .status-row .label {
+      display: flex; align-items: center; gap: 10px;
+      font-size: 14px; font-weight: 500;
+    }
+    .status-row .label svg { width: 18px; height: 18px; color: var(--muted); }
+
+    /* Steps (How it works) */
+    .step {
+      display: flex; gap: 12px;
+      padding: 12px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .step:last-child { border-bottom: none; }
+    .step .num {
+      flex-shrink: 0;
+      width: 26px; height: 26px;
       display: grid; place-items: center;
-      border-radius: 8px;
       background: var(--surface-alt);
       border: 1px solid var(--border);
+      border-radius: 7px;
+      font-family: var(--font-mono);
+      font-size: 12px;
+      font-weight: 700;
       color: var(--accent);
-      font-family: var(--font-mono); font-weight: 700; font-size: 13px;
-      flex-shrink: 0;
     }
-    ol.steps .body h3 { margin: 0 0 4px; font-size: 15px; font-weight: 600; }
-    ol.steps .body p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
-    ol.steps .body code {
-      background: var(--surface-alt); padding: 1px 6px; border-radius: 4px;
-      font-size: 12px; color: var(--fg);
+    .step .body h4 { margin: 0 0 4px; font-size: 14px; font-weight: 600; }
+    .step .body p { margin: 0; font-size: 13px; color: var(--muted); line-height: 1.5; }
+    .step .body code {
+      background: var(--surface-alt); padding: 1px 5px; border-radius: 4px;
+      font-family: var(--font-mono); font-size: 11.5px; color: var(--fg);
     }
 
-    /* Footer */
-    footer.foot {
-      padding: 32px 0;
-      border-top: 1px solid var(--border);
-      color: var(--muted); font-size: 13px;
-    }
-    footer.foot .container {
-      display: flex; align-items: center; justify-content: space-between; gap: 16px;
-      flex-wrap: wrap;
-    }
-    footer.foot a { color: var(--muted); }
-    footer.foot a:hover { color: var(--fg); text-decoration: none; }
-    footer.foot .links { display: flex; gap: 16px; }
-
-    @media (max-width: 600px) {
-      section.hero { padding: 56px 0 40px; }
-      .section { padding: 40px 0; }
-      nav.links a:not(.icon):not(.cta) { display: none; }
+    @media (max-width: 480px) {
+      section.panel { padding: 16px 0 4px; }
+      .task { padding: 14px; }
+      .task-title { font-size: 16px; }
     }
   </style>
 </head>
 <body>
-  <header class="nav">
+  <header class="topbar">
     <div class="container">
       <div class="brand">
         <span class="logo">${ICONS.loopArrow}</span>
         <span>${BRAND_NAME}</span>
       </div>
-      <nav class="links">
-        <a href="#how">How it works</a>
-        <a href="#self-host">Self-host</a>
-        <a href="${GITHUB_URL}" class="icon" aria-label="GitHub" target="_blank" rel="noopener">${ICONS.github}</a>
-        <a href="/app" class="cta">Open web app</a>
-      </nav>
+      <a href="${GITHUB_URL}" class="icon" aria-label="GitHub" target="_blank" rel="noopener">${ICONS.github}</a>
     </div>
   </header>
 
-  <main>
-    <section class="hero">
-      <div class="container">
-        <span class="eyebrow"><span class="dot"></span>Open source · Self-hosted</span>
-        <h1>Your terminal,<br/><span class="accent">in your pocket.</span></h1>
-        <p class="lead">
-          Control Claude Code, Cursor, Codex, or any shell on your laptop
-          from your phone. Self-hosted on Cloudflare Workers.
-        </p>
-        <div class="cta-row">
-          <a href="/app" class="btn primary">${ICONS.bolt}Open web app</a>
-          <a href="${GITHUB_URL}" class="btn secondary" target="_blank" rel="noopener">${ICONS.github}View on GitHub</a>
+  <div class="chrome">
+    <div class="container">
+      <span class="brand-id">${BRAND_NAME}</span>
+      <span class="sep">//</span>
+      <span class="section-id" id="chrome-section">About</span>
+      <span class="clock" id="clock">--:--:--</span>
+    </div>
+  </div>
+
+  <main class="container">
+    <!-- ───── About / Hero ───── -->
+    <section class="panel" id="about">
+      <p class="section-label">Product</p>
+
+      <div class="task">
+        <div class="task-header">
+          <span class="pill live"><span class="dot"></span>Live</span>
+          <span class="task-id">task: 0xa9671aac…</span>
         </div>
-        <p class="os-note"><span class="mono">macOS</span> · <span class="mono">Linux</span> · <span class="mono">Windows</span></p>
+
+        <h1 class="task-title hero">Your terminal,<br/><span class="accent">in your pocket.</span></h1>
+
+        <p class="task-meta">
+          <span class="key">License:</span> Apache-2.0
+          <span class="sep">·</span>
+          <span class="key">Cost:</span> $0
+          <span class="sep">·</span>
+          <span class="key">Setup:</span> ~2 min
+        </p>
+
+        <p class="preamble">
+          The user wants to control their laptop's terminal from their phone —
+          including Claude Code, Cursor, and Codex agents — over the public
+          internet, on their own Cloudflare Worker.
+        </p>
+
+        <div class="output">
+          <strong>✓ Pair phone. Open <code>/app</code>. Run code.</strong><br/>
+          The laptop runs it. The Worker brokers the connection.
+          No port forwarding. No public IP. No VPN.
+        </div>
+
+        <p class="stats">
+          <span class="key">Model:</span> open-source
+          <span class="sep">·</span>
+          <span class="key">Host:</span> your Cloudflare account
+          <span class="sep">·</span>
+          <span class="key">Tokens:</span> ∞
+        </p>
+      </div>
+
+      <div class="actions">
+        <a href="/app" class="btn primary">${ICONS.bolt}Open web app</a>
+        <a href="${GITHUB_URL}" class="btn secondary" target="_blank" rel="noopener">${ICONS.github}GitHub</a>
+      </div>
+
+      <div class="os-row">
+        <span class="os">macOS</span>
+        <span class="os">Linux</span>
+        <span class="os">Windows</span>
       </div>
     </section>
 
-    <section class="section" id="features">
-      <div class="container">
-        <div class="grid cols-3">
-          <div class="card">
-            <div class="icon-tile">${ICONS.cmd}</div>
-            <h3>Real terminal</h3>
-            <p>Full PTY. ANSI, scrollback, resize. TUIs render.</p>
+    <!-- ───── Features ───── -->
+    <section class="panel" id="features">
+      <p class="section-label">Features</p>
+
+      <div class="task">
+        <div class="task-header">
+          <span class="pill done">${ICONS.check}Shipped</span>
+          <span class="task-id">feat: real-terminal</span>
+        </div>
+        <h3 class="task-title">Real terminal</h3>
+        <p class="task-meta">
+          <span class="key">Type:</span> PTY
+          <span class="sep">·</span>
+          <span class="key">Backend:</span> node-pty
+        </p>
+        <div class="output">
+          Full ANSI, scrollback, resize. <code>vim</code>, <code>tmux</code>,
+          <code>htop</code> render properly.
+        </div>
+      </div>
+
+      <div class="task">
+        <div class="task-header">
+          <span class="pill done">${ICONS.check}Shipped</span>
+          <span class="task-id">feat: persistent-sessions</span>
+        </div>
+        <h3 class="task-title">Persistent sessions</h3>
+        <p class="task-meta">
+          <span class="key">Idle:</span> 10 min
+          <span class="sep">·</span>
+          <span class="key">Reconnect:</span> instant
+        </p>
+        <div class="output">
+          Switch tabs. Lock your phone. Lose signal. Pick up where you left off.
+        </div>
+      </div>
+
+      <div class="task">
+        <div class="task-header">
+          <span class="pill done">${ICONS.check}Shipped</span>
+          <span class="task-id">feat: voice-input</span>
+        </div>
+        <h3 class="task-title">Voice input</h3>
+        <p class="task-meta">
+          <span class="key">API:</span> Web Speech
+          <span class="sep">·</span>
+          <span class="key">Edit:</span> before send
+        </p>
+        <div class="output">
+          Dictate via the Web Speech API. Edit before you hit send.
+        </div>
+      </div>
+
+      <div class="task">
+        <div class="task-header">
+          <span class="pill done">${ICONS.check}Shipped</span>
+          <span class="task-id">feat: hardened</span>
+        </div>
+        <h3 class="task-title">Self-hosted &amp; hardened</h3>
+        <p class="task-meta">
+          <span class="key">CSO:</span> 23 findings closed
+          <span class="sep">·</span>
+          <span class="key">Audit:</span> clean
+        </p>
+        <div class="output">
+          Bearer auth, 4-digit pair codes, secrets hashed at rest, npm provenance.
+          No accounts. No middleman.
+        </div>
+      </div>
+    </section>
+
+    <!-- ───── Apps ───── -->
+    <section class="panel" id="apps">
+      <p class="section-label">Apps</p>
+
+      <div class="task">
+        <div class="task-header">
+          <span class="pill live"><span class="dot"></span>Status</span>
+          <span class="task-id">platforms</span>
+        </div>
+        <h3 class="task-title">Native apps</h3>
+        <p class="task-meta">Web works today. Native apps in submission review.</p>
+
+        <div style="margin-top: 8px;">
+          <div class="status-row">
+            <div class="label">${ICONS.globe}<span>Web app — <code style="font-family:var(--font-mono);font-size:12px">/app</code></span></div>
+            <span class="pill done">${ICONS.check}Live</span>
           </div>
-          <div class="card">
-            <div class="icon-tile">${ICONS.bolt}</div>
-            <h3>Persistent sessions</h3>
-            <p>Switch tabs. Lock your phone. Lose signal. Pick up where you left off.</p>
+          <div class="status-row">
+            <div class="label">${ICONS.apple}<span>iOS · iPadOS</span></div>
+            <span class="pill queued">Submitted</span>
           </div>
-          <div class="card">
-            <div class="icon-tile">${ICONS.shield}</div>
-            <h3>Self-hosted</h3>
-            <p>Bearer auth, 4-digit pair codes, secrets hashed at rest. No accounts. No middleman.</p>
+          <div class="status-row">
+            <div class="label">${ICONS.android}<span>Android</span></div>
+            <span class="pill queued">Submitted</span>
           </div>
         </div>
       </div>
     </section>
 
-    <section class="section" id="apps">
-      <div class="container">
-        <h2>Native apps</h2>
-        <p class="section-lead">
-          iOS Safari and Android Chrome work today — open <a href="/app">/app</a>
-          on your phone. Native apps on the way.
-        </p>
-        <div class="badges">
-          <div class="badge">
-            <span class="icon">${ICONS.apple}</span>
-            <div class="meta">
-              <span class="where">App Store</span>
-              <span class="what">iOS &amp; iPadOS</span>
-            </div>
-            <span class="pill">Coming soon</span>
-          </div>
-          <div class="badge">
-            <span class="icon">${ICONS.android}</span>
-            <div class="meta">
-              <span class="where">Google Play</span>
-              <span class="what">Android</span>
-            </div>
-            <span class="pill">Coming soon</span>
-          </div>
-        </div>
-      </div>
-    </section>
+    <!-- ───── Self-host ───── -->
+    <section class="panel" id="host">
+      <p class="section-label">Self-host</p>
 
-    <section class="section" id="self-host">
-      <div class="container">
-        <h2>Self-host in 30 seconds.</h2>
-        <p class="section-lead">
-          One command deploys a relay to your own Cloudflare Workers account on the free tier.
-        </p>
-        <div class="codeblock">
+      <div class="task">
+        <div class="task-header">
+          <span class="pill live"><span class="dot"></span>Run</span>
+          <span class="task-id">deploy-relay</span>
+        </div>
+        <h3 class="task-title">Self-host in 30 seconds</h3>
+        <p class="task-meta">One command. Your Cloudflare account. Free tier.</p>
+
+        <div class="terminal">
           <button class="copy-btn" id="copy-cmd" type="button">Copy</button>
-          <pre><span class="prompt">$ </span>npx @loopsy/deploy-relay</pre>
+<pre><span class="prompt">$ </span>npx @loopsy/deploy-relay
+
+<span class="out">✓</span> Worker deployed
+<span class="out">✓</span> PAIR_TOKEN_SECRET set
+<span class="out">✓</span> Saved to ~/.loopsy/relay.json</pre>
         </div>
-        <p class="section-lead" style="margin-top: 16px;">
-          Already have a relay? <a href="${GITHUB_URL}#configuration">Configure your daemon</a>.
+
+        <div class="output">
+          <strong>You keep the secret.</strong> The relay runs on your account,
+          not ours. We never see your traffic.
+        </div>
+
+        <p class="stats">
+          <span class="key">Tier:</span> Cloudflare Workers free
+          <span class="sep">·</span>
+          <span class="key">DO storage:</span> SQLite
+          <span class="sep">·</span>
+          <span class="key">Provenance:</span> npm OIDC
         </p>
       </div>
     </section>
 
-    <section class="section" id="how">
-      <div class="container">
-        <h2>How it works.</h2>
-        <p class="section-lead">Three pieces. Your laptop runs a daemon, your phone runs a client, a Cloudflare Worker brokers the connection.</p>
-        <ol class="steps">
-          <li>
-            <div class="num">1</div>
-            <div class="body">
-              <h3>Install</h3>
-              <p>Run <code>npm i -g loopsy &amp;&amp; loopsy start</code> on your laptop. Daemon connects to the relay and waits.</p>
-            </div>
-          </li>
-          <li>
-            <div class="num">2</div>
-            <div class="body">
-              <h3>Pair</h3>
-              <p>Run <code>loopsy mobile pair</code>. Scan the QR with your phone, enter the 4-digit code.</p>
-            </div>
-          </li>
-          <li>
-            <div class="num">3</div>
-            <div class="body">
-              <h3>Use it</h3>
-              <p>Open <a href="/app">/app</a> on your phone. Pick the agent. Type, dictate, commit code. Your laptop runs it.</p>
-            </div>
-          </li>
-        </ol>
+    <!-- ───── How it works ───── -->
+    <section class="panel" id="how">
+      <p class="section-label">How it works</p>
+
+      <div class="task">
+        <div class="task-header">
+          <span class="pill done">${ICONS.check}3 pieces</span>
+          <span class="task-id">architecture</span>
+        </div>
+        <h3 class="task-title">Three pieces. Yours alone.</h3>
+        <p class="task-meta">Laptop daemon. Cloudflare Worker. Phone client.</p>
+
+        <div class="step">
+          <div class="num">1</div>
+          <div class="body">
+            <h4>Install</h4>
+            <p>Run <code>npm i -g loopsy &amp;&amp; loopsy start</code> on your laptop. Daemon connects to the relay and waits.</p>
+          </div>
+        </div>
+        <div class="step">
+          <div class="num">2</div>
+          <div class="body">
+            <h4>Pair</h4>
+            <p>Run <code>loopsy mobile pair</code>. Scan the QR with your phone. Enter the 4-digit code.</p>
+          </div>
+        </div>
+        <div class="step">
+          <div class="num">3</div>
+          <div class="body">
+            <h4>Use it</h4>
+            <p>Open <a href="/app">/app</a>. Pick the agent. Type, dictate, commit code. Your laptop runs it.</p>
+          </div>
+        </div>
       </div>
     </section>
   </main>
 
-  <footer class="foot">
-    <div class="container">
-      <div class="brand">
-        <span class="logo">${ICONS.loopArrow}</span>
-        <span>${BRAND_NAME}</span>
-      </div>
-      <div class="links">
-        <a href="${GITHUB_URL}" target="_blank" rel="noopener">GitHub</a>
-        <a href="${GITHUB_URL}/issues" target="_blank" rel="noopener">Issues</a>
-        <a href="/app">Web app</a>
-      </div>
+  <!-- ───── Bottom tab nav ───── -->
+  <nav class="tabbar" aria-label="Sections">
+    <div class="tabs">
+      <a href="#about" class="active" data-section="about">${ICONS.home}<span>About</span></a>
+      <a href="#features" data-section="features">${ICONS.bolt}<span>Features</span></a>
+      <a href="#apps" data-section="apps">${ICONS.phone}<span>Apps</span></a>
+      <a href="#host" data-section="host">${ICONS.cloud}<span>Host</span></a>
+      <a href="${GITHUB_URL}" target="_blank" rel="noopener">${ICONS.github}<span>Code</span></a>
     </div>
-  </footer>
+  </nav>
 
   <script nonce="__CSP_NONCE__">
     'use strict';
-    var btn = document.getElementById('copy-cmd');
-    if (btn) {
-      btn.addEventListener('click', function () {
+
+    // ── Pin the bottom tabbar to the visual viewport's bottom ──
+    // On mobile Safari/Chrome, \`position: fixed; bottom: 0\` is anchored to
+    // the layout viewport, which stays the same size when the URL bar
+    // collapses. The visible area grows below it and the body shows through
+    // the gap. We use the visualViewport API to compute the correct top so
+    // the tabbar tracks the actual visible bottom regardless of chrome state.
+    (function () {
+      var tabbar = document.querySelector('.tabbar');
+      if (!tabbar || !window.visualViewport) return;
+      function update() {
+        var vv = window.visualViewport;
+        // Top edge of the tabbar = (visual top in layout coords) + (visual height) - tabbar height.
+        var top = (vv.offsetTop + vv.height) - tabbar.offsetHeight;
+        tabbar.style.top = top + 'px';
+        tabbar.style.bottom = 'auto';
+      }
+      window.visualViewport.addEventListener('resize', update);
+      window.visualViewport.addEventListener('scroll', update);
+      window.addEventListener('resize', update);
+      // Re-run after layout settles + after fonts/icons load (tabbar height
+      // can shift by a couple of pixels once the icon SVG sizes resolve).
+      update();
+      requestAnimationFrame(update);
+      window.addEventListener('load', update);
+    })();
+
+    // ── Live clock in the chrome bar ──
+    function pad(n) { return n < 10 ? '0' + n : '' + n; }
+    function tick() {
+      var d = new Date();
+      var el = document.getElementById('clock');
+      if (el) el.textContent = pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+    }
+    tick();
+    setInterval(tick, 1000);
+
+    // ── Copy install command ──
+    var copyBtn = document.getElementById('copy-cmd');
+    if (copyBtn) {
+      copyBtn.addEventListener('click', function () {
         var cmd = 'npx @loopsy/deploy-relay';
         if (navigator.clipboard && navigator.clipboard.writeText) {
           navigator.clipboard.writeText(cmd).then(function () {
-            btn.textContent = 'Copied';
-            btn.classList.add('copied');
-            setTimeout(function () { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 1400);
+            copyBtn.textContent = 'Copied';
+            copyBtn.classList.add('copied');
+            setTimeout(function () { copyBtn.textContent = 'Copy'; copyBtn.classList.remove('copied'); }, 1400);
           });
         }
       });
     }
+
+    // ── Bottom-nav active state + chrome section label tracks scroll ──
+    var sectionTitles = { about: 'About', features: 'Features', apps: 'Apps', host: 'Self-host', how: 'How it works' };
+    var sectionTabMap = { about: 'about', features: 'features', apps: 'apps', host: 'host', how: 'host' };
+    var sections = ['about', 'features', 'apps', 'host', 'how'].map(function (id) {
+      var el = document.getElementById(id);
+      return el ? { id: id, el: el } : null;
+    }).filter(Boolean);
+    var tabs = Array.from(document.querySelectorAll('.tabbar a[data-section]'));
+    var chromeSection = document.getElementById('chrome-section');
+
+    function updateActive() {
+      var y = window.scrollY + 120;  // bias toward what's visible top-of-screen
+      var current = sections[0];
+      for (var i = 0; i < sections.length; i++) {
+        if (sections[i].el.offsetTop <= y) current = sections[i];
+      }
+      var activeTab = sectionTabMap[current.id] || 'about';
+      tabs.forEach(function (t) {
+        t.classList.toggle('active', t.getAttribute('data-section') === activeTab);
+      });
+      if (chromeSection) chromeSection.textContent = sectionTitles[current.id] || 'About';
+    }
+    window.addEventListener('scroll', updateActive, { passive: true });
+    updateActive();
   </script>
 </body>
 </html>`;
