@@ -1138,7 +1138,7 @@ export const WEB_CLIENT_HTML = /* html */ `<!doctype html>
       card.className = 'modal-card';
       card.innerHTML = '<div class="modal-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5Z"/></svg></div>'
         + '<h2 class="modal-title">' + title + '</h2>'
-        + '<p class="modal-subtitle">Pick a name you\'ll recognise on the home list.</p>';
+        + '<p class="modal-subtitle">Pick a name to spot it on the home list.</p>';
       const inp = document.createElement('input');
       inp.className = 'modal-input'; inp.type = 'text';
       inp.placeholder = 'e.g. fix logging bug';
@@ -1513,7 +1513,7 @@ export const WEB_CLIENT_HTML = /* html */ `<!doctype html>
       card.className = 'modal-card';
       card.innerHTML = '<div class="modal-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></div>'
         + '<h2 class="modal-title">Enable auto-approve</h2>'
-        + '<p class="modal-subtitle">Auto-approve runs ' + agent + ' with permission prompts skipped. Enter your laptop\'s macOS password. You\'ll only be asked once per pairing.</p>';
+        + '<p class="modal-subtitle">Auto-approve runs ' + agent + ' with permission prompts skipped. Enter the macOS password for your laptop. Asked once per pairing.</p>';
 
       const pwWrap = document.createElement('div');
       pwWrap.className = 'pw-wrap';
