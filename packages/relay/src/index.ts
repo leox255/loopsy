@@ -29,6 +29,12 @@ import { LANDING_HTML } from './landing.js';
  * JetBrains Mono).
  */
 function buildCsp(host: string, nonce: string): string {
+  // Note: no `frame-ancestors`. Self-hosted relays are often mounted inside
+  // parent dashboards/portals, including non-network schemes (data:, blob:,
+  // chrome-extension:) where `frame-ancestors *` still blocks. Omitting the
+  // directive falls back to "no restriction" — and there's no X-Frame-Options
+  // set, so embedding works from any context. Safe because relay credentials
+  // live in localStorage (no cookies = no clickjacking auth surface).
   return [
     "default-src 'self'",
     `script-src 'self' 'nonce-${nonce}' https://cdn.jsdelivr.net`,
@@ -36,10 +42,6 @@ function buildCsp(host: string, nonce: string): string {
     "font-src 'self' data: https://fonts.gstatic.com https://cdn.jsdelivr.net",
     `connect-src 'self' wss://${host} https://cdn.jsdelivr.net`,
     "img-src 'self' data:",
-    // Allow embedding in iframes on any origin. Self-hosted relays are often
-    // mounted inside parent dashboards/portals; the loopsy.dev deploy is also
-    // safe to embed because credentials live in localStorage (no cookies).
-    "frame-ancestors *",
     "base-uri 'self'",
     "form-action 'self'",
   ].join('; ');
