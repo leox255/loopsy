@@ -26,6 +26,7 @@ import { dirname, join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'node:process';
 import { fileURLToPath } from 'node:url';
+import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 
 // ────────────────────────────────────────────────────────────────────────────
 // ANSI helpers (no chalk dep — keep the package light)
@@ -264,6 +265,119 @@ function readPackageVersion(): string {
   }
 }
 
+// ────────────────────────────────────────────────────────────────────────────
+// Daemon config (~/.loopsy/config.yaml) — read/write the `relay:` block so
+// that a fresh deploy can offer to point the laptop's daemon at itself.
+// Without this, ~/.loopsy/relay.json is purely informational and the daemon
+// keeps using whatever URL was previously configured.
+// ────────────────────────────────────────────────────────────────────────────
+
+interface DaemonRelayBlock {
+  url: string;
+  deviceId: string;
+  deviceSecret: string;
+}
+
+interface DaemonConfig {
+  relay?: DaemonRelayBlock;
+  [key: string]: unknown;
+}
+
+function daemonConfigPath(): string {
+  return join(homedir(), '.loopsy', 'config.yaml');
+}
+
+async function readDaemonConfig(): Promise<DaemonConfig | null> {
+  try {
+    const raw = await fs.readFile(daemonConfigPath(), 'utf8');
+    const parsed = parseYaml(raw);
+    return (parsed && typeof parsed === 'object') ? (parsed as DaemonConfig) : {};
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw err;
+  }
+}
+
+async function writeDaemonConfig(config: DaemonConfig): Promise<void> {
+  await fs.writeFile(daemonConfigPath(), stringifyYaml(config), { mode: 0o600 });
+}
+
+interface RegisterResponse {
+  device_id: string;
+  device_secret: string;
+  relay_url: string;
+}
+
+async function registerDevice(relayUrl: string): Promise<DaemonRelayBlock> {
+  const res = await fetch(`${relayUrl}/device/register`, { method: 'POST' });
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`Relay rejected /device/register: ${res.status} ${body}`);
+  }
+  const data = (await res.json()) as RegisterResponse;
+  return {
+    url: data.relay_url,
+    deviceId: data.device_id,
+    deviceSecret: data.device_secret,
+  };
+}
+
+/**
+ * After a successful deploy, offer to repoint the laptop's daemon at the
+ * new relay. Returns true if the daemon was reconfigured (and the caller
+ * should skip the manual `loopsy relay configure` next-step instruction).
+ */
+async function maybeSwitchDaemon(args: Args, deployedUrl: string): Promise<boolean> {
+  const cfg = await readDaemonConfig();
+  if (cfg === null) {
+    // No daemon installed yet on this machine. Nothing to switch — fall
+    // through to the printed `loopsy relay configure` instruction.
+    return false;
+  }
+
+  const currentUrl = cfg.relay?.url?.replace(/\/$/, '') ?? '';
+  const targetUrl = deployedUrl.replace(/\/$/, '');
+
+  if (currentUrl === targetUrl) {
+    console.log(dim(`→ Daemon is already pointed at this relay — nothing to switch.`));
+    return true;
+  }
+
+  console.log();
+  if (currentUrl) {
+    console.log(`${yellow('!')} Your daemon is currently pointed at ${dim(currentUrl)}`);
+    console.log(dim(`  Switching wipes the existing device_id — paired phones must be re-paired.`));
+  } else {
+    console.log(dim(`→ Your daemon has no relay configured yet.`));
+  }
+
+  let yes = args.yes;
+  if (!yes) {
+    const ans = await prompt(`Point the daemon at ${cyan(targetUrl)} now? ${dim('[Y/n]')}`, 'Y');
+    yes = !/^n(o)?$/i.test(ans.trim());
+  }
+  if (!yes) {
+    console.log(dim(`  Skipping. Run "loopsy relay configure ${targetUrl}" later to switch.`));
+    return false;
+  }
+
+  console.log(`${dim('→')} Registering this laptop with ${cyan(targetUrl)}`);
+  let block: DaemonRelayBlock;
+  try {
+    block = await registerDevice(targetUrl);
+  } catch (err) {
+    console.error(red(`✗ Could not register: ${(err as Error).message}`));
+    console.log(dim(`  Run "loopsy relay configure ${targetUrl}" manually once the relay is reachable.`));
+    return false;
+  }
+
+  cfg.relay = { ...(cfg.relay ?? {}), ...block };
+  await writeDaemonConfig(cfg);
+  console.log(`${green('✓')} Updated ${dim('~/.loopsy/config.yaml')} (device_id ${block.deviceId})`);
+  console.log(yellow('  ⚠ ') + `Restart the daemon: ${cyan('loopsy stop && loopsy start')}`);
+  return true;
+}
+
 async function readSavedConfig(): Promise<SavedConfig | null> {
   try {
     const cfgPath = await loopsyConfigPath();
@@ -400,12 +514,21 @@ async function main() {
   // Best-effort cleanup of staging dir
   try { await fs.rm(tmp, { recursive: true, force: true }); } catch {/* ignore */}
 
+  // Offer to repoint the laptop's daemon at this relay. Without this,
+  // ~/.loopsy/config.yaml keeps using the old URL and `loopsy mobile pair`
+  // emits pair links for the wrong relay.
+  const daemonSwitched = await maybeSwitchDaemon(args, deployedUrl);
+
   // Next steps
   console.log();
   console.log(bold('  Next steps'));
-  console.log(`  ${dim('1.')} Configure your laptop daemon:`);
-  console.log(`     ${cyan(`loopsy relay configure ${deployedUrl}`)}`);
-  console.log(`  ${dim('2.')} Pair your phone:`);
+  let stepIdx = 1;
+  if (!daemonSwitched) {
+    console.log(`  ${dim(stepIdx + '.')} Configure your laptop daemon:`);
+    console.log(`     ${cyan(`loopsy relay configure ${deployedUrl}`)}`);
+    stepIdx++;
+  }
+  console.log(`  ${dim(stepIdx + '.')} Pair your phone:`);
   console.log(`     ${cyan('loopsy mobile pair --ttl 600')}`);
   console.log();
   console.log(dim(`  Open ${deployedUrl}/app on your phone after pairing.`));

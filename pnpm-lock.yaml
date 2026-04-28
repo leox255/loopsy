@@ -139,6 +139,9 @@ importers:
       wrangler:
         specifier: ^4.67.0
         version: 4.85.0(@cloudflare/workers-types@4.20260426.1)
+      yaml:
+        specifier: ^2.5.0
+        version: 2.8.3
     devDependencies:
       '@types/node':
         specifier: ^22.0.0
