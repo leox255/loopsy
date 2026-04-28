@@ -48,6 +48,14 @@ jobs:
       - name: Audit production dependencies
         run: pnpm audit --prod --audit-level=high
 
+      # Sync PROTOCOL_VERSION + CLI .version() string from root package.json
+      # BEFORE pnpm build, so the compiled dist embeds the right version.
+      # Earlier this lived inside scripts/package.mjs, which ran AFTER build —
+      # meaning every published artifact carried the previously-committed
+      # version string (1.0.22 forever).
+      - name: Sync version constants
+        run: node scripts/sync-version.mjs
+
       - name: Build packages
         run: pnpm build
 

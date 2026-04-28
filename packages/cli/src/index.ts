@@ -2,6 +2,7 @@
 
 import yargs from 'yargs';
 import { hideBin } from 'yargs/helpers';
+import { PROTOCOL_VERSION } from '@loopsy/protocol';
 import { initCommand } from './commands/init.js';
 import { startCommand, stopCommand, restartCommand, statusCommand } from './commands/daemon.js';
 import { peersListCommand, peersAddCommand, peersRemoveCommand } from './commands/peers.js';
@@ -246,5 +247,5 @@ yargs(hideBin(process.argv))
   )
   .demandCommand(1, 'You need at least one command')
   .help()
-  .version('1.0.22')
+  .version(PROTOCOL_VERSION)
   .parse();

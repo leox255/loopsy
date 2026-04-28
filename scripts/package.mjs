@@ -35,19 +35,10 @@ const OUT = join(ROOT, 'package-dist');
 const rootPkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf-8'));
 const version = rootPkg.version || '1.0.0';
 
-// Sync PROTOCOL_VERSION in constants.ts with root version before build
-const constantsPath = join(ROOT, 'packages', 'protocol', 'src', 'constants.ts');
-if (existsSync(constantsPath)) {
-  let constants = readFileSync(constantsPath, 'utf-8');
-  const updated = constants.replace(
-    /export const PROTOCOL_VERSION = '[^']*';/,
-    `export const PROTOCOL_VERSION = '${version}';`,
-  );
-  if (updated !== constants) {
-    writeFileSync(constantsPath, updated);
-    console.log(`Synced PROTOCOL_VERSION to ${version}`);
-  }
-}
+// PROTOCOL_VERSION is synced earlier via scripts/sync-version.mjs (which
+// runs BEFORE pnpm build). Keep this script focused on dist assembly only —
+// trying to write constants.ts here is a no-op for the artifact since the
+// build already happened.
 
 console.log(`Assembling loopsy v${version} into package-dist/...\n`);
 
