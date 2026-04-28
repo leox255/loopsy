@@ -852,7 +852,7 @@ export const WEB_CLIENT_HTML = /* html */ `<!doctype html>
           if (!sas) continue;
 
           try {
-            const r = await fetch(parsed.relayUrl.replace(/\/+$/, '') + '/pair/redeem', {
+            const r = await fetch(parsed.relayUrl.replace(/\\/+$/, '') + '/pair/redeem', {
               method: 'POST',
               headers: { 'content-type': 'application/json' },
               body: JSON.stringify({ token: parsed.token, sas, label: navigator.userAgent.slice(0, 80) }),
