@@ -8,10 +8,13 @@
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "tail": "wrangler tail",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "check:html": "tsx scripts/check-html-scripts.mts",
+    "test": "tsx scripts/check-html-scripts.mts"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250410.0",
+    "tsx": "^4.16.0",
     "typescript": "^5.5.0",
     "wrangler": "^4.67.0"
   }

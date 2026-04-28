@@ -56,6 +56,13 @@ jobs:
       - name: Sync version constants
         run: node scripts/sync-version.mjs
 
+      # Parse every inline <script> in the relay's WEB_CLIENT_HTML and
+      # LANDING_HTML strings. Catches template-literal escape mishaps
+      # (`\/` collapsing to `/`, unescaped `\'` etc.) that hard-fail the
+      # served page silently. See packages/relay/scripts/check-html-scripts.mts.
+      - name: Check inline JS in relay HTML
+        run: pnpm --filter @loopsy/relay run check:html
+
       - name: Build packages
         run: pnpm build
 
