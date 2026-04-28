@@ -22,6 +22,7 @@ export const WEB_CLIENT_HTML = /* html */ `<!doctype html>
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover" />
+  <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="theme-color" content="#0B0D10" />
@@ -797,7 +798,7 @@ export const WEB_CLIENT_HTML = /* html */ `<!doctype html>
         const result = await Modal.dialog({
           icon: linkIcon,
           title: 'Connect to your laptop',
-          subtitle: 'Run <code style="font-family:var(--font-mono);background:var(--surface-alt);padding:1px 6px;border-radius:4px">loopsy mobile pair</code> on your laptop, then paste the link.',
+          subtitle: 'Run "loopsy mobile pair" on your laptop, then paste the link below.',
           body: '<input id="_pair_url" class="modal-input" type="text" placeholder="https://&lt;relay&gt;/app#loopsy%3A..." autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" value="' + initialValue.replace(/"/g, '&quot;') + '" /><div id="_pair_err" class="modal-error" style="display:none"></div>',
           barrierDismissible: false,
           actions: [

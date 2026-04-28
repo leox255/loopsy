@@ -1,6 +1,6 @@
 {
   "name": "loopsy",
-  "version": "1.0.31",
+  "version": "1.0.32",
   "private": true,
   "description": "Control your terminal from your phone. Self-hosted on Cloudflare Workers.",
   "scripts": {
