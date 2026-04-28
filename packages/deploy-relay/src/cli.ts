@@ -60,16 +60,24 @@ interface Args {
   domain?: string;
   yes: boolean;
   help: boolean;
+  /** Force creating a new deploy even if ~/.loopsy/relay.json exists. */
+  fresh: boolean;
+  /** Re-roll PAIR_TOKEN_SECRET on update (default: keep existing). */
+  rotateSecret: boolean;
+  version: boolean;
 }
 
 function parseArgs(argv: string[]): Args {
-  const a: Args = { yes: false, help: false };
+  const a: Args = { yes: false, help: false, fresh: false, rotateSecret: false, version: false };
   for (let i = 0; i < argv.length; i++) {
     const v = argv[i];
     if (v === '--help' || v === '-h') a.help = true;
+    else if (v === '--version' || v === '-V') a.version = true;
     else if (v === '--yes' || v === '-y' || v === '--no-interactive') a.yes = true;
     else if (v === '--worker-name' || v === '--name') a.workerName = argv[++i];
     else if (v === '--domain') a.domain = argv[++i];
+    else if (v === '--fresh' || v === '--new') a.fresh = true;
+    else if (v === '--rotate-secret') a.rotateSecret = true;
     else if (v.startsWith('--worker-name=')) a.workerName = v.split('=', 2)[1];
     else if (v.startsWith('--domain=')) a.domain = v.split('=', 2)[1];
   }
@@ -84,9 +92,15 @@ ${bold('Usage:')}
   npx @loopsy/deploy-relay [options]
 
 ${bold('Options:')}
-  --worker-name <name>   Worker name (default: loopsy-relay-<random>)
+  --worker-name <name>   Worker name (default: loopsy-relay-<random>, or
+                         existing name from ~/.loopsy/relay.json if present)
   --domain <fqdn>        Bind a custom domain (zone must be on your CF account)
+  --fresh, --new         Ignore ~/.loopsy/relay.json and create a brand-new
+                         deploy with a random worker name
+  --rotate-secret        On update, also re-roll PAIR_TOKEN_SECRET (default:
+                         preserve so in-flight pair tokens stay valid)
   --yes, -y              Non-interactive — accept defaults
+  --version, -V          Print version and exit
   --help, -h             Show this help
 
 ${bold('Example:')}
@@ -239,19 +253,55 @@ function extractDeployedUrl(stdout: string, fallback: string): string {
   return fallback;
 }
 
+function readPackageVersion(): string {
+  try {
+    const here = dirname(fileURLToPath(import.meta.url));
+    // dist/cli.js → ../package.json   (also works from src/cli.ts via tsx)
+    const pkgPath = join(here, '..', 'package.json');
+    return JSON.parse(readFileSync(pkgPath, 'utf8')).version ?? 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
+
+async function readSavedConfig(): Promise<SavedConfig | null> {
+  try {
+    const cfgPath = await loopsyConfigPath();
+    const raw = await fs.readFile(cfgPath, 'utf8');
+    const cfg = JSON.parse(raw) as SavedConfig;
+    if (cfg && typeof cfg.url === 'string' && typeof cfg.worker_name === 'string') return cfg;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) { printHelp(); return; }
+  const version = readPackageVersion();
+  if (args.version) { console.log(version); return; }
 
   // Banner
   console.log();
-  console.log(bold(`  ${blue('Loopsy')} relay deploy`));
+  console.log(bold(`  ${blue('Loopsy')} relay deploy`) + dim(`  v${version}`));
   console.log(dim(`  Cloudflare Workers free tier · ~30 seconds`));
   console.log();
 
-  // Resolve inputs
-  let workerName = args.workerName ?? `loopsy-relay-${generateWorkerSuffix()}`;
-  let domain = args.domain;
+  // Detect prior deploy from ~/.loopsy/relay.json so a re-run updates the
+  // existing worker instead of silently creating a new one alongside it.
+  const prior = args.fresh ? null : await readSavedConfig();
+  const isUpdate = prior !== null && !args.workerName && !args.domain;
+  if (prior && !args.fresh) {
+    console.log(`${dim('→')} Found existing deploy at ${cyan(prior.url)} ${dim(`(${prior.worker_name})`)}`);
+    console.log(dim(`  Re-running with the same name updates it. Use --fresh for a new deploy.`));
+    console.log();
+  }
+
+  // Resolve inputs. Prior deploy seeds defaults so the no-arg re-run path
+  // reliably hits "update" rather than "create new with random suffix".
+  let workerName = args.workerName ?? prior?.worker_name ?? `loopsy-relay-${generateWorkerSuffix()}`;
+  let domain = args.domain ?? prior?.domain;
 
   if (!args.yes) {
     workerName = await prompt('Worker name', workerName);
@@ -311,23 +361,30 @@ async function main() {
   const deployedUrl = domain
     ? `https://${domain}`
     : extractDeployedUrl(deployRes.stdout, `https://${workerName}.workers.dev`);
-  console.log(`${green('✓')} Deployed: ${cyan(deployedUrl)}`);
+  console.log(`${green('✓')} ${isUpdate ? 'Updated' : 'Deployed'}: ${cyan(deployedUrl)}`);
 
   // Set PAIR_TOKEN_SECRET via wrangler secret put (piped via stdin so it
-  // never appears on the user's clipboard or in process arguments).
-  const secret = generateSecret();
-  console.log(`${dim('→')} Setting ${cyan('PAIR_TOKEN_SECRET')}`);
-  const secretRes = await runWrangler(['secret', 'put', 'PAIR_TOKEN_SECRET'], {
-    cwd: tmp,
-    stdin: secret + '\n',
-    inherit: false,
-  });
-  if (secretRes.code !== 0) {
-    console.error(red('✗ Failed to set PAIR_TOKEN_SECRET.'));
-    if (secretRes.stderr) console.error(secretRes.stderr);
-    process.exit(secretRes.code);
+  // never appears on the user's clipboard or in process arguments). On
+  // re-runs against an existing deploy we preserve the existing secret so
+  // any in-flight pair tokens stay valid; pass --rotate-secret to opt in.
+  const skipSecret = isUpdate && !args.rotateSecret;
+  if (skipSecret) {
+    console.log(dim(`→ Keeping existing PAIR_TOKEN_SECRET (pass --rotate-secret to re-roll)`));
+  } else {
+    const secret = generateSecret();
+    console.log(`${dim('→')} Setting ${cyan('PAIR_TOKEN_SECRET')}`);
+    const secretRes = await runWrangler(['secret', 'put', 'PAIR_TOKEN_SECRET'], {
+      cwd: tmp,
+      stdin: secret + '\n',
+      inherit: false,
+    });
+    if (secretRes.code !== 0) {
+      console.error(red('✗ Failed to set PAIR_TOKEN_SECRET.'));
+      if (secretRes.stderr) console.error(secretRes.stderr);
+      process.exit(secretRes.code);
+    }
+    console.log(`${green('✓')} Secret set`);
   }
-  console.log(`${green('✓')} Secret set`);
 
   // Save config
   const cfgPath = await loopsyConfigPath();

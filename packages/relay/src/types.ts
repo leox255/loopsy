@@ -21,6 +21,13 @@ export interface Env {
    * `wrangler secret put REGISTRATION_SECRET`.
    */
   REGISTRATION_SECRET?: string;
+  /**
+   * Controls what `/` serves. `"landing"` (default, used by loopsy.dev) shows
+   * the marketing page. `"app"` (used by self-hosted deploys via
+   * `@loopsy/deploy-relay`) 302-redirects `/` to `/app` so the deploy is just
+   * the web client with no marketing surface.
+   */
+  HOMEPAGE_MODE?: 'landing' | 'app';
 }
 
 /** Logical role of a connected WebSocket attached to a DeviceObject. */

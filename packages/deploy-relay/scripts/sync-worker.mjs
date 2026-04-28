@@ -76,6 +76,12 @@ main = "src/index.ts"
 compatibility_date = "2025-04-01"
 compatibility_flags = ["nodejs_compat"]
 
+# Self-hosted deploys are app-only — '/' redirects to '/app' so the deploy
+# has no marketing surface. The loopsy.dev relay leaves this unset and
+# serves the landing page at '/'.
+[vars]
+HOMEPAGE_MODE = "app"
+
 [[durable_objects.bindings]]
 name = "DEVICE"
 class_name = "DeviceObject"

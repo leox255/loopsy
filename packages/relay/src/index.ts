@@ -36,7 +36,10 @@ function buildCsp(host: string, nonce: string): string {
     "font-src 'self' data: https://fonts.gstatic.com https://cdn.jsdelivr.net",
     `connect-src 'self' wss://${host} https://cdn.jsdelivr.net`,
     "img-src 'self' data:",
-    "frame-ancestors 'none'",
+    // Allow embedding in iframes on any origin. Self-hosted relays are often
+    // mounted inside parent dashboards/portals; the loopsy.dev deploy is also
+    // safe to embed because credentials live in localStorage (no cookies).
+    "frame-ancestors *",
     "base-uri 'self'",
     "form-action 'self'",
   ].join('; ');
@@ -90,10 +93,14 @@ export default {
       });
     }
 
-    // Marketing landing page. Same CSP shape as /app so we can share the font
-    // and style allow-list. CSO #16: per-request nonce; the inline script tag
-    // for the "Copy" button must carry it or the browser rejects.
+    // `/` behavior. Self-hosted deploys (`@loopsy/deploy-relay`) set
+    // HOMEPAGE_MODE=app via wrangler [vars], in which case `/` 302-redirects
+    // to `/app` — the deploy has no marketing surface, just the web client.
+    // The loopsy.dev relay leaves it unset and serves the landing.
     if (url.pathname === '/' || url.pathname === '') {
+      if (env.HOMEPAGE_MODE === 'app') {
+        return Response.redirect(`${url.protocol}//${url.host}/app`, 302);
+      }
       const nonce = base64urlEncode(crypto.getRandomValues(new Uint8Array(16)));
       const html = LANDING_HTML.replace(/__CSP_NONCE__/g, nonce);
       return new Response(html, {
