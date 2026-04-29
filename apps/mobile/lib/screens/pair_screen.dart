@@ -39,7 +39,10 @@ class _PairScreenState extends State<PairScreen> {
     // gets `denied` back immediately with no UI. We have to send them to
     // app Settings ourselves.
     final current = await Permission.camera.status;
-    if (current.isGranted) return;
+    if (current.isGranted) {
+      await _startScanner();
+      return;
+    }
     if (current.isPermanentlyDenied || current.isRestricted) {
       if (mounted) setState(() {
         _cameraDenied = true;
@@ -49,11 +52,33 @@ class _PairScreenState extends State<PairScreen> {
     }
     final st = await Permission.camera.request();
     if (!mounted) return;
-    if (st.isGranted) return;
+    if (st.isGranted) {
+      await _startScanner();
+      return;
+    }
     setState(() {
       _cameraDenied = true;
       _cameraPermanentlyDenied = st.isPermanentlyDenied || st.isRestricted;
     });
+  }
+
+  /// mobile_scanner v6+ requires explicit start() — the widget no longer
+  /// auto-starts the AVCaptureSession. Without this the camera permission
+  /// is granted but the viewfinder stays black/empty.
+  Future<void> _startScanner() async {
+    try {
+      await _scanController.start();
+    } catch (e) {
+      // Defensive: if the camera is somehow busy (e.g. a previous instance
+      // didn't release), surface a graceful fallback rather than a blank
+      // black screen. Same fallback as a permission denial.
+      if (mounted) {
+        setState(() {
+          _cameraDenied = true;
+          _error = 'Could not start the camera: $e';
+        });
+      }
+    }
   }
 
   Future<void> _openCameraSettings() async {

@@ -44,6 +44,7 @@ class LoopsyApp extends StatelessWidget {
       title: 'Loopsy',
       theme: loopsyTheme(),
       themeMode: ThemeMode.dark,
+      debugShowCheckedModeBanner: false,
       routerConfig: router,
     );
   }
