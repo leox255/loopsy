@@ -21,6 +21,12 @@ class _PairScreenState extends State<PairScreen> {
   final _scanController = MobileScannerController(
     detectionSpeed: DetectionSpeed.noDuplicates,
     formats: const [BarcodeFormat.qrCode],
+    // We gate start() on permission grant in _ensurePermission. With autoStart
+    // left at the default `true`, the MobileScanner widget would also call
+    // start() in its initState — racing with us and leaving the preview layer
+    // detached on iOS (camera indicator green, viewfinder black).
+    autoStart: false,
+    cameraResolution: const Size(1280, 720),
   );
   bool _busy = false;
   String? _error;
@@ -62,9 +68,9 @@ class _PairScreenState extends State<PairScreen> {
     });
   }
 
-  /// mobile_scanner v6+ requires explicit start() — the widget no longer
-  /// auto-starts the AVCaptureSession. Without this the camera permission
-  /// is granted but the viewfinder stays black/empty.
+  /// We disable the controller's `autoStart` so the MobileScanner widget
+  /// does not race us into start(); we own the lifecycle and call this once
+  /// after the camera permission has actually been granted.
   Future<void> _startScanner() async {
     try {
       await _scanController.start();
