@@ -118,3 +118,13 @@ export const ICONS = {
 export const BRAND_NAME = 'Loopsy';
 export const BRAND_TAGLINE = 'Your terminal, in your pocket.';
 export const GITHUB_URL = 'https://github.com/leox255/loopsy';
+
+// App icon — same gradient + loopArrow shipped in the iOS build. Used as
+// favicon / apple-touch-icon so site, ASC, and the app all show one icon.
+export const FAVICON_SVG_DATA_URI =
+  'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTAyNCIgaGVpZ2h0PSIxMDI0IiB2aWV3Qm94PSIwIDAgMTAyNCAxMDI0IiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciPjxkZWZzPjxsaW5lYXJHcmFkaWVudCBpZD0iYmciIHgxPSIwJSIgeTE9IjAlIiB4Mj0iMTAwJSIgeTI9IjEwMCUiPjxzdG9wIG9mZnNldD0iMCUiIHN0b3AtY29sb3I9IiM3QUEyRjciLz48c3RvcCBvZmZzZXQ9IjEwMCUiIHN0b3AtY29sb3I9IiMzOTU0QzQiLz48L2xpbmVhckdyYWRpZW50PjwvZGVmcz48cmVjdCB3aWR0aD0iMTAyNCIgaGVpZ2h0PSIxMDI0IiBmaWxsPSJ1cmwoI2JnKSIvPjxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDE5MiwgMTkyKSBzY2FsZSgyNi42NykiIHN0cm9rZT0id2hpdGUiIHN0cm9rZS13aWR0aD0iMi4yIiBmaWxsPSJub25lIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiPjxwYXRoIGQ9Ik0xNC41IDRsNCA0LTQgNCIvPjxwYXRoIGQ9Ik0zLjUgMTEuNVYxMGEyIDIgMCAwIDEgMi0ySDE4LjUiLz48cGF0aCBkPSJNOS41IDIwbC00LTQgNC00Ii8+PHBhdGggZD0iTTIwLjUgMTIuNVYxNGEyIDIgMCAwIDEtMiAySDUuNSIvPjwvZz48L3N2Zz4=';
+
+export const FAVICON_LINKS = /* html */ `
+  <link rel="icon" href="${FAVICON_SVG_DATA_URI}" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="${FAVICON_SVG_DATA_URI}" />
+`;

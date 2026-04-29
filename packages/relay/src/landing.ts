@@ -10,7 +10,7 @@
  * sending.
  */
 
-import { BRAND_NAME, BRAND_TAGLINE, GITHUB_URL, ICONS, TOKENS_CSS } from './design.js';
+import { BRAND_NAME, BRAND_TAGLINE, FAVICON_LINKS, GITHUB_URL, ICONS, TOKENS_CSS } from './design.js';
 
 export const LANDING_HTML = /* html */ `<!doctype html>
 <html lang="en">
@@ -23,6 +23,7 @@ export const LANDING_HTML = /* html */ `<!doctype html>
   <meta property="og:title" content="${BRAND_NAME} — ${BRAND_TAGLINE}" />
   <meta property="og:description" content="Control your laptop's terminal from your phone. Open source." />
   <meta property="og:type" content="website" />
+  ${FAVICON_LINKS}
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" />
   <style>

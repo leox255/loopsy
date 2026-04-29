@@ -15,7 +15,7 @@
  *   SessionView        — #session/<id>: xterm.js terminal + compose + voice
  */
 
-import { BRAND_NAME, ICONS, TOKENS_CSS } from './design.js';
+import { BRAND_NAME, FAVICON_LINKS, ICONS, TOKENS_CSS } from './design.js';
 
 export const WEB_CLIENT_HTML = /* html */ `<!doctype html>
 <html lang="en">
@@ -27,6 +27,7 @@ export const WEB_CLIENT_HTML = /* html */ `<!doctype html>
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="theme-color" content="#0B0D10" />
   <title>${BRAND_NAME}</title>
+  ${FAVICON_LINKS}
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600&display=swap" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css" />

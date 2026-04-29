@@ -21,6 +21,7 @@ import {
 } from './auth.js';
 import { WEB_CLIENT_HTML } from './web-client.js';
 import { LANDING_HTML } from './landing.js';
+import { PRIVACY_HTML } from './privacy.js';
 
 /**
  * Build a per-request CSP. Inline scripts only via nonce; styles still need
@@ -111,6 +112,15 @@ export default {
           'cache-control': 'public, max-age=300',
           'content-security-policy': buildCsp(url.host, nonce),
           ...SECURITY_HEADERS,
+        },
+      });
+    }
+
+    if (url.pathname === '/privacy' || url.pathname === '/privacy/') {
+      return new Response(PRIVACY_HTML, {
+        headers: {
+          'content-type': 'text/html; charset=utf-8',
+          'cache-control': 'public, max-age=300',
         },
       });
     }
