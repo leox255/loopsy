@@ -17,75 +17,77 @@ class PairScreen extends StatefulWidget {
   State<PairScreen> createState() => _PairScreenState();
 }
 
-class _PairScreenState extends State<PairScreen> {
-  final _scanController = MobileScannerController(
-    detectionSpeed: DetectionSpeed.noDuplicates,
-    formats: const [BarcodeFormat.qrCode],
-    // We gate start() on permission grant in _ensurePermission. With autoStart
-    // left at the default `true`, the MobileScanner widget would also call
-    // start() in its initState — racing with us and leaving the preview layer
-    // detached on iOS (camera indicator green, viewfinder black).
-    autoStart: false,
-    cameraResolution: const Size(1280, 720),
-  );
+/// Permission state for the camera. Tri-state because before we hear back
+/// from iOS we want to show neither the viewfinder nor the denied UI — just
+/// a brief loader, since flashing the wrong fallback produces the bug the
+/// user kept hitting (black screen + "Grant access" button while permission
+/// was actually fine).
+enum _CamState { unknown, granted, denied, permanentlyDenied }
+
+class _PairScreenState extends State<PairScreen> with WidgetsBindingObserver {
+  // Lazily created the moment we know permission is granted, so the
+  // MobileScanner widget mounts with a live controller — no race between us
+  // and the widget calling start(). Recreated after a permanent-denial flow
+  // if the user grants in Settings and returns to the app.
+  MobileScannerController? _scanController;
   bool _busy = false;
   String? _error;
-  bool _cameraDenied = false;
-  bool _cameraPermanentlyDenied = false;
+  _CamState _camState = _CamState.unknown;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _ensurePermission();
   }
 
-  Future<void> _ensurePermission() async {
-    // Check current state before requesting — `request()` on iOS only
-    // surfaces the OS prompt the first time, so a previously-denied user
-    // gets `denied` back immediately with no UI. We have to send them to
-    // app Settings ourselves.
-    final current = await Permission.camera.status;
-    if (current.isGranted) {
-      await _startScanner();
-      return;
+  /// Re-check permission whenever the app comes back to the foreground —
+  /// covers the "user opened Settings, granted Camera, came back" path so
+  /// the viewfinder lights up without requiring a manual reload.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && _camState != _CamState.granted) {
+      _ensurePermission();
     }
-    if (current.isPermanentlyDenied || current.isRestricted) {
-      if (mounted) setState(() {
-        _cameraDenied = true;
-        _cameraPermanentlyDenied = true;
+  }
+
+  Future<void> _ensurePermission() async {
+    // Order matters on iOS:
+    //   - status returns `denied` for "not yet asked" AND "asked + denied
+    //     once". Calling request() in the first case shows the OS prompt;
+    //     in the second case it returns immediately (still `denied`) with
+    //     no UI. Only `permanentlyDenied` distinguishes the dead-end.
+    //   - status returns `granted` once the user has accepted, even after
+    //     killing the app. Going through request() again is harmless and
+    //     returns granted instantly.
+    final st = await Permission.camera.request();
+    if (!mounted) return;
+    if (st.isGranted || st.isLimited) {
+      setState(() {
+        _camState = _CamState.granted;
+        _error = null;
+        _scanController ??= _buildController();
       });
       return;
     }
-    final st = await Permission.camera.request();
-    if (!mounted) return;
-    if (st.isGranted) {
-      await _startScanner();
-      return;
-    }
     setState(() {
-      _cameraDenied = true;
-      _cameraPermanentlyDenied = st.isPermanentlyDenied || st.isRestricted;
+      _camState = (st.isPermanentlyDenied || st.isRestricted)
+          ? _CamState.permanentlyDenied
+          : _CamState.denied;
     });
   }
 
-  /// We disable the controller's `autoStart` so the MobileScanner widget
-  /// does not race us into start(); we own the lifecycle and call this once
-  /// after the camera permission has actually been granted.
-  Future<void> _startScanner() async {
-    try {
-      await _scanController.start();
-    } catch (e) {
-      // Defensive: if the camera is somehow busy (e.g. a previous instance
-      // didn't release), surface a graceful fallback rather than a blank
-      // black screen. Same fallback as a permission denial.
-      if (mounted) {
-        setState(() {
-          _cameraDenied = true;
-          _error = 'Could not start the camera: $e';
-        });
-      }
-    }
-  }
+  MobileScannerController _buildController() => MobileScannerController(
+    detectionSpeed: DetectionSpeed.noDuplicates,
+    formats: const [BarcodeFormat.qrCode],
+    cameraResolution: const Size(1280, 720),
+    // autoStart left at default `true`: the MobileScanner widget owns the
+    // start/stop lifecycle and connects the preview texture as part of its
+    // own initState. Doing it ourselves before the widget mounts results in
+    // the AVCaptureSession running (green camera indicator) but the preview
+    // layer never attaching (viewfinder stays black) — the bug we shipped
+    // in 1.0.0+4.
+  );
 
   Future<void> _openCameraSettings() async {
     final opened = await openAppSettings();
@@ -96,7 +98,8 @@ class _PairScreenState extends State<PairScreen> {
 
   @override
   void dispose() {
-    _scanController.dispose();
+    WidgetsBinding.instance.removeObserver(this);
+    _scanController?.dispose();
     super.dispose();
   }
 
@@ -216,18 +219,24 @@ class _PairScreenState extends State<PairScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final showScanner =
+        _camState == _CamState.granted && _scanController != null;
     return Scaffold(
       backgroundColor: Colors.black,
       body: Stack(
         children: [
-          if (!_cameraDenied)
+          if (showScanner)
             MobileScanner(
-              controller: _scanController,
+              controller: _scanController!,
+              errorBuilder: (ctx, err) => const ColoredBox(
+                color: LoopsyColors.bg,
+                child: SizedBox.expand(),
+              ),
               onDetect: (capture) {
                 for (final code in capture.barcodes) {
                   final raw = code.rawValue;
                   if (raw != null && raw.isNotEmpty) {
-                    _scanController.stop();
+                    _scanController?.stop();
                     _consume(raw);
                     break;
                   }
@@ -266,8 +275,9 @@ class _PairScreenState extends State<PairScreen> {
             ),
           ),
 
-          // Centered scan reticle
-          if (!_cameraDenied)
+          // Centered scan reticle — only when the live viewfinder is on,
+          // so the reticle doesn't float over a flat fallback background.
+          if (showScanner)
             Center(
               child: SizedBox(
                 width: 240,
@@ -275,6 +285,11 @@ class _PairScreenState extends State<PairScreen> {
                 child: CustomPaint(painter: _ReticlePainter()),
               ),
             ),
+
+          // Brief loader while we wait for iOS to answer the permission
+          // request — keeps the screen from flashing the wrong fallback.
+          if (_camState == _CamState.unknown)
+            const Center(child: CircularProgressIndicator(color: LoopsyColors.accent)),
 
           // Bottom card
           Positioned(
@@ -301,7 +316,9 @@ class _PairScreenState extends State<PairScreen> {
                           const HugeIcon(icon: HugeIcons.strokeRoundedCommandLine, color: LoopsyColors.accent, size: 20),
                           const SizedBox(width: 10),
                           Text(
-                            _cameraDenied ? 'Camera unavailable' : 'On your laptop run',
+                            _camState == _CamState.granted || _camState == _CamState.unknown
+                                ? 'On your laptop run'
+                                : 'Camera unavailable',
                             style: const TextStyle(color: LoopsyColors.fg, fontWeight: FontWeight.w600),
                           ),
                         ],
@@ -329,7 +346,7 @@ class _PairScreenState extends State<PairScreen> {
                       // When camera is denied permanently (or restricted on iOS),
                       // a re-request won't surface the OS prompt. Send the user
                       // to Settings; otherwise just offer manual entry.
-                      if (_cameraPermanentlyDenied) ...[
+                      if (_camState == _CamState.permanentlyDenied) ...[
                         Row(
                           children: [
                             Expanded(
