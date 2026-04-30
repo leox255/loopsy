@@ -22,6 +22,11 @@ class _HomeScreenState extends State<HomeScreen> {
   Pairing? _pairing;
   List<SessionMeta> _sessions = const [];
   bool _loading = true;
+  // Cached daemon capabilities. Populated asynchronously after _load and
+  // refreshed lazily; null until the first round-trip succeeds. Defaults
+  // (assume everything available) are used if the daemon never answers
+  // — graceful fallback for older daemons that don't speak device-info.
+  DeviceInfo? _deviceInfo;
 
   @override
   void initState() {
@@ -42,6 +47,13 @@ class _HomeScreenState extends State<HomeScreen> {
       _sessions = sessions;
       _loading = false;
     });
+    // Probe the daemon in the background — non-blocking. If it never
+    // answers (offline, old daemon, network hiccup) the agent picker
+    // falls back to "show everything" rather than punishing the user.
+    fetchDeviceInfo(pairing).then((info) {
+      if (!mounted || info == null) return;
+      setState(() => _deviceInfo = info);
+    });
   }
 
   Future<void> _newSession() async {
@@ -51,8 +63,17 @@ class _HomeScreenState extends State<HomeScreen> {
     // permission prompts on the laptop is too powerful to be the default for
     // a remote phone — a stolen unlocked device shouldn't grant unrestricted
     // shell + agent capabilities. The user opts in per session.
+    //
+    // Auto-approve is only meaningful when the daemon's host can verify the
+    // user password (currently macOS only — uses `dscl . -authonly`). On
+    // Linux/Windows daemons we hide the toggle entirely and start the
+    // session in normal-permission mode; users will see whatever consent
+    // prompts the agent shows over the terminal.
     bool auto = false;
-    if (agent != 'shell') {
+    final canAutoApprove = _deviceInfo == null
+        ? true /* unknown daemon — fall back to current behaviour */
+        : _deviceInfo!.autoApproveSupported;
+    if (agent != 'shell' && canAutoApprove) {
       final res = await _promptAutoApprove(agent, initial: auto);
       if (res == null) return;
       auto = res;
@@ -133,6 +154,55 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<String?> _pickAgent() async {
+    // If we already know what the daemon has installed, hide unavailable
+    // agents from the picker so the user can't pick a binary that isn't on
+    // PATH. If we don't know yet (older daemon, or device-info still in
+    // flight) we show all four — the daemon will return a clear
+    // session-error if the choice can't be honored.
+    final installed = _deviceInfo?.agents;
+    bool isInstalled(String agent) => installed == null || installed.contains(agent);
+
+    final tiles = <Widget>[
+      LoopsyMenuTile(
+        icon: HugeIcons.strokeRoundedCommandLine,
+        title: 'shell',
+        subtitle: 'Bash on your laptop',
+        onTap: () => Navigator.pop(context, 'shell'),
+      ),
+    ];
+    if (isInstalled('claude')) {
+      tiles.add(LoopsyMenuTile(
+        icon: HugeIcons.strokeRoundedAiChat02,
+        iconColor: LoopsyColors.accent,
+        title: 'claude',
+        subtitle: 'Claude Code',
+        onTap: () => Navigator.pop(context, 'claude'),
+      ));
+    }
+    if (isInstalled('gemini')) {
+      tiles.add(LoopsyMenuTile(
+        icon: HugeIcons.strokeRoundedAiBrain02,
+        iconColor: LoopsyColors.accent,
+        title: 'gemini',
+        subtitle: 'Gemini CLI',
+        onTap: () => Navigator.pop(context, 'gemini'),
+      ));
+    }
+    if (isInstalled('codex')) {
+      tiles.add(LoopsyMenuTile(
+        icon: HugeIcons.strokeRoundedSourceCode,
+        iconColor: LoopsyColors.accent,
+        title: 'codex',
+        subtitle: 'OpenAI Codex CLI',
+        onTap: () => Navigator.pop(context, 'codex'),
+      ));
+    }
+    // If at least one AI agent is missing, drop a hint at the bottom so
+    // the user knows why the list is shorter than the README suggests.
+    final missing = ['claude', 'gemini', 'codex']
+        .where((a) => installed != null && !installed.contains(a))
+        .toList();
+
     return showLoopsySheet<String>(
       context: context,
       icon: HugeIcons.strokeRoundedAddSquare,
@@ -140,34 +210,25 @@ class _HomeScreenState extends State<HomeScreen> {
       subtitle: 'Pick an agent. The session lives on your laptop and you can switch back to it anytime.',
       body: Column(
         mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          LoopsyMenuTile(
-            icon: HugeIcons.strokeRoundedCommandLine,
-            title: 'shell',
-            subtitle: 'Bash on your laptop',
-            onTap: () => Navigator.pop(context, 'shell'),
-          ),
-          LoopsyMenuTile(
-            icon: HugeIcons.strokeRoundedAiChat02,
-            iconColor: LoopsyColors.accent,
-            title: 'claude',
-            subtitle: 'Claude Code',
-            onTap: () => Navigator.pop(context, 'claude'),
-          ),
-          LoopsyMenuTile(
-            icon: HugeIcons.strokeRoundedAiBrain02,
-            iconColor: LoopsyColors.accent,
-            title: 'gemini',
-            subtitle: 'Gemini CLI',
-            onTap: () => Navigator.pop(context, 'gemini'),
-          ),
-          LoopsyMenuTile(
-            icon: HugeIcons.strokeRoundedSourceCode,
-            iconColor: LoopsyColors.accent,
-            title: 'codex',
-            subtitle: 'OpenAI Codex CLI',
-            onTap: () => Navigator.pop(context, 'codex'),
-          ),
+          ...tiles,
+          if (missing.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: LoopsyColors.surfaceAlt,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: LoopsyColors.border),
+              ),
+              child: Text(
+                'Not installed on this laptop: ${missing.join(", ")}.\n'
+                'Install the CLI on the host and reopen Loopsy to see it here.',
+                style: const TextStyle(color: LoopsyColors.muted, fontSize: 12.5, height: 1.4),
+              ),
+            ),
+          ],
         ],
       ),
     );

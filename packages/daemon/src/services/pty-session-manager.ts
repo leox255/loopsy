@@ -302,6 +302,43 @@ export class PtySessionManager {
    * the daemon launched.
    */
   private static readonly _absPathCache = new Map<string, string>();
+
+  /**
+   * List the agents this daemon can actually launch — `shell` is always
+   * available; the AI agents (claude, gemini, codex) only count if the
+   * binary resolves on PATH at the time we ask. Result is cached per agent
+   * inside `_absPathCache` (the same cache resolveCommand uses).
+   *
+   * Phones use this to grey out unavailable agents in the picker so a
+   * reviewer (or anyone) doesn't pick `claude`, hit a black terminal that
+   * shuts down because /usr/local/bin/claude isn't installed on this host,
+   * and then have to back out manually.
+   */
+  static availableAgents(): AgentKind[] {
+    const out: AgentKind[] = ['shell'];
+    const which = process.platform === 'win32' ? 'where' : 'command -v';
+    for (const a of ['claude', 'gemini', 'codex'] as const) {
+      const cached = PtySessionManager._absPathCache.get(a);
+      if (cached) {
+        out.push(a);
+        continue;
+      }
+      try {
+        const got = execSync(`${which} ${a}`, {
+          encoding: 'utf-8',
+          stdio: ['ignore', 'pipe', 'ignore'],
+        }).trim().split('\n')[0];
+        if (got) {
+          PtySessionManager._absPathCache.set(a, got);
+          out.push(a);
+        }
+      } catch {
+        // Not on PATH — skip.
+      }
+    }
+    return out;
+  }
+
   private resolveCommand(agent: AgentKind, extraArgs: string[]): { command: string; args: string[] } {
     if (agent === 'shell') {
       const sh = process.env.SHELL || (process.platform === 'win32' ? 'pwsh.exe' : '/bin/sh');

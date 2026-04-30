@@ -191,6 +191,33 @@ class _TerminalScreenState extends State<TerminalScreen> {
           );
         }
         break;
+      case 'session-error':
+        // Daemon rejected the session-open before any PTY was spawned —
+        // most commonly because the requested agent isn't installed on
+        // the laptop. Surface the reason and bounce back to the home
+        // screen so the user can pick a different agent without staring
+        // at a black terminal.
+        if (mounted) {
+          setState(() {
+            _status = 'cannot start session';
+            _statusError = true;
+          });
+          final reason = (msg['message'] as String?) ??
+              'The laptop daemon rejected this session.';
+          await showLoopsyDialog<void>(
+            context: context,
+            icon: HugeIcons.strokeRoundedAlert02,
+            title: 'Cannot start session',
+            subtitle: reason,
+            actions: [
+              LoopsyModalAction.primary(
+                'Back',
+                () { Navigator.pop(context); if (mounted) Navigator.of(context).pop(); },
+              ),
+            ],
+          );
+        }
+        break;
       default:
         // Unknown control frame — ignore for forward compatibility.
         break;

@@ -17,7 +17,8 @@
 
 import WebSocket from 'ws';
 import type { RelayConfig } from '@loopsy/protocol';
-import type { AgentKind, PtySessionManager } from './pty-session-manager.js';
+import { PtySessionManager } from './pty-session-manager.js';
+import type { AgentKind } from './pty-session-manager.js';
 import { checkAutoApprove, grantAutoApprove, verifyMacPassword } from './auto-approve.js';
 
 const RECONNECT_INITIAL_MS = 1000;
@@ -216,8 +217,31 @@ export class RelayClient {
     if (!type) return;
 
     switch (type) {
+      case 'device-info-request':
+        // Phone wants to know what this daemon's host can do (platform +
+        // installed agents). Used to drive the agent picker and to hide
+        // the macOS-only auto-approve flow on Linux/Windows daemons.
+        this.sendDeviceInfo();
+        break;
       case 'session-open':
         if (!sessionId) return;
+        // Block early on a missing agent so we don't open a PTY that
+        // immediately exits with "command not found" — the phone gets a
+        // clear session-error instead and the picker can grey it out.
+        if (msg.agent && msg.agent !== 'shell') {
+          const installed = PtySessionManager.availableAgents();
+          if (!installed.includes(msg.agent)) {
+            this.sendText({
+              type: 'session-error',
+              sessionId,
+              code: 'agent-not-installed',
+              agent: msg.agent,
+              message:
+                `${msg.agent} is not installed on this laptop. Install it on the host running 'loopsy daemon start' and try again.`,
+            });
+            return;
+          }
+        }
         this.handleSessionOpen(sessionId, msg);
         break;
       case 'session-attach':
@@ -376,6 +400,25 @@ export class RelayClient {
     if (!s) return;
     s.detach();
     this.sessions.delete(sessionId);
+  }
+
+  /**
+   * Tell the phone what host this daemon is running on + which agents are
+   * actually installed. The phone hides unavailable agents from the
+   * picker and skips the macOS-password auto-approve flow on non-darwin
+   * hosts (where dscl-based verification can't run anyway).
+   */
+  private sendDeviceInfo(): void {
+    this.sendText({
+      type: 'device-info',
+      platform: process.platform,
+      hostname: (() => {
+        try { return require('node:os').hostname() as string; } catch { return null; }
+      })(),
+      agents: PtySessionManager.availableAgents(),
+      // Auto-approve uses /usr/bin/dscl; only meaningful on darwin.
+      autoApproveSupported: process.platform === 'darwin',
+    });
   }
 
   // ─── outbound to relay ───────────────────────────────────────────────

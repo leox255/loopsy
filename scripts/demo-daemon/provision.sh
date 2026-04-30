@@ -44,9 +44,11 @@ apt-get install -y --no-install-recommends \
   curl ca-certificates gnupg \
   build-essential python3 \
   nftables \
-  setpriv \
   rsync \
   git
+# `setpriv` ships in util-linux on Debian 12 (no separate package). Verify
+# it's there; bail loudly if not.
+command -v setpriv >/dev/null || { echo "setpriv missing" >&2; exit 1; }
 
 # Node 20 from NodeSource
 if ! command -v node >/dev/null 2>&1 || ! node -v | grep -q '^v20'; then
@@ -79,8 +81,23 @@ $DEMO_USER hard as       2097152
 EOF
 
 # ── 4. Loopsy CLI ───────────────────────────────────────────────────────────
-# Install globally; the daemon binary ends up at /usr/bin/loopsy.
-npm install -g @loopsy/cli
+# The CLI is not yet published to npm. Install from a local tarball if a
+# bundled set of tarballs has been scp'd to /tmp/loopsy-tarballs first;
+# otherwise expect that `loopsy` is already on PATH (e.g. you installed
+# manually before re-running this script idempotently).
+if [[ -d /tmp/loopsy-tarballs && -n "$(ls /tmp/loopsy-tarballs/*.tgz 2>/dev/null)" ]]; then
+  npm install -g \
+    /tmp/loopsy-tarballs/loopsy-protocol-*.tgz \
+    /tmp/loopsy-tarballs/loopsy-discovery-*.tgz \
+    /tmp/loopsy-tarballs/loopsy-daemon-*.tgz \
+    /tmp/loopsy-tarballs/loopsy-mcp-server-*.tgz \
+    /tmp/loopsy-tarballs/loopsy-cli-*.tgz
+elif ! command -v loopsy >/dev/null 2>&1; then
+  echo "Loopsy CLI not installed and no /tmp/loopsy-tarballs to install from." >&2
+  echo "Build tarballs locally with 'pnpm pack' in each packages/* and scp them" >&2
+  echo "to /tmp/loopsy-tarballs/ on the VM before running this script." >&2
+  exit 1
+fi
 
 # Make sure the daemon user can read it.
 LOOPSY_BIN=$(command -v loopsy || echo /usr/bin/loopsy)
@@ -156,8 +173,12 @@ table inet filter {
   }
   chain output {
     type filter hook output priority 0; policy accept;
-    # Block GCP / cloud metadata service — protects creds + user-data.
-    ip daddr 169.254.169.254 drop
+    # GCP metadata server (169.254.169.254): the guest agent NEEDS this for
+    # SSH key sync. We created the VM with --no-service-account so there's
+    # no auth token to leak. Allow uid 0 (root, including the guest agent)
+    # to reach it; deny everyone else (including the `demo` PTY user).
+    ip daddr 169.254.169.254 meta skuid 0 accept
+    ip daddr 169.254.169.254 counter drop
     # Block well-known abuse ports.
     tcp dport { 25, 465, 587, 6667, 6697 } counter drop
   }

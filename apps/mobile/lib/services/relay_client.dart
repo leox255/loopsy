@@ -22,6 +22,73 @@ Future<void> selfRevoke(Pairing p) async {
   } catch (_) {/* best-effort */}
 }
 
+/// What the paired daemon told us about itself: which OS the laptop runs,
+/// which AI-agent binaries are actually on PATH, and whether auto-approve
+/// is supported (currently macOS-only because the password verification
+/// uses /usr/bin/dscl). Phone hides the auto-approve toggle on non-darwin
+/// daemons and greys out unavailable agents in the picker.
+class DeviceInfo {
+  final String platform; // 'darwin' | 'linux' | 'win32' | etc.
+  final String? hostname;
+  final List<String> agents; // includes 'shell' + whatever AI binaries are installed
+  final bool autoApproveSupported;
+
+  const DeviceInfo({
+    required this.platform,
+    required this.agents,
+    required this.autoApproveSupported,
+    this.hostname,
+  });
+
+  factory DeviceInfo.fromJson(Map<String, dynamic> j) => DeviceInfo(
+        platform: (j['platform'] as String?) ?? 'unknown',
+        hostname: j['hostname'] as String?,
+        agents: ((j['agents'] as List?) ?? const []).cast<String>(),
+        autoApproveSupported: j['autoApproveSupported'] == true,
+      );
+}
+
+/// Open a short-lived WebSocket to the relay just to query
+/// [device-info-request]. Returns null if the daemon never answered (e.g.
+/// it's offline, or it's an old build that doesn't support the message).
+Future<DeviceInfo?> fetchDeviceInfo(Pairing p, {Duration timeout = const Duration(seconds: 4)}) async {
+  final base = p.relayUrl.replaceFirst(RegExp(r'^http'), 'ws');
+  final uri = Uri.parse(
+    '$base/phone/connect/${Uri.encodeComponent(p.deviceId)}'
+    '?phone_id=${Uri.encodeComponent(p.phoneId)}'
+    '&session_id=device-info',
+  );
+  WebSocketChannel? channel;
+  try {
+    channel = WebSocketChannel.connect(uri, protocols: ['loopsy.bearer.${p.phoneSecret}']);
+    final completer = Completer<DeviceInfo?>();
+    final sub = channel.stream.listen(
+      (event) {
+        if (completer.isCompleted) return;
+        if (event is String) {
+          try {
+            final m = jsonDecode(event) as Map<String, dynamic>;
+            if (m['type'] == 'device-info') {
+              completer.complete(DeviceInfo.fromJson(m));
+            }
+          } catch (_) {/* ignore */}
+        }
+      },
+      onError: (_) { if (!completer.isCompleted) completer.complete(null); },
+      onDone: () { if (!completer.isCompleted) completer.complete(null); },
+      cancelOnError: false,
+    );
+    channel.sink.add(jsonEncode({'type': 'device-info-request'}));
+    final result = await completer.future.timeout(timeout, onTimeout: () => null);
+    await sub.cancel();
+    try { await channel.sink.close(1000); } catch (_) {}
+    return result;
+  } catch (_) {
+    try { await channel?.sink.close(1000); } catch (_) {}
+    return null;
+  }
+}
+
 /// Trades a pair token for a permanent phone_secret. Calls /pair/redeem.
 ///
 /// CSO #14: [sas] is the 4-digit verification code shown on the laptop next
