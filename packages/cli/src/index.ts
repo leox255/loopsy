@@ -223,7 +223,7 @@ yargs(hideBin(process.argv))
         .command(
           'pair',
           'Issue a pair token + render QR for the mobile app to scan',
-          { ttl: { type: 'number', default: 300, describe: 'Token TTL in seconds (60-1800)' } },
+          { ttl: { type: 'number', default: 300, describe: 'Token TTL in seconds (60-2592000; the relay caps it lower unless PAIR_TOKEN_MAX_TTL_SEC is configured)' } },
           mobilePairCommand,
         )
         .demandCommand(1),

@@ -1477,10 +1477,28 @@ export const WEB_CLIENT_HTML = /* html */ `<!doctype html>
       });
 
       // ── Voice input ───────────────────────────────────────────────────
+      // Web Speech API: Chrome desktop + Safari (incl. iOS 14.5+) yes;
+      // Firefox + Chrome on iOS no. On unsupported browsers we hide the
+      // button entirely instead of greying it out — a disabled mic icon
+      // sitting next to the textarea just confuses people.
       const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
       let recog = null;
       let recordingActive = false;
-      if (SpeechRecognition) {
+      let micPermissionAsked = false;
+
+      function setMicError(msg) {
+        // Steal the textarea placeholder for a beat to surface the error,
+        // then restore on next interaction.
+        textarea.placeholder = msg;
+        clearTimeout(setMicError._t);
+        setMicError._t = setTimeout(() => {
+          textarea.placeholder = 'Type or dictate, Enter sends...';
+        }, 4000);
+      }
+
+      if (!SpeechRecognition) {
+        micBtn.style.display = 'none';
+      } else {
         recog = new SpeechRecognition();
         recog.continuous = false; recog.interimResults = true;
         recog.lang = navigator.language || 'en-US';
@@ -1493,24 +1511,65 @@ export const WEB_CLIENT_HTML = /* html */ `<!doctype html>
           }
           if (final) textarea.value = (textarea.value + ' ' + final).trim();
         };
-        recog.onerror = recog.onend = () => {
+        recog.onerror = (e) => {
+          // Specific error codes per the W3C SpeechRecognition spec.
+          // Translating each one because "no-speech" and "not-allowed" are
+          // very different bugs from the user's perspective.
+          const code = e && e.error ? e.error : 'unknown';
+          let msg = 'Mic error: ' + code;
+          if (code === 'not-allowed' || code === 'service-not-allowed') {
+            msg = 'Mic permission denied — allow microphone in your browser settings.';
+          } else if (code === 'audio-capture') {
+            msg = 'No microphone detected on this device.';
+          } else if (code === 'no-speech') {
+            msg = 'No speech heard — try again.';
+          } else if (code === 'network') {
+            msg = 'Mic network error — check your connection.';
+          }
+          setMicError(msg);
+        };
+        recog.onend = () => {
           recordingActive = false;
           micBtn.classList.remove('recording');
-          textarea.placeholder = 'Type or dictate, Enter sends...';
         };
-      } else {
-        micBtn.disabled = true;
-        micBtn.title = 'Speech recognition not supported';
       }
-      micBtn.onclick = () => {
+
+      micBtn.onclick = async () => {
         if (!recog) return;
         if (recordingActive) { try { recog.stop(); } catch {} return; }
+        // Force the browser permission prompt up-front via getUserMedia
+        // on first click. Without this, some browsers start the recognition
+        // session and silently fail with not-allowed if mic isn't granted,
+        // and the user has no way to retrigger the OS permission dialog.
+        if (!micPermissionAsked && navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+          micPermissionAsked = true;
+          try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            // Got mic access — close the stream immediately, recog will
+            // open its own internally.
+            stream.getTracks().forEach(t => t.stop());
+          } catch (err) {
+            const name = err && err.name ? err.name : 'unknown';
+            if (name === 'NotAllowedError' || name === 'SecurityError') {
+              setMicError('Mic permission denied — allow microphone in your browser settings.');
+            } else if (name === 'NotFoundError') {
+              setMicError('No microphone detected on this device.');
+            } else {
+              setMicError('Mic unavailable: ' + name);
+            }
+            return;
+          }
+        }
         try {
           recordingActive = true;
           micBtn.classList.add('recording');
           textarea.placeholder = 'Listening...';
           recog.start();
-        } catch { recordingActive = false; micBtn.classList.remove('recording'); }
+        } catch (err) {
+          recordingActive = false;
+          micBtn.classList.remove('recording');
+          setMicError('Could not start dictation: ' + (err && err.message || 'unknown'));
+        }
       };
 
       // ── Resize handling ───────────────────────────────────────────────

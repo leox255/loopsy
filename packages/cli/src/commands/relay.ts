@@ -123,7 +123,10 @@ export async function mobilePairCommand(argv: { ttl?: number }): Promise<void> {
     process.exitCode = 1;
     return;
   }
-  const ttl = Math.max(60, Math.min(argv.ttl ?? 300, 1800));
+  // 30-day ceiling here mirrors the relay's hard cap. The relay then
+  // applies its own (smaller) PAIR_TOKEN_MAX_TTL_SEC env-config on top,
+  // so self-hosters are still bounded by their own deployment's policy.
+  const ttl = Math.max(60, Math.min(argv.ttl ?? 300, 30 * 24 * 60 * 60));
   const url = `${config.relay.url}/pair/issue?device_id=${encodeURIComponent(config.relay.deviceId)}`;
   const res = await fetch(url, {
     method: 'POST',

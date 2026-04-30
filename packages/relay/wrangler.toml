@@ -7,6 +7,13 @@ compatibility_flags = ["nodejs_compat"]
 # phones from the pre-loopsy.dev era keep their connections working.
 workers_dev = true
 
+[vars]
+# Allow up to 7 days for pair-token TTL on this deployment so the App
+# Store reviewer's pair URL stays valid for the full review window.
+# Self-hosters who deploy via @loopsy/deploy-relay don't get this — their
+# relay falls back to the 30-minute default for security.
+PAIR_TOKEN_MAX_TTL_SEC = "604800"
+
 # Workers Free plan supports SQLite-backed Durable Objects.
 # DeviceObject holds the persistent WebSocket from each laptop and
 # splices in/out phone session WebSockets via Hibernation API.

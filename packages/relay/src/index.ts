@@ -22,6 +22,7 @@ import {
 import { WEB_CLIENT_HTML } from './web-client.js';
 import { LANDING_HTML } from './landing.js';
 import { PRIVACY_HTML } from './privacy.js';
+import { SUPPORT_HTML } from './support.js';
 
 /**
  * Build a per-request CSP. Inline scripts only via nonce; styles still need
@@ -57,7 +58,22 @@ const SECURITY_HEADERS: Record<string, string> = {
 export { DeviceObject } from './device-object.js';
 
 const PAIR_TOKEN_DEFAULT_TTL_SEC = 5 * 60; // 5 minutes
-const PAIR_TOKEN_MAX_TTL_SEC = 30 * 60;
+const PAIR_TOKEN_MAX_TTL_SEC_DEFAULT = 30 * 60;
+
+/**
+ * Self-hosters keep the 30-minute cap by default; a deployment can raise it
+ * via the `PAIR_TOKEN_MAX_TTL_SEC` env var (we use 7 days on the loopsy.dev
+ * deployment so the App Store reviewer's pair URL stays valid for the
+ * full review window). SAS still defends each token against drive-by
+ * redemption regardless of TTL.
+ */
+function pairTokenMaxTtl(env: Env): number {
+  const raw = (env as unknown as { PAIR_TOKEN_MAX_TTL_SEC?: string }).PAIR_TOKEN_MAX_TTL_SEC;
+  if (!raw) return PAIR_TOKEN_MAX_TTL_SEC_DEFAULT;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return PAIR_TOKEN_MAX_TTL_SEC_DEFAULT;
+  return Math.min(n, 30 * 24 * 60 * 60); // hard ceiling: 30 days
+}
 
 function deviceStub(env: Env, deviceId: string): DurableObjectStub {
   return env.DEVICE.get(env.DEVICE.idFromName(deviceId));
@@ -118,6 +134,15 @@ export default {
 
     if (url.pathname === '/privacy' || url.pathname === '/privacy/') {
       return new Response(PRIVACY_HTML, {
+        headers: {
+          'content-type': 'text/html; charset=utf-8',
+          'cache-control': 'public, max-age=300',
+        },
+      });
+    }
+
+    if (url.pathname === '/support' || url.pathname === '/support/') {
+      return new Response(SUPPORT_HTML, {
         headers: {
           'content-type': 'text/html; charset=utf-8',
           'cache-control': 'public, max-age=300',
@@ -256,7 +281,7 @@ export default {
       }
       const ttl = Math.max(
         30,
-        Math.min(body?.ttl_seconds ?? PAIR_TOKEN_DEFAULT_TTL_SEC, PAIR_TOKEN_MAX_TTL_SEC),
+        Math.min(body?.ttl_seconds ?? PAIR_TOKEN_DEFAULT_TTL_SEC, pairTokenMaxTtl(env)),
       );
       const now = Math.floor(Date.now() / 1000);
       const nonce = base64urlEncode(crypto.getRandomValues(new Uint8Array(16)));
