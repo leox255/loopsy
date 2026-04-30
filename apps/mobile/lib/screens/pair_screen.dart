@@ -111,12 +111,16 @@ class _PairScreenState extends State<PairScreen> with WidgetsBindingObserver {
     final parsed = parsePairUrl(text);
     if (parsed == null) {
       setState(() => _error = 'That doesn’t look like a Loopsy pair URL.');
+      _restartScannerAfterFailure();
       return;
     }
     // CSO #14: ask for the 4-digit SAS shown on the laptop. Without it we
     // cannot complete pair — defends the QR-leak / redeem-race attack.
     final sas = await _askSas();
-    if (sas == null) return;
+    if (sas == null) {
+      _restartScannerAfterFailure();
+      return;
+    }
     setState(() {
       _busy = true;
       _error = null;
@@ -127,9 +131,22 @@ class _PairScreenState extends State<PairScreen> with WidgetsBindingObserver {
       if (mounted) context.go('/');
     } catch (e) {
       setState(() => _error = e.toString());
+      _restartScannerAfterFailure();
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+  }
+
+  /// onDetect calls `controller.stop()` the moment a barcode is read, to
+  /// avoid the same code being re-redeemed mid-handshake. If anything
+  /// downstream fails (bad URL, wrong SAS, expired token, network error,
+  /// user cancellation) we have to bring the scanner back up so the user
+  /// can try again — otherwise the viewfinder stays frozen on the failed
+  /// frame.
+  void _restartScannerAfterFailure() {
+    final ctrl = _scanController;
+    if (ctrl == null || !mounted) return;
+    ctrl.start().catchError((_) {});
   }
 
   Future<String?> _askSas() async {
@@ -260,56 +277,6 @@ class _PairScreenState extends State<PairScreen> with WidgetsBindingObserver {
               color: LoopsyColors.bg,
               child: SizedBox.expand(),
             ),
-
-          // Debug HUD: shows our permission state and the live
-          // MobileScannerController state. Always rendered (regardless of
-          // _camState) so we can see WHY the scanner widget didn't mount
-          // when it doesn't. Remove once the camera bug is closed out.
-          Positioned(
-            top: 56,
-            left: 12,
-            right: 12,
-            child: Container(
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: Colors.black.withValues(alpha: 0.7),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: _scanController == null
-                  ? Text(
-                      'permission=${_camState.name}\nctrl=null (waiting for permission)',
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontFamily: 'JetBrainsMono',
-                        fontFamilyFallback: ['Courier'],
-                        fontSize: 11,
-                        height: 1.35,
-                      ),
-                    )
-                  : ValueListenableBuilder<MobileScannerState>(
-                      valueListenable: _scanController!,
-                      builder: (ctx, st, _) {
-                        return Text(
-                          'permission=${_camState.name}\n'
-                          'init=${st.isInitialized} starting=${st.isStarting} '
-                          'running=${st.isRunning}\n'
-                          'cams=${st.availableCameras} dir=${st.cameraDirection.name} '
-                          'lens=${st.cameraLensType.name}\n'
-                          'size=${st.size.width.toInt()}x${st.size.height.toInt()}\n'
-                          'err=${st.error?.errorCode.name ?? '-'} '
-                          '${st.error?.errorDetails?.message ?? ''}',
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontFamily: 'JetBrainsMono',
-                            fontFamilyFallback: ['Courier'],
-                            fontSize: 11,
-                            height: 1.35,
-                          ),
-                        );
-                      },
-                    ),
-            ),
-          ),
 
           // Top gradient bar with title
           Positioned(

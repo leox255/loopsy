@@ -87,6 +87,16 @@ class _TerminalScreenState extends State<TerminalScreen> {
       }
     }
 
+    // Order matters here. We bring the keyboard up *before* opening the
+    // session so the PTY is created with the post-keyboard cols/rows. If
+    // we opened first and then focused, Claude/Codex/etc. would render
+    // their prompt for the full-screen size, the keyboard would pop in,
+    // SIGWINCH would fire, and the agent would redraw on top of itself —
+    // which is what made the first claude session look like two sessions
+    // in scrollback.
+    _termFocus.requestFocus();
+    await _waitForTerminalLayout();
+
     // Always send session-open: the daemon dedupes by sessionId — reuses an
     // existing PTY or spawns a fresh one if nothing exists for that id (e.g.,
     // after the daemon's idle timeout reaped the previous PTY).
@@ -108,10 +118,27 @@ class _TerminalScreenState extends State<TerminalScreen> {
     // Lazy-init speech recognition; ignore errors silently — mic just becomes unavailable.
     _voiceReady = await _speech.initialize(onError: (_) {});
     if (mounted) setState(() {});
-    // Bring keyboard up by default so users can type immediately.
-    Future.delayed(const Duration(milliseconds: 200), () {
-      if (mounted) _termFocus.requestFocus();
-    });
+  }
+
+  /// Spin until the xterm widget reports a real viewWidth/Height. Without
+  /// this, opening the session in the same microtask as initState reads
+  /// the pre-layout (often zero) values and the agent boots into a 0x0
+  /// PTY, which it then has to redraw on the first frame.
+  Future<void> _waitForTerminalLayout() async {
+    final completer = Completer<void>();
+    void poll() {
+      if (!mounted) {
+        if (!completer.isCompleted) completer.complete();
+        return;
+      }
+      if (_terminal.viewWidth > 0 && _terminal.viewHeight > 0) {
+        completer.complete();
+        return;
+      }
+      WidgetsBinding.instance.addPostFrameCallback((_) => poll());
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) => poll());
+    return completer.future;
   }
 
   /// Inbound text control frames from the relay/daemon. We split this out
