@@ -39,5 +39,21 @@ end
 post_install do |installer|
   installer.pods_project.targets.each do |target|
     flutter_additional_ios_build_settings(target)
+
+    # permission_handler_apple wraps every iOS permission strategy in an
+    # `#if PERMISSION_*` block. Without these flags those code paths are
+    # *stripped at compile time* and `Permission.camera.request()` quietly
+    # returns `denied` without ever calling AVCaptureDevice.requestAccess
+    # — meaning no iOS prompt and no Settings toggle ever appears for the
+    # app. The list mirrors the `NSCamera/NSMicrophone/NSSpeech`
+    # UsageDescription keys we declare in Info.plist.
+    target.build_configurations.each do |config|
+      config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] ||= ['$(inherited)']
+      config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] += [
+        'PERMISSION_CAMERA=1',
+        'PERMISSION_MICROPHONE=1',
+        'PERMISSION_SPEECH_RECOGNIZER=1',
+      ]
+    end
   end
 end
