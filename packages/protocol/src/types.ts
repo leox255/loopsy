@@ -172,6 +172,39 @@ export interface LoopsyConfig {
    * clients over the public internet. Populated by `loopsy relay configure`.
    */
   relay?: RelayConfig;
+
+  /**
+   * User-defined session shortcuts surfaced in the mobile/web "Start a
+   * session" picker alongside the built-in agents. The daemon owns this
+   * list so the same shortcuts appear on every paired phone — phones
+   * fetch and mutate via control frames over the relay.
+   */
+  customCommands?: CustomCommand[];
+}
+
+/**
+ * A user-defined command available in the "Start a session" picker, e.g.
+ * `{ id, label: "Edit README", command: "nvim", args: ["README.md"] }`.
+ * Spawned with the same security profile as the built-in `shell` agent —
+ * the paired phone can already run any binary, so a labeled tile does
+ * not change the threat model.
+ */
+export interface CustomCommand {
+  /** Stable id (uuid v4). Used for update/remove and for the daemon to
+   *  resolve a session-open without trusting client-supplied argv. */
+  id: string;
+  /** Display name shown in the picker, e.g. "Edit README". */
+  label: string;
+  /** Binary to spawn. Resolved on PATH at session-open time. */
+  command: string;
+  /** Optional argv tail. */
+  args?: string[];
+  /** Optional working directory; defaults to process.cwd(). */
+  cwd?: string;
+  /** Optional icon name (mobile maps to a HugeIcons identifier). */
+  icon?: string;
+  /** ISO timestamp the entry was created. */
+  createdAt?: string;
 }
 
 /** Loopsy relay configuration (mobile WAN access). */

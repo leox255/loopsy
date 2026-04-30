@@ -34,7 +34,14 @@ class LoopsyApp extends StatelessWidget {
             final agent = st.uri.queryParameters['agent'] ?? 'shell';
             final fresh = (st.uri.queryParameters['fresh'] ?? '0') == '1';
             final auto = (st.uri.queryParameters['auto'] ?? '0') == '1';
-            return TerminalScreen(sessionId: id, agent: agent, fresh: fresh, auto: auto);
+            final customCommandId = st.uri.queryParameters['customCommandId'];
+            return TerminalScreen(
+              sessionId: id,
+              agent: agent,
+              fresh: fresh,
+              auto: auto,
+              customCommandId: customCommandId,
+            );
           },
         ),
       ],

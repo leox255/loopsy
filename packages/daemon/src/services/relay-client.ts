@@ -15,8 +15,9 @@
  * and forwards PTY output back to the relay tagged by sessionId.
  */
 
+import { randomUUID } from 'node:crypto';
 import WebSocket from 'ws';
-import type { RelayConfig } from '@loopsy/protocol';
+import type { CustomCommand, RelayConfig } from '@loopsy/protocol';
 import { PtySessionManager } from './pty-session-manager.js';
 import type { AgentKind } from './pty-session-manager.js';
 import { checkAutoApprove, grantAutoApprove, verifyMacPassword } from './auto-approve.js';
@@ -58,6 +59,11 @@ function autoApproveFlags(agent: AgentKind): string[] {
     case 'codex':
       // OpenAI codex-cli auto mode.
       return ['--full-auto'];
+    case 'opencode':
+      // sst.dev/opencode does not currently expose a single "skip all
+      // confirmations" flag that we trust. We launch it in normal mode
+      // and let the user respond to its prompts inside the terminal.
+      return [];
     case 'shell':
     default:
       return [];
@@ -84,6 +90,15 @@ export interface RelayClientConfig {
   relay: RelayConfig;
   pty: PtySessionManager;
   logger?: RelayClientLogger;
+  /**
+   * The current custom-command list and a setter that persists changes
+   * back to ~/.loopsy/config.yaml. Daemon-side ownership of this list is
+   * what lets every paired phone (and the web client) see the same
+   * shortcuts. RelayClient mutates the list in response to phone
+   * control frames and broadcasts the new list to all listeners.
+   */
+  customCommands?: CustomCommand[];
+  saveCustomCommands?: (commands: CustomCommand[]) => Promise<void>;
 }
 
 export class RelayClient {
@@ -97,11 +112,16 @@ export class RelayClient {
   private heartbeatTimer?: ReturnType<typeof setInterval>;
   /** sessionId → handle so we can tear down listeners on disconnect. */
   private sessions = new Map<string, RoutedSession>();
+  /** Daemon-side custom command list. Mutated in-place and persisted. */
+  private customCommands: CustomCommand[];
+  private saveCustomCommands: (commands: CustomCommand[]) => Promise<void>;
 
   constructor(cfg: RelayClientConfig) {
     this.cfg = cfg.relay;
     this.pty = cfg.pty;
     this.log = cfg.logger ?? noopLogger;
+    this.customCommands = (cfg.customCommands ?? []).map(c => ({ ...c }));
+    this.saveCustomCommands = cfg.saveCustomCommands ?? (async () => {});
   }
 
   start(): void {
@@ -219,16 +239,43 @@ export class RelayClient {
     switch (type) {
       case 'device-info-request':
         // Phone wants to know what this daemon's host can do (platform +
-        // installed agents). Used to drive the agent picker and to hide
-        // the macOS-only auto-approve flow on Linux/Windows daemons.
+        // installed agents + custom commands). Used to drive the agent
+        // picker and to hide the macOS-only auto-approve flow on
+        // Linux/Windows daemons.
         this.sendDeviceInfo();
+        break;
+      case 'custom-command-add':
+      case 'custom-command-update':
+      case 'custom-command-remove':
+        // Mutate the daemon-side list, persist, then push the new list
+        // to all listeners so any other paired phone sees the update.
+        void this.applyCustomCommandMutation(msg).then(() => this.broadcastCustomCommands());
         break;
       case 'session-open':
         if (!sessionId) return;
-        // Block early on a missing agent so we don't open a PTY that
-        // immediately exits with "command not found" — the phone gets a
-        // clear session-error instead and the picker can grey it out.
-        if (msg.agent && msg.agent !== 'shell') {
+        // For built-in agents: block early on a missing binary so we
+        // don't open a PTY that immediately exits with "command not
+        // found". For `agent:'custom'`: resolve the customCommandId
+        // server-side instead of trusting argv from the phone, then
+        // surface a clean session-error if the id is unknown (e.g.
+        // another phone deleted the command between picker render and
+        // tap).
+        if (msg.agent === 'custom') {
+          const id = (msg as { customCommandId?: string }).customCommandId;
+          const cmd = id ? this.customCommands.find(c => c.id === id) : undefined;
+          if (!cmd) {
+            this.sendText({
+              type: 'session-error',
+              sessionId,
+              code: 'custom-command-not-found',
+              message: 'This custom command was deleted on the laptop. Pull-to-refresh to update the picker.',
+            });
+            return;
+          }
+          msg.command = cmd.command;
+          msg.extraArgs = cmd.args;
+          if (cmd.cwd && !msg.cwd) msg.cwd = cmd.cwd;
+        } else if (msg.agent && msg.agent !== 'shell') {
           const installed = PtySessionManager.availableAgents();
           if (!installed.includes(msg.agent)) {
             this.sendText({
@@ -369,6 +416,10 @@ export class RelayClient {
         cwd: msg.cwd,
         initialInput: msg.initialInput,
         extraArgs: args,
+        // Set by the case 'session-open' handler when agent === 'custom'
+        // — copied from the trusted customCommands entry, never raw from
+        // the phone.
+        command: (msg as { command?: string }).command,
       });
     }
     const prefix = uuidToBytes(sessionId);
@@ -418,7 +469,71 @@ export class RelayClient {
       agents: PtySessionManager.availableAgents(),
       // Auto-approve uses /usr/bin/dscl; only meaningful on darwin.
       autoApproveSupported: process.platform === 'darwin',
+      customCommands: this.customCommands,
     });
+  }
+
+  /**
+   * Send the latest custom-command list to whoever's listening on the
+   * relay socket. Phones cache the list locally; this keeps every paired
+   * phone in sync after a mutation without each one having to poll.
+   */
+  private broadcastCustomCommands(): void {
+    this.sendText({
+      type: 'custom-commands',
+      customCommands: this.customCommands,
+    });
+  }
+
+  /**
+   * Mutate the daemon-side custom-command list in response to a phone
+   * control frame and persist the result. Returns the updated list so we
+   * can include it in any response, alongside the broadcast.
+   */
+  private async applyCustomCommandMutation(
+    msg: { type: string; command?: Partial<CustomCommand>; id?: string },
+  ): Promise<CustomCommand[]> {
+    if (msg.type === 'custom-command-add' && msg.command) {
+      // The daemon owns id assignment so two phones racing the same
+      // submission don't collide. label/command are required; everything
+      // else is a passthrough optional.
+      const c = msg.command;
+      if (!c.label || !c.command) return this.customCommands;
+      const entry: CustomCommand = {
+        id: randomUUID(),
+        label: String(c.label).slice(0, 80),
+        command: String(c.command).slice(0, 200),
+        args: Array.isArray(c.args) ? c.args.map(String).slice(0, 32) : undefined,
+        cwd: typeof c.cwd === 'string' ? c.cwd : undefined,
+        icon: typeof c.icon === 'string' ? c.icon : undefined,
+        createdAt: new Date().toISOString(),
+      };
+      this.customCommands = [...this.customCommands, entry];
+    } else if (msg.type === 'custom-command-update' && msg.command?.id) {
+      const id = String(msg.command.id);
+      this.customCommands = this.customCommands.map(c =>
+        c.id === id
+          ? {
+              ...c,
+              label: msg.command!.label ?? c.label,
+              command: msg.command!.command ?? c.command,
+              args: msg.command!.args !== undefined
+                ? (Array.isArray(msg.command!.args) ? msg.command!.args.map(String).slice(0, 32) : c.args)
+                : c.args,
+              cwd: msg.command!.cwd !== undefined ? msg.command!.cwd : c.cwd,
+              icon: msg.command!.icon !== undefined ? msg.command!.icon : c.icon,
+            }
+          : c,
+      );
+    } else if (msg.type === 'custom-command-remove' && msg.id) {
+      this.customCommands = this.customCommands.filter(c => c.id !== msg.id);
+    }
+    try {
+      await this.saveCustomCommands(this.customCommands);
+    } catch (err) {
+      this.log.warn('failed to persist customCommands', { err: String(err) });
+    }
+    return this.customCommands;
   }
 
   // ─── outbound to relay ───────────────────────────────────────────────

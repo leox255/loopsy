@@ -17,12 +17,18 @@ class TerminalScreen extends StatefulWidget {
   final String agent;
   final bool fresh;
   final bool auto;
+  /// Set when [agent] is `'custom'` — id of the user-defined entry on
+  /// the daemon. Sent to the daemon via session-open so the daemon can
+  /// resolve it against its trusted customCommands list (the phone never
+  /// sends raw argv).
+  final String? customCommandId;
   const TerminalScreen({
     super.key,
     required this.sessionId,
     required this.agent,
     required this.fresh,
     this.auto = false,
+    this.customCommandId,
   });
 
   @override
@@ -107,6 +113,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
       auto: widget.auto,
       approveToken: approveToken,
       sudoPassword: sudoPassword,
+      customCommandId: widget.customCommandId,
     );
     if (!mounted) return;
     setState(() {

@@ -23,6 +23,7 @@ import { PtySessionManager } from './services/pty-session-manager.js';
 import { RelayClient } from './services/relay-client.js';
 import { registerPairRoutes } from './routes/pair.js';
 import { mountDashboard } from './dashboard.js';
+import { saveConfig } from './config.js';
 
 export interface DaemonServer {
   start(): Promise<void>;
@@ -80,6 +81,15 @@ export async function createDaemon(config: LoopsyConfig): Promise<DaemonServer> 
           info: (msg, ctx) => app.log.info(ctx ?? {}, `[relay] ${msg}`),
           warn: (msg, ctx) => app.log.warn(ctx ?? {}, `[relay] ${msg}`),
           error: (msg, ctx) => app.log.error(ctx ?? {}, `[relay] ${msg}`),
+        },
+        // The picker-shortcut list lives in ~/.loopsy/config.yaml so it
+        // survives daemon restarts and stays consistent across every
+        // paired phone. Wire the relay client to mutate the in-memory
+        // copy and re-flush the YAML on every change.
+        customCommands: config.customCommands ?? [],
+        saveCustomCommands: async (commands) => {
+          config.customCommands = commands;
+          await saveConfig(config, dataDir);
         },
       })
     : null;

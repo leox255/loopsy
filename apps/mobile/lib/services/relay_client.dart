@@ -22,22 +22,65 @@ Future<void> selfRevoke(Pairing p) async {
   } catch (_) {/* best-effort */}
 }
 
+/// User-defined session shortcut. Lives on the daemon and is broadcast to
+/// every paired phone via the device-info handshake (and after each
+/// mutation). Phones do not own the canonical list — they send mutation
+/// frames and re-render from whatever the daemon echoes back.
+class CustomCommand {
+  final String id;
+  final String label;
+  final String command;
+  final List<String> args;
+  final String? cwd;
+  final String? icon;
+
+  const CustomCommand({
+    required this.id,
+    required this.label,
+    required this.command,
+    this.args = const [],
+    this.cwd,
+    this.icon,
+  });
+
+  factory CustomCommand.fromJson(Map<String, dynamic> j) => CustomCommand(
+        id: j['id'] as String,
+        label: j['label'] as String? ?? '',
+        command: j['command'] as String? ?? '',
+        args: ((j['args'] as List?) ?? const []).map((e) => e.toString()).toList(),
+        cwd: j['cwd'] as String?,
+        icon: j['icon'] as String?,
+      );
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'label': label,
+        'command': command,
+        if (args.isNotEmpty) 'args': args,
+        if (cwd != null) 'cwd': cwd,
+        if (icon != null) 'icon': icon,
+      };
+}
+
 /// What the paired daemon told us about itself: which OS the laptop runs,
-/// which AI-agent binaries are actually on PATH, and whether auto-approve
+/// which AI-agent binaries are actually on PATH, whether auto-approve
 /// is supported (currently macOS-only because the password verification
-/// uses /usr/bin/dscl). Phone hides the auto-approve toggle on non-darwin
-/// daemons and greys out unavailable agents in the picker.
+/// uses /usr/bin/dscl), and any custom-command shortcuts the user has
+/// added. Phone hides the auto-approve toggle on non-darwin daemons and
+/// greys out unavailable agents in the picker.
 class DeviceInfo {
   final String platform; // 'darwin' | 'linux' | 'win32' | etc.
   final String? hostname;
   final List<String> agents; // includes 'shell' + whatever AI binaries are installed
   final bool autoApproveSupported;
+  final List<CustomCommand> customCommands;
 
   const DeviceInfo({
     required this.platform,
     required this.agents,
     required this.autoApproveSupported,
     this.hostname,
+    this.customCommands = const [],
   });
 
   factory DeviceInfo.fromJson(Map<String, dynamic> j) => DeviceInfo(
@@ -45,7 +88,63 @@ class DeviceInfo {
         hostname: j['hostname'] as String?,
         agents: ((j['agents'] as List?) ?? const []).cast<String>(),
         autoApproveSupported: j['autoApproveSupported'] == true,
+        customCommands: ((j['customCommands'] as List?) ?? const [])
+            .whereType<Map>()
+            .map((m) => CustomCommand.fromJson(m.cast<String, dynamic>()))
+            .toList(),
       );
+}
+
+/// Send a custom-command mutation to the daemon and resolve once the
+/// daemon broadcasts the updated list back. Returns null on failure or
+/// timeout — caller should treat that as "couldn't reach daemon" and
+/// optionally retry. The mutation message is one of:
+///   { type: 'custom-command-add',    command: { label, command, args?, cwd?, icon? } }
+///   { type: 'custom-command-update', command: { id, label?, command?, args?, cwd?, icon? } }
+///   { type: 'custom-command-remove', id }
+Future<List<CustomCommand>?> mutateCustomCommands(
+  Pairing p,
+  Map<String, dynamic> mutation, {
+  Duration timeout = const Duration(seconds: 5),
+}) async {
+  final base = p.relayUrl.replaceFirst(RegExp(r'^http'), 'ws');
+  final uri = Uri.parse(
+    '$base/phone/connect/${Uri.encodeComponent(p.deviceId)}'
+    '?phone_id=${Uri.encodeComponent(p.phoneId)}'
+    '&session_id=cc-mutate-${DateTime.now().millisecondsSinceEpoch}',
+  );
+  WebSocketChannel? channel;
+  try {
+    channel = WebSocketChannel.connect(uri, protocols: ['loopsy.bearer.${p.phoneSecret}']);
+    final completer = Completer<List<CustomCommand>?>();
+    final sub = channel.stream.listen(
+      (event) {
+        if (completer.isCompleted) return;
+        if (event is String) {
+          try {
+            final m = jsonDecode(event) as Map<String, dynamic>;
+            if (m['type'] == 'custom-commands') {
+              completer.complete(((m['customCommands'] as List?) ?? const [])
+                  .whereType<Map>()
+                  .map((x) => CustomCommand.fromJson(x.cast<String, dynamic>()))
+                  .toList());
+            }
+          } catch (_) {/* ignore */}
+        }
+      },
+      onError: (_) { if (!completer.isCompleted) completer.complete(null); },
+      onDone: () { if (!completer.isCompleted) completer.complete(null); },
+      cancelOnError: false,
+    );
+    channel.sink.add(jsonEncode(mutation));
+    final result = await completer.future.timeout(timeout, onTimeout: () => null);
+    await sub.cancel();
+    try { await channel.sink.close(1000); } catch (_) {}
+    return result;
+  } catch (_) {
+    try { await channel?.sink.close(1000); } catch (_) {}
+    return null;
+  }
 }
 
 /// Open a short-lived WebSocket to the relay just to query
@@ -156,6 +255,7 @@ class RelaySession {
     bool auto = false,
     String? sudoPassword,
     String? approveToken,
+    String? customCommandId,
   }) async {
     _connect();
     sendControl({
@@ -167,6 +267,7 @@ class RelaySession {
       if (auto) 'phoneId': pairing.phoneId,
       if (auto && sudoPassword != null) 'sudoPassword': sudoPassword,
       if (auto && approveToken != null) 'approveToken': approveToken,
+      if (agent == 'custom' && customCommandId != null) 'customCommandId': customCommandId,
     });
   }
 

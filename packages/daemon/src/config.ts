@@ -1,7 +1,7 @@
-import { readFile, mkdir } from 'node:fs/promises';
+import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import { parse as parseYaml } from 'yaml';
+import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { randomBytes } from 'node:crypto';
 import type { LoopsyConfig } from '@loopsy/protocol';
 import { CONFIG_DIR, CONFIG_FILE, DEFAULT_PORT, MAX_FILE_SIZE, MAX_CONCURRENT_JOBS, DEFAULT_EXEC_TIMEOUT, RATE_LIMITS } from '@loopsy/protocol';
@@ -49,6 +49,23 @@ export async function loadConfig(dataDir?: string): Promise<LoopsyConfig> {
     defaults.server.dataDir = dir;
     return defaults;
   }
+}
+
+/**
+ * Persist a config back to disk. Used by the relay-client when it
+ * mutates `customCommands` so the change survives a daemon restart.
+ * The full config object is round-tripped — anything not in the new
+ * value is removed, including secrets, so callers must pass the
+ * already-merged config (typically the one returned by loadConfig).
+ */
+export async function saveConfig(config: LoopsyConfig, dataDir?: string): Promise<void> {
+  const dir = dataDir ?? config.server?.dataDir ?? DEFAULT_DATA_DIR;
+  await mkdir(dir, { recursive: true });
+  const configPath = join(dir, CONFIG_FILE);
+  // Strip computed/ephemeral fields that don't belong in YAML.
+  const { server, ...rest } = config;
+  const persisted = { server: { ...server, dataDir: undefined }, ...rest };
+  await writeFile(configPath, stringifyYaml(persisted), { mode: 0o600 });
 }
 
 function deepMerge(target: Record<string, any>, source: Record<string, any>): Record<string, any> {

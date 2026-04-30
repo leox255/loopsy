@@ -56,9 +56,118 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
+  /// Show an add/edit modal for a [CustomCommand] and send the result to
+  /// the daemon. On success, refresh the local DeviceInfo cache so the
+  /// next picker render shows the new state.
+  Future<void> _editCustomCommand(CustomCommand? existing) async {
+    final pairing = _pairing;
+    if (pairing == null) return;
+    final labelCtl = TextEditingController(text: existing?.label ?? '');
+    final commandCtl = TextEditingController(text: existing?.command ?? '');
+    final argsCtl = TextEditingController(text: existing?.args.join(' ') ?? '');
+    final isEdit = existing != null;
+    final result = await showLoopsyDialog<Map<String, dynamic>?>(
+      context: context,
+      icon: HugeIcons.strokeRoundedConsole,
+      title: isEdit ? 'Edit command' : 'Add custom command',
+      subtitle: isEdit
+          ? 'Update or delete this picker shortcut.'
+          : 'Pin any CLI on your laptop to the session picker.',
+      body: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          TextField(
+            controller: labelCtl,
+            autofocus: !isEdit,
+            decoration: const InputDecoration(
+              labelText: 'Label',
+              hintText: 'Edit README',
+            ),
+          ),
+          const SizedBox(height: 10),
+          TextField(
+            controller: commandCtl,
+            autocorrect: false,
+            decoration: const InputDecoration(
+              labelText: 'Command',
+              hintText: 'nvim',
+            ),
+            style: const TextStyle(fontFamily: 'JetBrainsMono'),
+          ),
+          const SizedBox(height: 10),
+          TextField(
+            controller: argsCtl,
+            autocorrect: false,
+            decoration: const InputDecoration(
+              labelText: 'Args (space-separated)',
+              hintText: 'README.md',
+            ),
+            style: const TextStyle(fontFamily: 'JetBrainsMono'),
+          ),
+        ],
+      ),
+      actions: [
+        if (isEdit)
+          LoopsyModalAction.text('Delete', () => Navigator.pop(context, {'_delete': true})),
+        LoopsyModalAction.text('Cancel', () => Navigator.pop(context)),
+        LoopsyModalAction.primary('Save', () {
+          final label = labelCtl.text.trim();
+          final command = commandCtl.text.trim();
+          if (label.isEmpty || command.isEmpty) return;
+          Navigator.pop(context, {
+            'label': label,
+            'command': command,
+            'args': argsCtl.text.trim().isEmpty
+                ? <String>[]
+                : argsCtl.text.trim().split(RegExp(r'\s+')),
+          });
+        }),
+      ],
+    );
+    if (result == null) return;
+
+    Map<String, dynamic> mutation;
+    if (result['_delete'] == true && existing != null) {
+      mutation = {'type': 'custom-command-remove', 'id': existing.id};
+    } else if (existing != null) {
+      mutation = {
+        'type': 'custom-command-update',
+        'command': {'id': existing.id, ...result},
+      };
+    } else {
+      mutation = {'type': 'custom-command-add', 'command': result};
+    }
+    final updated = await mutateCustomCommands(pairing, mutation);
+    if (!mounted) return;
+    if (updated == null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        backgroundColor: LoopsyColors.surface,
+        content: Text(
+          'Could not reach the daemon. Check that your laptop is online and try again.',
+          style: TextStyle(color: LoopsyColors.bad),
+        ),
+      ));
+      return;
+    }
+    setState(() {
+      _deviceInfo = DeviceInfo(
+        platform: _deviceInfo?.platform ?? 'unknown',
+        hostname: _deviceInfo?.hostname,
+        agents: _deviceInfo?.agents ?? const [],
+        autoApproveSupported: _deviceInfo?.autoApproveSupported ?? false,
+        customCommands: updated,
+      );
+    });
+  }
+
   Future<void> _newSession() async {
-    final agent = await _pickAgent();
-    if (agent == null) return;
+    final picked = await _pickAgent();
+    if (picked == null) return;
+    // The picker may return a built-in agent name ('shell', 'claude', …)
+    // or 'custom:<id>' for a user-defined entry.
+    final isCustom = picked.startsWith('custom:');
+    final agent = isCustom ? 'custom' : picked;
+    final customCommandId = isCustom ? picked.substring('custom:'.length) : null;
     // CSO #4: auto-approve now defaults to OFF, even for AI agents. Skipping
     // permission prompts on the laptop is too powerful to be the default for
     // a remote phone — a stolen unlocked device shouldn't grant unrestricted
@@ -73,7 +182,11 @@ class _HomeScreenState extends State<HomeScreen> {
     final canAutoApprove = _deviceInfo == null
         ? true /* unknown daemon — fall back to current behaviour */
         : _deviceInfo!.autoApproveSupported;
-    if (agent != 'shell' && canAutoApprove) {
+    // Auto-approve only makes sense for agents that ship a documented
+    // skip-permissions flag. opencode doesn't have one yet — its toggle
+    // would be a no-op.
+    final hasAutoApproveFlag = const {'claude', 'codex', 'gemini'}.contains(agent);
+    if (hasAutoApproveFlag && canAutoApprove) {
       final res = await _promptAutoApprove(agent, initial: auto);
       if (res == null) return;
       auto = res;
@@ -91,7 +204,9 @@ class _HomeScreenState extends State<HomeScreen> {
     await Storage.writeSessions(next);
     if (!mounted) return;
     setState(() => _sessions = next);
-    context.push('/terminal/$id?fresh=1&agent=$agent&auto=${auto ? 1 : 0}');
+    final qs = StringBuffer('fresh=1&agent=$agent&auto=${auto ? 1 : 0}');
+    if (customCommandId != null) qs.write('&customCommandId=$customCommandId');
+    context.push('/terminal/$id?$qs');
   }
 
   Future<bool?> _promptAutoApprove(String agent, {required bool initial}) async {
@@ -197,9 +312,62 @@ class _HomeScreenState extends State<HomeScreen> {
         onTap: () => Navigator.pop(context, 'codex'),
       ));
     }
+    if (isInstalled('opencode')) {
+      tiles.add(LoopsyMenuTile(
+        icon: HugeIcons.strokeRoundedCode,
+        iconColor: LoopsyColors.accent,
+        title: 'opencode',
+        subtitle: 'sst.dev/opencode',
+        onTap: () => Navigator.pop(context, 'opencode'),
+      ));
+    }
+
+    // User-defined shortcuts. Long-press to edit/delete.
+    final customs = _deviceInfo?.customCommands ?? const <CustomCommand>[];
+    if (customs.isNotEmpty) {
+      tiles.add(const Padding(
+        padding: EdgeInsets.fromLTRB(4, 14, 4, 4),
+        child: Text(
+          'YOUR COMMANDS',
+          style: TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.w600,
+            letterSpacing: 1.0,
+            color: LoopsyColors.muted,
+          ),
+        ),
+      ));
+      for (final c in customs) {
+        tiles.add(GestureDetector(
+          onLongPress: () async {
+            Navigator.pop(context);
+            await _editCustomCommand(c);
+          },
+          child: LoopsyMenuTile(
+            icon: HugeIcons.strokeRoundedConsole,
+            iconColor: LoopsyColors.accent,
+            title: c.label,
+            subtitle: '\$ ${c.command}${c.args.isNotEmpty ? " ${c.args.join(" ")}" : ""}',
+            onTap: () => Navigator.pop(context, 'custom:${c.id}'),
+          ),
+        ));
+      }
+    }
+
+    // "+ Add custom command" tile — always last, always visible.
+    tiles.add(LoopsyMenuTile(
+      icon: HugeIcons.strokeRoundedAdd01,
+      title: 'Add custom command…',
+      subtitle: 'Pin any CLI tool to this picker',
+      onTap: () async {
+        Navigator.pop(context);
+        await _editCustomCommand(null);
+      },
+    ));
+
     // If at least one AI agent is missing, drop a hint at the bottom so
     // the user knows why the list is shorter than the README suggests.
-    final missing = ['claude', 'gemini', 'codex']
+    final missing = ['claude', 'gemini', 'codex', 'opencode']
         .where((a) => installed != null && !installed.contains(a))
         .toList();
 

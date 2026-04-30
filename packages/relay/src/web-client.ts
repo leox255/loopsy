@@ -523,6 +523,50 @@ export const WEB_CLIENT_HTML = /* html */ `<!doctype html>
     return '';
   }
 
+  /**
+   * Open a short-lived WebSocket to the relay just to query
+   * device-info (or send a custom-command mutation) and await the
+   * daemon's response. Used to populate the agent picker without having
+   * to keep a long-running connection on the home view.
+   */
+  function _phoneSideQuery(pairing, send, awaitType, timeoutMs = 5000) {
+    return new Promise((resolve) => {
+      const wsBase = pairing.relayUrl.replace(/^http/, 'ws');
+      const url = wsBase
+        + '/phone/connect/' + encodeURIComponent(pairing.deviceId)
+        + '?phone_id=' + encodeURIComponent(pairing.phoneId)
+        + '&session_id=' + encodeURIComponent('q-' + Date.now() + '-' + Math.random().toString(16).slice(2));
+      const ws = new WebSocket(url, ['loopsy.bearer.' + pairing.phoneSecret]);
+      let done = false;
+      const timer = setTimeout(() => { if (!done) { done = true; try { ws.close(); } catch {}; resolve(null); } }, timeoutMs);
+      ws.addEventListener('open', () => { try { ws.send(JSON.stringify(send)); } catch {} });
+      ws.addEventListener('message', (e) => {
+        if (done || typeof e.data !== 'string') return;
+        try {
+          const m = JSON.parse(e.data);
+          if (m && m.type === awaitType) {
+            done = true;
+            clearTimeout(timer);
+            try { ws.close(); } catch {}
+            resolve(m);
+          }
+        } catch {}
+      });
+      ws.addEventListener('error', () => { if (!done) { done = true; clearTimeout(timer); resolve(null); } });
+      ws.addEventListener('close', () => { if (!done) { done = true; clearTimeout(timer); resolve(null); } });
+    });
+  }
+
+  async function fetchDeviceInfo(pairing) {
+    const m = await _phoneSideQuery(pairing, { type: 'device-info-request' }, 'device-info', 4000);
+    return m;
+  }
+
+  async function mutateCustomCommands(pairing, mutation) {
+    const m = await _phoneSideQuery(pairing, mutation, 'custom-commands', 5000);
+    return m && Array.isArray(m.customCommands) ? m.customCommands : null;
+  }
+
   // ── Modal helpers ────────────────────────────────────────────────────────
   // Port of loopsy_modal.dart. showLoopsyDialog/showLoopsySheet return a
   // Promise that resolves to the value passed to resolve() by an action button.
@@ -650,12 +694,13 @@ export const WEB_CLIENT_HTML = /* html */ `<!doctype html>
       });
     }
 
-    sendOpen({ agent, cols, rows, auto, approveToken, sudoPassword, phoneId }) {
+    sendOpen({ agent, cols, rows, auto, approveToken, sudoPassword, phoneId, customCommandId }) {
       const msg = { type: 'session-open', agent, cols, rows };
-      if (auto)           msg.auto = true;
-      if (phoneId)        msg.phoneId = phoneId;
-      if (approveToken)   msg.approveToken = approveToken;
-      if (sudoPassword)   msg.sudoPassword = sudoPassword;
+      if (auto)             msg.auto = true;
+      if (phoneId)          msg.phoneId = phoneId;
+      if (approveToken)     msg.approveToken = approveToken;
+      if (sudoPassword)     msg.sudoPassword = sudoPassword;
+      if (agent === 'custom' && customCommandId) msg.customCommandId = customCommandId;
       this._send(JSON.stringify(msg));
     }
     sendStdin(data) { if (this.isOpen) this._ws.send(data); }
@@ -943,6 +988,12 @@ export const WEB_CLIENT_HTML = /* html */ `<!doctype html>
       topbar.appendChild(tb);
 
       let sessions = Storage.readSessions();
+      // Cached daemon capabilities + custom commands. Refreshed in the
+      // background after first paint and after every custom-command
+      // mutation. Falls back to null (which the picker treats as
+      // "show everything") if the daemon doesn't answer.
+      let deviceInfo = null;
+      fetchDeviceInfo(pairing).then((info) => { if (info) deviceInfo = info; });
 
       function render() {
         view.innerHTML = '';
@@ -1000,7 +1051,22 @@ export const WEB_CLIENT_HTML = /* html */ `<!doctype html>
         const fab = document.createElement('button');
         fab.className = 'fab';
         fab.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>New session';
-        fab.onclick = () => _newSession(pairing, () => { sessions = Storage.readSessions(); render(); });
+        fab.onclick = () => _newSession(
+          pairing,
+          (updatedCustoms) => {
+            // The picker passes the freshly-mutated custom-command list
+            // back so we re-render with it without waiting for a fresh
+            // device-info round-trip.
+            if (Array.isArray(updatedCustoms) && deviceInfo) {
+              deviceInfo = { ...deviceInfo, customCommands: updatedCustoms };
+            } else if (Array.isArray(updatedCustoms)) {
+              deviceInfo = { agents: null, autoApproveSupported: true, customCommands: updatedCustoms };
+            }
+            sessions = Storage.readSessions();
+            render();
+          },
+          deviceInfo,
+        );
         body.appendChild(fab);
 
         view.appendChild(body);
@@ -1073,13 +1139,18 @@ export const WEB_CLIENT_HTML = /* html */ `<!doctype html>
     return card;
   }
 
-  async function _newSession(pairing, onRefresh) {
-    // 1. pick agent
-    const agent = await _pickAgent();
-    if (!agent) return;
-    // 2. auto-approve dialog (only for non-shell agents)
+  async function _newSession(pairing, onRefresh, deviceInfo) {
+    // 1. pick agent (string for built-ins, 'custom:<id>' for user-defined)
+    const picked = await _pickAgent(pairing, deviceInfo, onRefresh);
+    if (!picked) return;
+    const isCustom = picked.startsWith('custom:');
+    const agent = isCustom ? 'custom' : picked;
+    const customCommandId = isCustom ? picked.slice('custom:'.length) : undefined;
+    // 2. auto-approve dialog only for the agents that ship a real
+    //    skip-permissions flag (and only when the daemon's host can
+    //    verify a password — handled inside the dialog flow elsewhere).
     let auto = false;
-    if (agent !== 'shell') {
+    if (['claude', 'codex', 'gemini'].includes(agent)) {
       const res = await _promptAutoApprove(agent);
       if (res === undefined || res === null) return; // cancelled
       auto = res;
@@ -1093,6 +1164,7 @@ export const WEB_CLIENT_HTML = /* html */ `<!doctype html>
       lastUsedMs: Date.now(),
       name: (name && name.trim()) ? name.trim() : undefined,
       auto,
+      customCommandId,
     };
     const sessions = Storage.readSessions();
     Storage.writeSessions([meta, ...sessions]);
@@ -1100,9 +1172,16 @@ export const WEB_CLIENT_HTML = /* html */ `<!doctype html>
     Router.navigate('session/' + id);
   }
 
-  // Agent picker sheet — imperative so tile taps can resolve the promise directly.
-  function _pickAgent() {
+  // Agent picker sheet — imperative so tile taps can resolve the promise
+  // directly. Hides AI agents the daemon doesn't actually have on PATH,
+  // appends user-defined custom commands, and offers an "Add custom"
+  // tile that opens an edit modal and refreshes the picker on save.
+  function _pickAgent(pairing, deviceInfo, onRefresh) {
     return new Promise(resolve => {
+      const installed = deviceInfo && Array.isArray(deviceInfo.agents) ? deviceInfo.agents : null;
+      const isInstalled = (a) => installed === null || installed.includes(a);
+      const customs = (deviceInfo && Array.isArray(deviceInfo.customCommands)) ? deviceInfo.customCommands : [];
+
       const layer = document.getElementById('modal-layer');
       const overlay = document.createElement('div');
       overlay.className = 'sheet-overlay';
@@ -1112,21 +1191,59 @@ export const WEB_CLIENT_HTML = /* html */ `<!doctype html>
         + '<h2 class="modal-title">Start a session</h2>'
         + '<p class="modal-subtitle">Pick an agent. The session lives on your laptop and you can switch back to it anytime.</p>';
 
-      const agents = [
-        { agent: 'shell',  label: 'shell',  sub: 'Bash on your laptop',  icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 17 9 12 4 7"/><path d="M12 19h8"/></svg>', color: 'var(--fg)' },
-        { agent: 'claude', label: 'claude', sub: 'Claude Code',           icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M9 10h.01M12 10h.01M15 10h.01"/></svg>', color: 'var(--accent)' },
-        { agent: 'gemini', label: 'gemini', sub: 'Gemini CLI',            icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96-.46 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 1.98-3A2.5 2.5 0 0 1 9.5 2Z"/><path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96-.46 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24 2.5 2.5 0 0 0-1.98-3A2.5 2.5 0 0 0 14.5 2Z"/></svg>', color: 'var(--accent)' },
-        { agent: 'codex',  label: 'codex',  sub: 'OpenAI Codex CLI',      icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>', color: 'var(--accent)' },
+      const allBuiltins = [
+        { agent: 'shell',    label: 'shell',    sub: 'Bash on your laptop', always: true,  icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 17 9 12 4 7"/><path d="M12 19h8"/></svg>', color: 'var(--fg)' },
+        { agent: 'claude',   label: 'claude',   sub: 'Claude Code',          icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M9 10h.01M12 10h.01M15 10h.01"/></svg>', color: 'var(--accent)' },
+        { agent: 'gemini',   label: 'gemini',   sub: 'Gemini CLI',           icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96-.46 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 1.98-3A2.5 2.5 0 0 1 9.5 2Z"/><path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96-.46 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24 2.5 2.5 0 0 0-1.98-3A2.5 2.5 0 0 0 14.5 2Z"/></svg>', color: 'var(--accent)' },
+        { agent: 'codex',    label: 'codex',    sub: 'OpenAI Codex CLI',     icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>', color: 'var(--accent)' },
+        { agent: 'opencode', label: 'opencode', sub: 'sst.dev/opencode',     icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 18 22 12 16 6"/><path d="M8 6 2 12 8 18"/><path d="M14 4 10 20"/></svg>', color: 'var(--accent)' },
       ];
-      agents.forEach(({ agent, label, sub, icon, color }) => {
+
+      const tileFor = ({ label, sub, icon, color, onClick, onContext }) => {
         const tile = document.createElement('div');
         tile.className = 'menu-tile';
-        tile.innerHTML = '<div class="menu-tile-icon" style="color:' + color + '">' + icon + '</div>'
+        tile.innerHTML = '<div class="menu-tile-icon" style="color:' + (color || 'var(--fg)') + '">' + icon + '</div>'
           + '<div class="menu-tile-body"><div class="menu-tile-title">' + label + '</div>'
           + (sub ? '<div class="menu-tile-sub">' + sub + '</div>' : '') + '</div>';
-        tile.onclick = () => { overlay.remove(); resolve(agent); };
-        card.appendChild(tile);
+        tile.onclick = onClick;
+        if (onContext) tile.oncontextmenu = (ev) => { ev.preventDefault(); onContext(); };
+        return tile;
+      };
+
+      // Built-ins (filter to whatever the daemon has installed).
+      allBuiltins.forEach((a) => {
+        if (!a.always && !isInstalled(a.agent)) return;
+        card.appendChild(tileFor({
+          label: a.label, sub: a.sub, icon: a.icon, color: a.color,
+          onClick: () => { overlay.remove(); resolve(a.agent); },
+        }));
       });
+
+      // User-defined custom commands.
+      const consoleIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>';
+      if (customs.length > 0) {
+        const hdr = document.createElement('div');
+        hdr.style.cssText = 'padding:14px 4px 4px;font-size:11px;letter-spacing:1px;color:var(--muted);font-weight:600';
+        hdr.textContent = 'YOUR COMMANDS';
+        card.appendChild(hdr);
+        customs.forEach((c) => {
+          const sub = '$ ' + c.command + (Array.isArray(c.args) && c.args.length ? ' ' + c.args.join(' ') : '');
+          card.appendChild(tileFor({
+            label: c.label, sub, icon: consoleIcon, color: 'var(--accent)',
+            onClick: () => { overlay.remove(); resolve('custom:' + c.id); },
+            onContext: () => { overlay.remove(); _editCustomCommand(pairing, c, onRefresh); },
+          }));
+        });
+      }
+
+      // "Add custom command" tile — always last.
+      const plusIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>';
+      card.appendChild(tileFor({
+        label: 'Add custom command…', sub: 'Pin any CLI tool to this picker',
+        icon: plusIcon,
+        onClick: () => { overlay.remove(); _editCustomCommand(pairing, null, onRefresh); resolve(null); },
+      }));
+
       const actRow = document.createElement('div');
       actRow.className = 'modal-actions';
       const cancelBtn = document.createElement('button');
@@ -1137,6 +1254,82 @@ export const WEB_CLIENT_HTML = /* html */ `<!doctype html>
       overlay.addEventListener('click', e => { if (e.target === overlay) { overlay.remove(); resolve(null); } });
       overlay.appendChild(card);
       layer.appendChild(overlay);
+    });
+  }
+
+  /**
+   * Add/edit a custom command. On submit, send the mutation to the daemon
+   * and refresh the cached deviceInfo so the next picker render shows
+   * the new state. If the daemon never answers, surface an inline error.
+   */
+  async function _editCustomCommand(pairing, existing, onRefresh) {
+    return new Promise((resolve) => {
+      const layer = document.getElementById('modal-layer');
+      const overlay = document.createElement('div');
+      overlay.className = 'modal-overlay';
+      const card = document.createElement('div');
+      card.className = 'modal-card';
+      const title = existing ? 'Edit command' : 'Add custom command';
+      const sub = existing ? 'Update or delete this picker shortcut.' : 'Pin any CLI on your laptop to the session picker.';
+      card.innerHTML = '<div class="modal-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg></div>'
+        + '<h2 class="modal-title">' + title + '</h2>'
+        + '<p class="modal-subtitle">' + sub + '</p>'
+        + '<input id="_cc_label" class="modal-input" placeholder="Label (e.g. Edit README)" />'
+        + '<input id="_cc_command" class="modal-input" style="font-family:var(--font-mono)" placeholder="Command (e.g. nvim)" />'
+        + '<input id="_cc_args" class="modal-input" style="font-family:var(--font-mono)" placeholder="Args (space-separated)" />'
+        + '<div id="_cc_err" class="modal-error" style="display:none"></div>';
+      overlay.appendChild(card);
+      layer.appendChild(overlay);
+
+      const labelEl = card.querySelector('#_cc_label');
+      const cmdEl   = card.querySelector('#_cc_command');
+      const argsEl  = card.querySelector('#_cc_args');
+      const errEl   = card.querySelector('#_cc_err');
+      if (existing) {
+        labelEl.value = existing.label || '';
+        cmdEl.value   = existing.command || '';
+        argsEl.value  = (existing.args || []).join(' ');
+      }
+      labelEl.focus();
+
+      const actRow = document.createElement('div');
+      actRow.className = 'modal-actions';
+      const dismiss = (val) => { overlay.remove(); resolve(val); };
+
+      if (existing) {
+        const delBtn = document.createElement('button');
+        delBtn.className = 'mbtn mbtn-text'; delBtn.textContent = 'Delete';
+        delBtn.onclick = async () => {
+          const updated = await mutateCustomCommands(pairing, { type: 'custom-command-remove', id: existing.id });
+          if (!updated) { errEl.textContent = 'Could not reach the daemon. Check that your laptop is online.'; errEl.style.display = ''; return; }
+          if (onRefresh) onRefresh(updated);
+          dismiss(updated);
+        };
+        actRow.appendChild(delBtn);
+      }
+
+      const cancelBtn = document.createElement('button');
+      cancelBtn.className = 'mbtn mbtn-text'; cancelBtn.textContent = 'Cancel';
+      cancelBtn.onclick = () => dismiss(null);
+      actRow.appendChild(cancelBtn);
+
+      const saveBtn = document.createElement('button');
+      saveBtn.className = 'mbtn mbtn-primary'; saveBtn.textContent = 'Save';
+      saveBtn.onclick = async () => {
+        const label = labelEl.value.trim();
+        const command = cmdEl.value.trim();
+        const args = argsEl.value.trim() ? argsEl.value.trim().split(/\s+/) : [];
+        if (!label || !command) { errEl.textContent = 'Label and command are both required.'; errEl.style.display = ''; return; }
+        const mutation = existing
+          ? { type: 'custom-command-update', command: { id: existing.id, label, command, args } }
+          : { type: 'custom-command-add',    command: { label, command, args } };
+        const updated = await mutateCustomCommands(pairing, mutation);
+        if (!updated) { errEl.textContent = 'Could not reach the daemon. Check that your laptop is online.'; errEl.style.display = ''; return; }
+        if (onRefresh) onRefresh(updated);
+        dismiss(updated);
+      };
+      actRow.appendChild(saveBtn);
+      card.appendChild(actRow);
     });
   }
 
@@ -1308,6 +1501,7 @@ export const WEB_CLIENT_HTML = /* html */ `<!doctype html>
 
       const agent = meta ? meta.agent : 'shell';
       const auto  = meta ? !!meta.auto : false;
+      const customCommandId = meta ? meta.customCommandId : undefined;
 
       let status = 'connecting...';
       let statusErr = false;
@@ -1391,7 +1585,7 @@ export const WEB_CLIENT_HTML = /* html */ `<!doctype html>
         conn._ws.addEventListener('open', () => {
           setStatus('connected', 'ok');
           const cols = term.cols || 120, rows = term.rows || 40;
-          conn.sendOpen({ agent, cols, rows, auto, approveToken, sudoPassword, phoneId: pairing.phoneId });
+          conn.sendOpen({ agent, cols, rows, auto, approveToken, sudoPassword, phoneId: pairing.phoneId, customCommandId });
           fit.fit();
         });
       }

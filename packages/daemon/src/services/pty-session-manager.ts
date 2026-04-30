@@ -14,7 +14,7 @@ import { randomUUID } from 'node:crypto';
 import { execSync } from 'node:child_process';
 import * as pty from 'node-pty';
 
-export type AgentKind = 'shell' | 'claude' | 'gemini' | 'codex';
+export type AgentKind = 'shell' | 'claude' | 'gemini' | 'codex' | 'opencode' | 'custom';
 
 export interface SpawnOptions {
   agent: AgentKind;
@@ -27,6 +27,13 @@ export interface SpawnOptions {
   extraArgs?: string[];
   /** Optional explicit session id (e.g. provided by the relay client so phone-chosen UUIDs match the routing tag). */
   id?: string;
+  /**
+   * For `agent: 'custom'`: the binary to spawn. The relay-client
+   * resolves a phone-supplied customCommandId against the daemon's
+   * trusted list and copies the result here, so the user never sends
+   * raw argv across the wire.
+   */
+  command?: string;
 }
 
 export interface SessionInfo {
@@ -88,7 +95,7 @@ export class PtySessionManager {
     const cols = opts.cols ?? 120;
     const rows = opts.rows ?? 40;
 
-    const { command, args } = this.resolveCommand(opts.agent, opts.extraArgs ?? []);
+    const { command, args } = this.resolveCommand(opts.agent, opts.extraArgs ?? [], opts.command);
     const env: NodeJS.ProcessEnv = {
       ...process.env,
       ...this.extraEnv,
@@ -317,7 +324,7 @@ export class PtySessionManager {
   static availableAgents(): AgentKind[] {
     const out: AgentKind[] = ['shell'];
     const which = process.platform === 'win32' ? 'where' : 'command -v';
-    for (const a of ['claude', 'gemini', 'codex'] as const) {
+    for (const a of ['claude', 'gemini', 'codex', 'opencode'] as const) {
       const cached = PtySessionManager._absPathCache.get(a);
       if (cached) {
         out.push(a);
@@ -339,11 +346,36 @@ export class PtySessionManager {
     return out;
   }
 
-  private resolveCommand(agent: AgentKind, extraArgs: string[]): { command: string; args: string[] } {
+  private resolveCommand(
+    agent: AgentKind,
+    extraArgs: string[],
+    customCommand?: string,
+  ): { command: string; args: string[] } {
     if (agent === 'shell') {
       const sh = process.env.SHELL || (process.platform === 'win32' ? 'pwsh.exe' : '/bin/sh');
       const loginArgs = process.platform === 'win32' ? extraArgs : ['-l', ...extraArgs];
       return { command: sh, args: loginArgs };
+    }
+    if (agent === 'custom') {
+      // Daemon already validated that the customCommandId resolves to a
+      // trusted entry in this.customCommands and copied `command` over.
+      // Same security profile as `shell`: once paired, the phone can
+      // already run anything via the bash session, so a labeled tile
+      // doesn't change the threat model. Resolve via PATH for symmetry
+      // with the built-in agents (gives an absolute path) but fall back
+      // to the literal command if `command -v` fails — the user might
+      // be referencing a script via absolute path.
+      const cmd = (customCommand ?? '').trim();
+      if (!cmd) return { command: '/bin/sh', args: ['-l', ...extraArgs] };
+      try {
+        const which = process.platform === 'win32' ? 'where' : 'command -v';
+        const out = execSync(`${which} ${cmd}`, {
+          encoding: 'utf-8',
+          stdio: ['ignore', 'pipe', 'ignore'],
+        }).trim().split('\n')[0];
+        if (out) return { command: out, args: extraArgs };
+      } catch {/* fall through */}
+      return { command: cmd, args: extraArgs };
     }
     const cached = PtySessionManager._absPathCache.get(agent);
     if (cached) return { command: cached, args: extraArgs };
