@@ -491,8 +491,23 @@ export const WEB_CLIENT_HTML = /* html */ `<!doctype html>
   }
 
   function parsePairUrl(input) {
+    // Accepts any of:
+    //   loopsy://pair?u=<encoded relay>&t=<token>
+    //   https://relay.example/app#loopsy%3A%2F%2Fpair%3Fu%3D...   (the form
+    //     the CLI prints — what people actually copy-paste)
+    //   https://relay.example/app#loopsy://pair?u=...              (already
+    //     hash-decoded)
+    // Anything else returns null and the caller shows the parse-error modal.
     try {
-      const cleaned = input.trim().replace(/^loopsy:\\/\\//, 'https://');
+      let s = (input || '').trim();
+      // If they pasted the full web URL, peel off everything before the
+      // hash and URL-decode the inner pair link.
+      const hashIdx = s.indexOf('#');
+      if (hashIdx >= 0) s = s.slice(hashIdx + 1);
+      if (/^loopsy%3a/i.test(s)) {
+        try { s = decodeURIComponent(s); } catch { /* leave as-is */ }
+      }
+      const cleaned = s.replace(/^loopsy:\\/\\//i, 'https://');
       const u = new URL(cleaned);
       const token = u.searchParams.get('t');
       const relayUrl = decodeURIComponent(u.searchParams.get('u') || '');
