@@ -242,17 +242,28 @@ export class RelayClient {
         // installed agents + custom commands). Used to drive the agent
         // picker and to hide the macOS-only auto-approve flow on
         // Linux/Windows daemons.
-        this.sendDeviceInfo();
+        this.sendDeviceInfo(sessionId);
         break;
       case 'custom-command-add':
       case 'custom-command-update':
       case 'custom-command-remove':
         // Mutate the daemon-side list, persist, then push the new list
-        // to all listeners so any other paired phone sees the update.
-        void this.applyCustomCommandMutation(msg).then(() => this.broadcastCustomCommands());
+        // back to the originating session. The relay drops device→phone
+        // JSON without a sessionId, so we reply on the requester's
+        // session — other paired phones will refresh on next picker open.
+        void this.applyCustomCommandMutation(msg).then(() => this.broadcastCustomCommands(sessionId));
         break;
       case 'session-open':
         if (!sessionId) return;
+        // Reattach fast-path: if a PTY already exists for this id we
+        // skip the agent/custom validation entirely. The phone may be
+        // attaching to a session it didn't spawn (e.g. a `loopsy shell`
+        // started from a terminal) so it has no way to satisfy the
+        // custom-command lookup that fresh spawns require.
+        if (this.pty.get(sessionId)) {
+          this.handleSessionOpen(sessionId, msg);
+          break;
+        }
         // For built-in agents: block early on a missing binary so we
         // don't open a PTY that immediately exits with "command not
         // found". For `agent:'custom'`: resolve the customCommandId
@@ -459,9 +470,22 @@ export class RelayClient {
    * picker and skips the macOS-password auto-approve flow on non-darwin
    * hosts (where dscl-based verification can't run anyway).
    */
-  private sendDeviceInfo(): void {
+  private sendDeviceInfo(sessionId?: string): void {
+    // Trim PtySessionManager.list() to the public RunningSession shape.
+    // The full SessionInfo includes cwd + cols/rows which the phone has
+    // no need for — keep the wire payload tight and the surface narrow.
+    const runningSessions = this.pty.list()
+      .filter(s => s.alive)
+      .map(s => ({
+        id: s.id,
+        agent: s.agent,
+        name: s.name,
+        attachedClientCount: s.attachedClientCount,
+        lastActivityAt: s.lastActivityAt,
+      }));
     this.sendText({
       type: 'device-info',
+      sessionId,
       platform: process.platform,
       hostname: (() => {
         try { return require('node:os').hostname() as string; } catch { return null; }
@@ -470,17 +494,19 @@ export class RelayClient {
       // Auto-approve uses /usr/bin/dscl; only meaningful on darwin.
       autoApproveSupported: process.platform === 'darwin',
       customCommands: this.customCommands,
+      sessions: runningSessions,
     });
   }
 
   /**
-   * Send the latest custom-command list to whoever's listening on the
-   * relay socket. Phones cache the list locally; this keeps every paired
-   * phone in sync after a mutation without each one having to poll.
+   * Reply with the latest custom-command list. The relay only forwards
+   * device→phone JSON when a sessionId is present, so we always echo the
+   * sessionId of whichever phone session triggered the mutation.
    */
-  private broadcastCustomCommands(): void {
+  private broadcastCustomCommands(sessionId?: string): void {
     this.sendText({
       type: 'custom-commands',
+      sessionId,
       customCommands: this.customCommands,
     });
   }

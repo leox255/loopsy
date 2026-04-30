@@ -62,18 +62,21 @@ class CustomCommand {
       };
 }
 
-/// What the paired daemon told us about itself: which OS the laptop runs,
+/// What the paired daemon told us about itself: which OS the machine runs,
 /// which AI-agent binaries are actually on PATH, whether auto-approve
 /// is supported (currently macOS-only because the password verification
-/// uses /usr/bin/dscl), and any custom-command shortcuts the user has
-/// added. Phone hides the auto-approve toggle on non-darwin daemons and
-/// greys out unavailable agents in the picker.
+/// uses /usr/bin/dscl), any custom-command shortcuts the user has
+/// added, and any long-lived PTY sessions currently running on the
+/// daemon. Phone hides the auto-approve toggle on non-darwin daemons,
+/// greys out unavailable agents in the picker, and surfaces running
+/// sessions in a "Running on your machine" section.
 class DeviceInfo {
   final String platform; // 'darwin' | 'linux' | 'win32' | etc.
   final String? hostname;
   final List<String> agents; // includes 'shell' + whatever AI binaries are installed
   final bool autoApproveSupported;
   final List<CustomCommand> customCommands;
+  final List<RunningSession> sessions;
 
   const DeviceInfo({
     required this.platform,
@@ -81,6 +84,7 @@ class DeviceInfo {
     required this.autoApproveSupported,
     this.hostname,
     this.customCommands = const [],
+    this.sessions = const [],
   });
 
   factory DeviceInfo.fromJson(Map<String, dynamic> j) => DeviceInfo(
@@ -92,6 +96,38 @@ class DeviceInfo {
             .whereType<Map>()
             .map((m) => CustomCommand.fromJson(m.cast<String, dynamic>()))
             .toList(),
+        sessions: ((j['sessions'] as List?) ?? const [])
+            .whereType<Map>()
+            .map((m) => RunningSession.fromJson(m.cast<String, dynamic>()))
+            .toList(),
+      );
+}
+
+/// Public summary of a daemon-managed PTY session, mirrored from the
+/// protocol's RunningSession type. Used by the picker to render the
+/// "Running on your machine" section so the user can resume a session
+/// they started from `loopsy shell` (or another phone) on their machine.
+class RunningSession {
+  final String id;
+  final String agent;
+  final String? name;
+  final int attachedClientCount;
+  final int lastActivityAt;
+
+  const RunningSession({
+    required this.id,
+    required this.agent,
+    required this.attachedClientCount,
+    required this.lastActivityAt,
+    this.name,
+  });
+
+  factory RunningSession.fromJson(Map<String, dynamic> j) => RunningSession(
+        id: (j['id'] as String?) ?? '',
+        agent: (j['agent'] as String?) ?? 'shell',
+        name: j['name'] as String?,
+        attachedClientCount: (j['attachedClientCount'] as num?)?.toInt() ?? 0,
+        lastActivityAt: (j['lastActivityAt'] as num?)?.toInt() ?? 0,
       );
 }
 

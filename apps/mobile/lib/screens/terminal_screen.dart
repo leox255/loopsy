@@ -210,7 +210,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
             _statusError = true;
           });
           final reason = (msg['message'] as String?) ??
-              'The laptop daemon rejected this session.';
+              'The Loopsy daemon rejected this session.';
           await showLoopsyDialog<void>(
             context: context,
             icon: HugeIcons.strokeRoundedAlert02,
@@ -244,7 +244,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
       title: 'Enable auto-approve',
       subtitle:
           'Auto-approve runs ${widget.agent} with permission prompts skipped. '
-          'Enter your laptop\'s macOS user password to unlock this. '
+          'Enter your machine\'s macOS user password to unlock this. '
           'You\'ll only be asked once per pairing.',
       body: StatefulBuilder(
         builder: (ctx, setSt) => TextField(

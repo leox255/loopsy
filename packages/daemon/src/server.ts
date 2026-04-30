@@ -21,6 +21,7 @@ import { AiTaskManager } from './services/ai-task-manager.js';
 import { TlsManager } from './services/tls-manager.js';
 import { PtySessionManager } from './services/pty-session-manager.js';
 import { RelayClient } from './services/relay-client.js';
+import { LocalSocketServer } from './services/local-socket-server.js';
 import { registerPairRoutes } from './routes/pair.js';
 import { mountDashboard } from './dashboard.js';
 import { saveConfig } from './config.js';
@@ -65,15 +66,13 @@ export async function createDaemon(config: LoopsyConfig): Promise<DaemonServer> 
     apiKey: config.auth.apiKey,
   });
 
-  // Optional outbound relay client for mobile WAN access. Activated when
-  // `loopsy relay configure` has populated config.relay.
-  const ptySessionManager = config.relay
-    ? new PtySessionManager({
-        scrollbackBytes: config.relay.scrollbackBytes,
-        idleTimeoutSec: config.relay.sessionIdleTimeoutSec,
-      })
-    : null;
-  const relayClient = config.relay && ptySessionManager
+  // Long-lived PTY sessions are needed by both the relay client (mobile
+  // WAN access) and the local-socket server (`loopsy shell` / `attach`),
+  // so create one always — it costs nothing while idle.
+  const ptySessionManager = new PtySessionManager({
+    idleTimeoutSec: config.relay?.sessionIdleTimeoutSec,
+  });
+  const relayClient = config.relay
     ? new RelayClient({
         relay: config.relay,
         pty: ptySessionManager,
@@ -93,6 +92,21 @@ export async function createDaemon(config: LoopsyConfig): Promise<DaemonServer> 
         },
       })
     : null;
+
+  // Local IPC for `loopsy shell` / `loopsy attach`. Lives in dataDir
+  // alongside config.yaml so it inherits the data-dir's permissions
+  // model. Filesystem mode 0600 is the auth boundary — anyone who can
+  // read this socket can spawn PTYs as the daemon's user.
+  const localSocketServer = new LocalSocketServer({
+    socketPath: `${dataDir}/loopsyd.sock`,
+    pty: ptySessionManager,
+    logger: {
+      info: (msg, ctx) => app.log.info(ctx ?? {}, `[local] ${msg}`),
+      warn: (msg, ctx) => app.log.warn(ctx ?? {}, `[local] ${msg}`),
+      error: (msg, ctx) => app.log.error(ctx ?? {}, `[local] ${msg}`),
+    },
+    customCommands: () => config.customCommands ?? [],
+  });
 
   const auditLogger = new AuditLogger(dataDir);
   await auditLogger.init();
@@ -243,6 +257,11 @@ export async function createDaemon(config: LoopsyConfig): Promise<DaemonServer> 
       discovery?.start();
       healthChecker?.start();
       relayClient?.start();
+      try {
+        await localSocketServer.start();
+      } catch (err) {
+        app.log.warn({ err: String(err) }, 'local socket server failed to start');
+      }
     },
 
     async stop() {
@@ -252,6 +271,7 @@ export async function createDaemon(config: LoopsyConfig): Promise<DaemonServer> 
       jobManager.killAll();
       aiTaskManager.cancelAll();
       relayClient?.stop();
+      await localSocketServer.stop();
       ptySessionManager?.shutdown();
       contextStore.stopExpiryCheck();
       await contextStore.save();

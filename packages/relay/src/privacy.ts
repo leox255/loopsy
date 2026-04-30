@@ -1,7 +1,7 @@
 /**
  * Privacy policy served at `/privacy`.
  *
- * Loopsy is a phone-to-laptop terminal bridge: the relay only routes
+ * Loopsy is a phone-to-machine terminal bridge: the relay only routes
  * encrypted WebSocket frames between paired devices. The relay itself does
  * not retain message contents, does not track users across sites, and does
  * not share data with third parties.
@@ -19,7 +19,7 @@ export const PRIVACY_HTML = /* html */ `<!doctype html>
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
   <meta name="theme-color" content="#0B0D10" />
   <title>${BRAND_NAME} — Privacy Policy</title>
-  <meta name="description" content="Privacy policy for Loopsy — phone-to-laptop terminal bridge." />
+  <meta name="description" content="Privacy policy for Loopsy — phone-to-machine terminal bridge." />
   ${FAVICON_LINKS}
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" />
@@ -60,10 +60,10 @@ export const PRIVACY_HTML = /* html */ `<!doctype html>
     <h1>Privacy Policy</h1>
     <p class="meta">Last updated: 29 April 2026 · Anza Cloud Limited</p>
 
-    <p>Loopsy is a phone-to-laptop terminal bridge. The mobile app, the
-    desktop daemon, and this relay together let you control a terminal on
-    your laptop from your phone. This policy describes what data Loopsy
-    handles and what it does not.</p>
+    <p>Loopsy is a phone-to-machine terminal bridge. The mobile app, the
+    daemon running on your machine, and this relay together let you
+    control a terminal on your machine from your phone. This policy
+    describes what data Loopsy handles and what it does not.</p>
 
     <h2>Data we do not collect</h2>
     <ul>
@@ -79,7 +79,7 @@ export const PRIVACY_HTML = /* html */ `<!doctype html>
     <h2>Data the app stores on your device</h2>
     <ul>
       <li><strong>Pairing token</strong> — a credential bound to a single
-      laptop, stored in the iOS Keychain so the app can reconnect.</li>
+      machine, stored in the iOS Keychain so the app can reconnect.</li>
       <li><strong>Session list</strong> — the names of terminal sessions you
       have opened, stored locally so they survive an app restart.</li>
       <li><strong>Relay URL</strong> — the address of the relay you paired
@@ -91,12 +91,12 @@ export const PRIVACY_HTML = /* html */ `<!doctype html>
 
     <h2>Camera</h2>
     <p>The app requests camera access for one purpose: scanning the QR code
-    your laptop displays during pairing. Camera frames are processed
+    your machine displays during pairing. Camera frames are processed
     on-device by <code>mobile_scanner</code> and discarded; nothing is
     uploaded.</p>
 
     <h2>Data the relay sees</h2>
-    <p>To carry your terminal session between phone and laptop, the relay
+    <p>To carry your terminal session between phone and machine, the relay
     routes WebSocket frames over TLS. The relay needs to look at frame
     metadata (which session, which device) to route correctly, but it does
     not persist the contents of those frames. Cloudflare may log standard

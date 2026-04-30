@@ -36,6 +36,8 @@ import {
   phoneListCommand,
   phoneRevokeCommand,
 } from './commands/relay.js';
+import { shellCommand } from './commands/shell.js';
+import { listCommand, attachCommand, killCommand } from './commands/sessions-local.js';
 
 yargs(hideBin(process.argv))
   .scriptName('loopsy')
@@ -45,6 +47,36 @@ yargs(hideBin(process.argv))
   .command('stop', 'Stop the Loopsy daemon', {}, stopCommand)
   .command('restart', 'Restart the Loopsy daemon', {}, restartCommand)
   .command('status', 'Show daemon status', {}, statusCommand)
+  .command(
+    'shell',
+    'Start a long-lived PTY on the daemon and attach this terminal. Detach with Ctrl-A D; the session survives so you (or the paired phone) can attach again.',
+    (yargs) =>
+      yargs
+        .option('agent', { type: 'string', default: 'shell', describe: 'shell | claude | gemini | codex | opencode | custom' })
+        .option('cwd', { type: 'string', describe: 'Working directory for the session' })
+        .option('name', { type: 'string', describe: 'Memorable label so `loopsy attach <name>` finds this session' }),
+    (argv) => shellCommand(argv as { agent?: string; cwd?: string; name?: string }),
+  )
+  .command(
+    'list',
+    'List long-lived PTY sessions managed by the daemon',
+    {},
+    listCommand,
+  )
+  .command(
+    'attach <id>',
+    'Attach this terminal to an existing session (id prefix or name).',
+    (yargs) =>
+      yargs.positional('id', { type: 'string', demandOption: true, describe: 'Session uuid (or unique prefix) or name' }),
+    (argv) => attachCommand(argv as { id: string }),
+  )
+  .command(
+    'kill <id>',
+    'Stop a managed PTY session and remove it.',
+    (yargs) =>
+      yargs.positional('id', { type: 'string', demandOption: true, describe: 'Session uuid or name' }),
+    (argv) => killCommand(argv as { id: string }),
+  )
   .command(
     'peers',
     'List known peers',

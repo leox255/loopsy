@@ -156,7 +156,7 @@ class _PairScreenState extends State<PairScreen> with WidgetsBindingObserver {
       barrierDismissible: false,
       icon: HugeIcons.strokeRoundedSquareLock02,
       title: 'Enter 4-digit code',
-      subtitle: 'Read the verification code shown on your laptop next to the QR.',
+      subtitle: 'Read the verification code shown on your machine next to the QR.',
       body: TextField(
         controller: ctl,
         autofocus: true,
@@ -203,7 +203,7 @@ class _PairScreenState extends State<PairScreen> with WidgetsBindingObserver {
       context: context,
       icon: HugeIcons.strokeRoundedTextWrap,
       title: 'Enter pair link',
-      subtitle: 'Paste the link printed by `loopsy mobile pair` on your laptop.',
+      subtitle: 'Paste the link printed by `loopsy mobile pair` on your machine.',
       body: TextField(
         controller: ctl,
         autofocus: true,
@@ -346,7 +346,7 @@ class _PairScreenState extends State<PairScreen> with WidgetsBindingObserver {
                           const SizedBox(width: 10),
                           Text(
                             _camState == _CamState.granted || _camState == _CamState.unknown
-                                ? 'On your laptop run'
+                                ? 'On your machine run'
                                 : 'Camera unavailable',
                             style: const TextStyle(color: LoopsyColors.fg, fontWeight: FontWeight.w600),
                           ),

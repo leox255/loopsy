@@ -72,7 +72,7 @@ class _HomeScreenState extends State<HomeScreen> {
       title: isEdit ? 'Edit command' : 'Add custom command',
       subtitle: isEdit
           ? 'Update or delete this picker shortcut.'
-          : 'Pin any CLI on your laptop to the session picker.',
+          : 'Pin any CLI on your machine to the session picker.',
       body: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -88,6 +88,12 @@ class _HomeScreenState extends State<HomeScreen> {
           TextField(
             controller: commandCtl,
             autocorrect: false,
+            // iOS smart punctuation rewrites `--` → `—` and `'` → `'`
+            // mid-typing, which silently breaks shell flags. Disable both.
+            smartDashesType: SmartDashesType.disabled,
+            smartQuotesType: SmartQuotesType.disabled,
+            enableSuggestions: false,
+            keyboardType: TextInputType.visiblePassword,
             decoration: const InputDecoration(
               labelText: 'Command',
               hintText: 'nvim',
@@ -98,9 +104,13 @@ class _HomeScreenState extends State<HomeScreen> {
           TextField(
             controller: argsCtl,
             autocorrect: false,
+            smartDashesType: SmartDashesType.disabled,
+            smartQuotesType: SmartQuotesType.disabled,
+            enableSuggestions: false,
+            keyboardType: TextInputType.visiblePassword,
             decoration: const InputDecoration(
               labelText: 'Args (space-separated)',
-              hintText: 'README.md',
+              hintText: '--version',
             ),
             style: const TextStyle(fontFamily: 'JetBrainsMono'),
           ),
@@ -143,7 +153,7 @@ class _HomeScreenState extends State<HomeScreen> {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
         backgroundColor: LoopsyColors.surface,
         content: Text(
-          'Could not reach the daemon. Check that your laptop is online and try again.',
+          'Could not reach the daemon. Check that your machine is online and try again.',
           style: TextStyle(color: LoopsyColors.bad),
         ),
       ));
@@ -163,11 +173,35 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _newSession() async {
     final picked = await _pickAgent();
     if (picked == null) return;
-    // The picker may return a built-in agent name ('shell', 'claude', …)
-    // or 'custom:<id>' for a user-defined entry.
-    final isCustom = picked.startsWith('custom:');
-    final agent = isCustom ? 'custom' : picked;
-    final customCommandId = isCustom ? picked.substring('custom:'.length) : null;
+    // Three picker outcomes: spawn a built-in / custom (PickerChoice.spawn)
+    // or attach to a running daemon-side session (PickerChoice.attach). The
+    // attach path skips the name + auto-approve prompts because the PTY
+    // already exists with its own state.
+    if (picked.attachToRunning != null) {
+      final r = picked.attachToRunning!;
+      // Surface the running session in the local list so the user has a
+      // way back to it from the home screen, but only if we don't
+      // already track it.
+      final exists = _sessions.any((s) => s.id == r.id);
+      if (!exists) {
+        final meta = SessionMeta(
+          id: r.id,
+          agent: r.agent,
+          lastUsedMs: DateTime.now().millisecondsSinceEpoch,
+          name: r.name,
+          auto: false,
+        );
+        final next = [meta, ..._sessions];
+        await Storage.writeSessions(next);
+        if (!mounted) return;
+        setState(() => _sessions = next);
+      }
+      // fresh=0 — daemon-side PTY exists; we just attach to it.
+      context.push('/terminal/${r.id}?fresh=0&agent=${r.agent}&auto=0');
+      return;
+    }
+    final agent = picked.agent;
+    final customCommandId = picked.customCommandId;
     // CSO #4: auto-approve now defaults to OFF, even for AI agents. Skipping
     // permission prompts on the laptop is too powerful to be the default for
     // a remote phone — a stolen unlocked device shouldn't grant unrestricted
@@ -268,7 +302,7 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Future<String?> _pickAgent() async {
+  Future<_PickerResult?> _pickAgent() async {
     // If we already know what the daemon has installed, hide unavailable
     // agents from the picker so the user can't pick a binary that isn't on
     // PATH. If we don't know yet (older daemon, or device-info still in
@@ -277,21 +311,67 @@ class _HomeScreenState extends State<HomeScreen> {
     final installed = _deviceInfo?.agents;
     bool isInstalled(String agent) => installed == null || installed.contains(agent);
 
-    final tiles = <Widget>[
-      LoopsyMenuTile(
-        icon: HugeIcons.strokeRoundedCommandLine,
-        title: 'shell',
-        subtitle: 'Bash on your laptop',
-        onTap: () => Navigator.pop(context, 'shell'),
-      ),
-    ];
+    final tiles = <Widget>[];
+
+    // "Running on your machine" — daemon-side PTYs that aren't already
+    // in the local home list. Lets the user resume a session they
+    // started with `loopsy shell` (or another phone) without having to
+    // re-spawn an agent. Sessions already tracked locally show up in
+    // the home screen so we hide them here to avoid duplication.
+    final allRunning = _deviceInfo?.sessions ?? const <RunningSession>[];
+    final localIds = _sessions.map((s) => s.id).toSet();
+    final unknownRunning = allRunning.where((r) => !localIds.contains(r.id)).toList();
+    if (unknownRunning.isNotEmpty) {
+      tiles.add(const Padding(
+        padding: EdgeInsets.fromLTRB(4, 4, 4, 4),
+        child: Text(
+          'RUNNING ON YOUR MACHINE',
+          style: TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.w600,
+            letterSpacing: 1.0,
+            color: LoopsyColors.muted,
+          ),
+        ),
+      ));
+      for (final r in unknownRunning) {
+        tiles.add(LoopsyMenuTile(
+          icon: _iconForAgent(r.agent),
+          iconColor: LoopsyColors.accent,
+          title: r.name ?? r.agent,
+          subtitle: r.name != null
+              ? '${r.agent} · ${_humanIdle(r.lastActivityAt)} idle'
+              : '${_humanIdle(r.lastActivityAt)} idle',
+          onTap: () => Navigator.pop(context, _PickerResult.attach(r)),
+        ));
+      }
+      tiles.add(const Padding(
+        padding: EdgeInsets.fromLTRB(4, 14, 4, 4),
+        child: Text(
+          'START NEW',
+          style: TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.w600,
+            letterSpacing: 1.0,
+            color: LoopsyColors.muted,
+          ),
+        ),
+      ));
+    }
+
+    tiles.add(LoopsyMenuTile(
+      icon: HugeIcons.strokeRoundedCommandLine,
+      title: 'shell',
+      subtitle: 'Bash on your machine',
+      onTap: () => Navigator.pop(context, _PickerResult.spawn('shell')),
+    ));
     if (isInstalled('claude')) {
       tiles.add(LoopsyMenuTile(
         icon: HugeIcons.strokeRoundedAiChat02,
         iconColor: LoopsyColors.accent,
         title: 'claude',
         subtitle: 'Claude Code',
-        onTap: () => Navigator.pop(context, 'claude'),
+        onTap: () => Navigator.pop(context, _PickerResult.spawn('claude')),
       ));
     }
     if (isInstalled('gemini')) {
@@ -300,7 +380,7 @@ class _HomeScreenState extends State<HomeScreen> {
         iconColor: LoopsyColors.accent,
         title: 'gemini',
         subtitle: 'Gemini CLI',
-        onTap: () => Navigator.pop(context, 'gemini'),
+        onTap: () => Navigator.pop(context, _PickerResult.spawn('gemini')),
       ));
     }
     if (isInstalled('codex')) {
@@ -309,7 +389,7 @@ class _HomeScreenState extends State<HomeScreen> {
         iconColor: LoopsyColors.accent,
         title: 'codex',
         subtitle: 'OpenAI Codex CLI',
-        onTap: () => Navigator.pop(context, 'codex'),
+        onTap: () => Navigator.pop(context, _PickerResult.spawn('codex')),
       ));
     }
     if (isInstalled('opencode')) {
@@ -318,7 +398,7 @@ class _HomeScreenState extends State<HomeScreen> {
         iconColor: LoopsyColors.accent,
         title: 'opencode',
         subtitle: 'sst.dev/opencode',
-        onTap: () => Navigator.pop(context, 'opencode'),
+        onTap: () => Navigator.pop(context, _PickerResult.spawn('opencode')),
       ));
     }
 
@@ -348,7 +428,7 @@ class _HomeScreenState extends State<HomeScreen> {
             iconColor: LoopsyColors.accent,
             title: c.label,
             subtitle: '\$ ${c.command}${c.args.isNotEmpty ? " ${c.args.join(" ")}" : ""}',
-            onTap: () => Navigator.pop(context, 'custom:${c.id}'),
+            onTap: () => Navigator.pop(context, _PickerResult.spawn('custom', customCommandId: c.id)),
           ),
         ));
       }
@@ -371,11 +451,11 @@ class _HomeScreenState extends State<HomeScreen> {
         .where((a) => installed != null && !installed.contains(a))
         .toList();
 
-    return showLoopsySheet<String>(
+    return showLoopsySheet<_PickerResult>(
       context: context,
       icon: HugeIcons.strokeRoundedAddSquare,
       title: 'Start a session',
-      subtitle: 'Pick an agent. The session lives on your laptop and you can switch back to it anytime.',
+      subtitle: 'Pick an agent. The session lives on your machine and you can switch back to it anytime.',
       body: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -391,7 +471,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 border: Border.all(color: LoopsyColors.border),
               ),
               child: Text(
-                'Not installed on this laptop: ${missing.join(", ")}.\n'
+                'Not installed on this machine: ${missing.join(", ")}.\n'
                 'Install the CLI on the host and reopen Loopsy to see it here.',
                 style: const TextStyle(color: LoopsyColors.muted, fontSize: 12.5, height: 1.4),
               ),
@@ -478,7 +558,7 @@ class _HomeScreenState extends State<HomeScreen> {
             icon: HugeIcons.strokeRoundedRemove01,
             iconColor: LoopsyColors.warn,
             title: 'Remove from list',
-            subtitle: 'Keeps the laptop session running.',
+            subtitle: 'Keeps the session running on your machine.',
             onTap: () => Navigator.pop(context, 'remove'),
           ),
           LoopsyMenuTile(
@@ -486,7 +566,7 @@ class _HomeScreenState extends State<HomeScreen> {
             iconColor: LoopsyColors.bad,
             titleColor: LoopsyColors.bad,
             title: 'Delete',
-            subtitle: 'Stops the laptop session and removes it.',
+            subtitle: 'Stops the session on your machine and removes it.',
             onTap: () => Navigator.pop(context, 'delete'),
           ),
         ],
@@ -527,7 +607,7 @@ class _HomeScreenState extends State<HomeScreen> {
       iconColor: LoopsyColors.bad,
       title: 'Forget pairing?',
       subtitle:
-          'You\'ll need to re-scan a pair QR from your laptop to reconnect. '
+          'You\'ll need to re-scan a pair QR from your machine to reconnect. '
           'Your auto-approve token will be wiped too.',
       actions: [
         LoopsyModalAction.text('Cancel', () => Navigator.pop(context, false)),
@@ -601,7 +681,7 @@ class _HomeScreenState extends State<HomeScreen> {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               const Text(
-                                'Paired laptop',
+                                'Paired machine',
                                 style: TextStyle(color: LoopsyColors.muted, fontSize: 12),
                               ),
                               const SizedBox(height: 2),
@@ -789,4 +869,51 @@ class _SessionCard extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Picker outcome — either spawn a new session (built-in or custom) or
+/// attach to a daemon-side running session. Encoding this as a typed
+/// result keeps `_newSession`'s branching obvious; the previous
+/// stringly-typed `'shell' | 'custom:<id>'` scheme had no room for
+/// a third "attach existing" case.
+class _PickerResult {
+  final String agent;
+  final String? customCommandId;
+  final RunningSession? attachToRunning;
+
+  const _PickerResult.spawn(this.agent, {this.customCommandId})
+      : attachToRunning = null;
+  _PickerResult.attach(RunningSession r)
+      : agent = r.agent,
+        customCommandId = null,
+        attachToRunning = r;
+}
+
+IconData _iconForAgent(String agent) {
+  switch (agent) {
+    case 'claude':
+      return HugeIcons.strokeRoundedAiChat02;
+    case 'gemini':
+      return HugeIcons.strokeRoundedAiBrain02;
+    case 'codex':
+      return HugeIcons.strokeRoundedSourceCode;
+    case 'opencode':
+      return HugeIcons.strokeRoundedCode;
+    case 'custom':
+      return HugeIcons.strokeRoundedConsole;
+    case 'shell':
+    default:
+      return HugeIcons.strokeRoundedCommandLine;
+  }
+}
+
+String _humanIdle(int lastActivityAt) {
+  if (lastActivityAt <= 0) return '?';
+  final secs = (DateTime.now().millisecondsSinceEpoch - lastActivityAt) ~/ 1000;
+  if (secs < 60) return '${secs}s';
+  final mins = secs ~/ 60;
+  if (mins < 60) return '${mins}m';
+  final hrs = mins ~/ 60;
+  if (hrs < 24) return '${hrs}h';
+  return '${hrs ~/ 24}d';
 }

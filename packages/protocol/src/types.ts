@@ -207,6 +207,26 @@ export interface CustomCommand {
   createdAt?: string;
 }
 
+/**
+ * Public summary of a daemon-managed PTY session, included in
+ * device-info so the phone picker can render a "Running on your machine"
+ * section. Anything that would expose argv or cwd to a phone before
+ * pairing-time scrutiny is omitted; we only ship what's needed to
+ * render the tile + reattach.
+ */
+export interface RunningSession {
+  /** Daemon-assigned session UUID. The phone uses this verbatim when reattaching. */
+  id: string;
+  /** Agent name (shell, claude, custom, …). Drives the tile icon. */
+  agent: string;
+  /** Optional user-supplied label from `loopsy shell --name`. */
+  name?: string;
+  /** Number of clients currently attached. >1 means another phone or a local terminal is also looking at this session. */
+  attachedClientCount: number;
+  /** ms-epoch of the last PTY output. Used to render "12 min ago". */
+  lastActivityAt: number;
+}
+
 /** Loopsy relay configuration (mobile WAN access). */
 export interface RelayConfig {
   /** Base URL of the relay deployment, e.g. https://loopsy-relay.example.workers.dev */

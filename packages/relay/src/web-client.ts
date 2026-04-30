@@ -866,8 +866,8 @@ export const WEB_CLIENT_HTML = /* html */ `<!doctype html>
         while (!cancelled) {
           const result = await Modal.dialog({
             icon: linkIcon,
-            title: 'Connect to your laptop',
-            subtitle: 'Run "loopsy mobile pair" on your laptop, then paste the link below.',
+            title: 'Connect to your machine',
+            subtitle: 'Run "loopsy mobile pair" on your machine, then paste the link below.',
             body: '<input id="_pair_url" class="modal-input" type="text" placeholder="https://&lt;relay&gt;/app#loopsy%3A..." autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" /><div id="_pair_err" class="modal-error" style="display:none"></div>',
             barrierDismissible: false,
             actions: [
@@ -898,7 +898,7 @@ export const WEB_CLIENT_HTML = /* html */ `<!doctype html>
           const sas = await Modal.dialog({
             icon: lockIcon,
             title: 'Enter 4-digit code',
-            subtitle: 'Read the verification code shown on your laptop next to the QR.',
+            subtitle: 'Read the verification code shown on your machine next to the QR.',
             body: '<input id="_sas" class="modal-input" type="text" inputmode="numeric" maxlength="4" placeholder="&bull;&bull;&bull;&bull;" autocomplete="off" style="letter-spacing:10px;text-align:center;font-size:26px" />',
             barrierDismissible: false,
             actions: [
@@ -1011,7 +1011,7 @@ export const WEB_CLIENT_HTML = /* html */ `<!doctype html>
         const info = document.createElement('div');
         info.className = 'device-card-info';
         const lbl = document.createElement('div');
-        lbl.className = 'device-card-label'; lbl.textContent = 'Paired laptop';
+        lbl.className = 'device-card-label'; lbl.textContent = 'Paired machine';
         const idEl = document.createElement('div');
         idEl.className = 'device-card-id'; idEl.textContent = pairing.deviceId;
         info.appendChild(lbl); info.appendChild(idEl);
@@ -1140,9 +1140,28 @@ export const WEB_CLIENT_HTML = /* html */ `<!doctype html>
   }
 
   async function _newSession(pairing, onRefresh, deviceInfo) {
-    // 1. pick agent (string for built-ins, 'custom:<id>' for user-defined)
+    // 1. pick agent — string for built-ins, 'custom:<id>' for user-defined,
+    //    'attach:<sessionId>:<agent>:<name?>' to resume a daemon-side PTY
+    //    that the user already started (e.g. via "loopsy shell").
     const picked = await _pickAgent(pairing, deviceInfo, onRefresh);
     if (!picked) return;
+    if (picked.startsWith('attach:')) {
+      // attach:<id>:<agent>:<base64-name-or-empty>
+      const parts = picked.slice('attach:'.length).split(':');
+      const id = parts[0];
+      const agent = parts[1] || 'shell';
+      const nameRaw = parts.slice(2).join(':');
+      let name;
+      try { name = nameRaw ? atob(nameRaw) : undefined; } catch { name = undefined; }
+      const sessions = Storage.readSessions();
+      if (!sessions.some((s) => s.id === id)) {
+        const meta = { id, agent, lastUsedMs: Date.now(), name, auto: false };
+        Storage.writeSessions([meta, ...sessions]);
+        if (onRefresh) onRefresh();
+      }
+      Router.navigate('session/' + id);
+      return;
+    }
     const isCustom = picked.startsWith('custom:');
     const agent = isCustom ? 'custom' : picked;
     const customCommandId = isCustom ? picked.slice('custom:'.length) : undefined;
@@ -1172,6 +1191,17 @@ export const WEB_CLIENT_HTML = /* html */ `<!doctype html>
     Router.navigate('session/' + id);
   }
 
+  function _humanIdle(lastActivityAt) {
+    if (!lastActivityAt) return '?';
+    const secs = Math.max(0, Math.floor((Date.now() - lastActivityAt) / 1000));
+    if (secs < 60) return secs + 's';
+    const mins = Math.floor(secs / 60);
+    if (mins < 60) return mins + 'm';
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return hrs + 'h';
+    return Math.floor(hrs / 24) + 'd';
+  }
+
   // Agent picker sheet — imperative so tile taps can resolve the promise
   // directly. Hides AI agents the daemon doesn't actually have on PATH,
   // appends user-defined custom commands, and offers an "Add custom"
@@ -1189,10 +1219,10 @@ export const WEB_CLIENT_HTML = /* html */ `<!doctype html>
       card.className = 'sheet-card';
       card.innerHTML = '<div class="modal-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg></div>'
         + '<h2 class="modal-title">Start a session</h2>'
-        + '<p class="modal-subtitle">Pick an agent. The session lives on your laptop and you can switch back to it anytime.</p>';
+        + '<p class="modal-subtitle">Pick an agent. The session lives on your machine and you can switch back to it anytime.</p>';
 
       const allBuiltins = [
-        { agent: 'shell',    label: 'shell',    sub: 'Bash on your laptop', always: true,  icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 17 9 12 4 7"/><path d="M12 19h8"/></svg>', color: 'var(--fg)' },
+        { agent: 'shell',    label: 'shell',    sub: 'Bash on your machine', always: true,  icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 17 9 12 4 7"/><path d="M12 19h8"/></svg>', color: 'var(--fg)' },
         { agent: 'claude',   label: 'claude',   sub: 'Claude Code',          icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M9 10h.01M12 10h.01M15 10h.01"/></svg>', color: 'var(--accent)' },
         { agent: 'gemini',   label: 'gemini',   sub: 'Gemini CLI',           icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96-.46 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 1.98-3A2.5 2.5 0 0 1 9.5 2Z"/><path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96-.46 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24 2.5 2.5 0 0 0-1.98-3A2.5 2.5 0 0 0 14.5 2Z"/></svg>', color: 'var(--accent)' },
         { agent: 'codex',    label: 'codex',    sub: 'OpenAI Codex CLI',     icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>', color: 'var(--accent)' },
@@ -1210,6 +1240,38 @@ export const WEB_CLIENT_HTML = /* html */ `<!doctype html>
         return tile;
       };
 
+      // Hoist the console icon ahead of the running-sessions block so we
+      // can fall back to it when matching an agent's tile icon below.
+      const consoleIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>';
+
+      // Running daemon-side sessions that aren't already tracked locally.
+      // Lets the user pick up a session they spawned via "loopsy shell".
+      const allRunning = (deviceInfo && Array.isArray(deviceInfo.sessions)) ? deviceInfo.sessions : [];
+      const localIds = new Set((Storage.readSessions() || []).map((s) => s.id));
+      const unknownRunning = allRunning.filter((r) => r && !localIds.has(r.id));
+      if (unknownRunning.length > 0) {
+        const hdr = document.createElement('div');
+        hdr.style.cssText = 'padding:4px 4px 4px;font-size:11px;letter-spacing:1px;color:var(--muted);font-weight:600';
+        hdr.textContent = 'RUNNING ON YOUR MACHINE';
+        card.appendChild(hdr);
+        unknownRunning.forEach((r) => {
+          const subBits = [];
+          if (r.name) subBits.push(r.agent);
+          subBits.push(_humanIdle(r.lastActivityAt) + ' idle');
+          const icon = (allBuiltins.find((b) => b.agent === r.agent) || {}).icon || consoleIcon;
+          const nameB64 = r.name ? btoa(r.name) : '';
+          card.appendChild(tileFor({
+            label: r.name || r.agent, sub: subBits.join(' · '),
+            icon, color: 'var(--accent)',
+            onClick: () => { overlay.remove(); resolve('attach:' + r.id + ':' + r.agent + ':' + nameB64); },
+          }));
+        });
+        const start = document.createElement('div');
+        start.style.cssText = 'padding:14px 4px 4px;font-size:11px;letter-spacing:1px;color:var(--muted);font-weight:600';
+        start.textContent = 'START NEW';
+        card.appendChild(start);
+      }
+
       // Built-ins (filter to whatever the daemon has installed).
       allBuiltins.forEach((a) => {
         if (!a.always && !isInstalled(a.agent)) return;
@@ -1220,7 +1282,6 @@ export const WEB_CLIENT_HTML = /* html */ `<!doctype html>
       });
 
       // User-defined custom commands.
-      const consoleIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>';
       if (customs.length > 0) {
         const hdr = document.createElement('div');
         hdr.style.cssText = 'padding:14px 4px 4px;font-size:11px;letter-spacing:1px;color:var(--muted);font-weight:600';
@@ -1270,7 +1331,7 @@ export const WEB_CLIENT_HTML = /* html */ `<!doctype html>
       const card = document.createElement('div');
       card.className = 'modal-card';
       const title = existing ? 'Edit command' : 'Add custom command';
-      const sub = existing ? 'Update or delete this picker shortcut.' : 'Pin any CLI on your laptop to the session picker.';
+      const sub = existing ? 'Update or delete this picker shortcut.' : 'Pin any CLI on your machine to the session picker.';
       card.innerHTML = '<div class="modal-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg></div>'
         + '<h2 class="modal-title">' + title + '</h2>'
         + '<p class="modal-subtitle">' + sub + '</p>'
@@ -1301,7 +1362,7 @@ export const WEB_CLIENT_HTML = /* html */ `<!doctype html>
         delBtn.className = 'mbtn mbtn-text'; delBtn.textContent = 'Delete';
         delBtn.onclick = async () => {
           const updated = await mutateCustomCommands(pairing, { type: 'custom-command-remove', id: existing.id });
-          if (!updated) { errEl.textContent = 'Could not reach the daemon. Check that your laptop is online.'; errEl.style.display = ''; return; }
+          if (!updated) { errEl.textContent = 'Could not reach the daemon. Check that your machine is online.'; errEl.style.display = ''; return; }
           if (onRefresh) onRefresh(updated);
           dismiss(updated);
         };
@@ -1324,7 +1385,7 @@ export const WEB_CLIENT_HTML = /* html */ `<!doctype html>
           ? { type: 'custom-command-update', command: { id: existing.id, label, command, args } }
           : { type: 'custom-command-add',    command: { label, command, args } };
         const updated = await mutateCustomCommands(pairing, mutation);
-        if (!updated) { errEl.textContent = 'Could not reach the daemon. Check that your laptop is online.'; errEl.style.display = ''; return; }
+        if (!updated) { errEl.textContent = 'Could not reach the daemon. Check that your machine is online.'; errEl.style.display = ''; return; }
         if (onRefresh) onRefresh(updated);
         dismiss(updated);
       };
@@ -1399,8 +1460,8 @@ export const WEB_CLIENT_HTML = /* html */ `<!doctype html>
 
       const menuItems = [
         { key: 'rename', label: 'Rename', sub: null, color: 'var(--fg)', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5Z"/></svg>' },
-        { key: 'remove', label: 'Remove from list', sub: 'Keeps the laptop session running.', color: 'var(--warn)', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M3 12h12"/><path d="M3 18h9"/><path d="M17 16l4 4m0-4l-4 4"/></svg>' },
-        { key: 'delete', label: 'Delete', sub: 'Stops the laptop session and removes it.', color: 'var(--bad)', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>' },
+        { key: 'remove', label: 'Remove from list', sub: 'Keeps the session running on your machine.', color: 'var(--warn)', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M3 12h12"/><path d="M3 18h9"/><path d="M17 16l4 4m0-4l-4 4"/></svg>' },
+        { key: 'delete', label: 'Delete', sub: 'Stops the session on your machine and removes it.', color: 'var(--bad)', icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>' },
       ];
       menuItems.forEach(({ key, label, sub, color, icon }) => {
         const tile = document.createElement('div');
@@ -1796,7 +1857,7 @@ export const WEB_CLIENT_HTML = /* html */ `<!doctype html>
       card.className = 'modal-card';
       card.innerHTML = '<div class="modal-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></div>'
         + '<h2 class="modal-title">Enable auto-approve</h2>'
-        + '<p class="modal-subtitle">Auto-approve runs ' + agent + ' with permission prompts skipped. Enter the macOS password for your laptop. Asked once per pairing.</p>';
+        + '<p class="modal-subtitle">Auto-approve runs ' + agent + ' with permission prompts skipped. Enter the macOS password for your machine. Asked once per pairing.</p>';
 
       const pwWrap = document.createElement('div');
       pwWrap.className = 'pw-wrap';

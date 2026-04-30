@@ -18,7 +18,7 @@ export const SUPPORT_HTML = /* html */ `<!doctype html>
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
   <meta name="theme-color" content="#0B0D10" />
   <title>${BRAND_NAME} — Support</title>
-  <meta name="description" content="Support and help for Loopsy — phone-to-laptop terminal bridge." />
+  <meta name="description" content="Support and help for Loopsy — phone-to-machine terminal bridge." />
   ${FAVICON_LINKS}
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" />
@@ -97,25 +97,25 @@ export const SUPPORT_HTML = /* html */ `<!doctype html>
     <h2>Getting started</h2>
 
     <details>
-      <summary>How do I pair the iOS app with my laptop?</summary>
+      <summary>How do I pair the iOS app with my machine?</summary>
       <ol>
-        <li>Install the Loopsy CLI on your laptop:
+        <li>Install the Loopsy CLI on your machine:
         <pre>npm install -g @loopsy/cli</pre></li>
         <li>Run <code>loopsy mobile pair</code>. The CLI prints a QR code and a
         4-digit verification code.</li>
         <li>Open Loopsy on your iPhone, tap <strong>Pair</strong>, scan the QR
-        code, and enter the 4-digit code from your laptop.</li>
-        <li>You're paired. The home screen now shows your laptop.</li>
+        code, and enter the 4-digit code from your machine.</li>
+        <li>You're paired. The home screen now shows your machine.</li>
       </ol>
     </details>
 
     <details>
-      <summary>What if I do not have a Mac/Linux laptop?</summary>
+      <summary>What if I do not have a Mac/Linux machine to pair with?</summary>
       <p>The Loopsy iOS app is a remote control surface — it has no value
-      without a laptop running the daemon. If you only have a phone, the
+      without a machine running the daemon. If you only have a phone, the
       app can't do its job. You can still browse the pair screen and the
       open-source code, but session functionality requires a paired
-      laptop.</p>
+      machine.</p>
     </details>
 
     <details>
@@ -130,12 +130,12 @@ export const SUPPORT_HTML = /* html */ `<!doctype html>
       <p>Pair tokens issued by <code>loopsy mobile pair</code> last 5
       minutes. If you waited too long between scanning and entering the
       4-digit code, the token expired. Run the command again on your
-      laptop and rescan.</p>
+      machine and rescan.</p>
     </details>
 
     <details>
       <summary>Sessions disconnect when the phone screen locks</summary>
-      <p>Sessions live on your laptop. When you reopen the app, the
+      <p>Sessions live on your machine. When you reopen the app, the
       session resumes from where it left off — Loopsy reuses the same PTY
       on the daemon for that session id.</p>
     </details>
@@ -174,7 +174,7 @@ export const SUPPORT_HTML = /* html */ `<!doctype html>
 
     <details>
       <summary>How do I revoke a paired phone?</summary>
-      <p>Run <code>loopsy phone list</code> on your laptop to see paired
+      <p>Run <code>loopsy phone list</code> on your machine to see paired
       phones, then <code>loopsy phone revoke &lt;id&gt;</code>. The phone
       loses access immediately — its WebSocket gets dropped and the
       pairing token is invalidated server-side.</p>
@@ -183,7 +183,7 @@ export const SUPPORT_HTML = /* html */ `<!doctype html>
     <h2>Still stuck?</h2>
     <p>Email <a href="mailto:anzacloud@gmail.com">anzacloud@gmail.com</a>
     with what you tried, the iOS version, and (if relevant) the output of
-    <code>loopsy doctor</code> on your laptop. We'll get back to you
+    <code>loopsy doctor</code> on your machine. We'll get back to you
     within a business day.</p>
   </main>
 </body>
