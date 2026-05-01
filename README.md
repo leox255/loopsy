@@ -116,16 +116,73 @@ The web client at `/app` runs on iOS Safari and Android Chrome with no install. 
 
 ## Agent-to-agent on a LAN
 
-Loopsy also includes a mode for direct daemon-to-daemon communication on a LAN — exposing remote command execution, file transfer, and shared key/value state to AI coding agents (Claude Code, Gemini CLI, Codex CLI) via MCP. This is the original use case; the phone-control mode is built on top.
+This is the original Loopsy. Phone control was built on top of it.
+
+Run a daemon on every machine you own. The daemons find each other on your local network via mDNS, you pair them once, and after that each machine exposes a small set of capabilities to the others: run a command, transfer a file, store and read shared key/value state, send and receive messages. Those same capabilities are also exposed to whatever AI coding agent you have installed (Claude Code, Codex CLI, Gemini CLI, Opencode) through MCP, so an agent on one machine can drive another machine directly.
+
+### Setup
 
 ```bash
-loopsy pair                # on Machine A — displays invite code
-loopsy pair 192.168.1.50   # on Machine B — enters invite code
+# On every machine
+npm i -g loopsy
+loopsy init
+loopsy start
+
+# Pair two machines
+loopsy pair                  # on machine A, prints a 6-digit code
+loopsy pair 192.168.1.50     # on machine B, paste the code
 ```
 
-Pairing uses ECDH (P-256) with a 6-digit short authentication string. After pairing, restart both daemons. The `loopsy_*` MCP tools become available in your AI coding agent automatically.
+Pairing uses ECDH (P-256) with a 6-digit short authentication string that you compare visually. After pairing, restart both daemons; the `loopsy_*` MCP tools become available to your AI coding agent automatically.
 
-See [AGENTS.md](AGENTS.md) for the full messaging protocol, task queue, and MCP tool reference.
+If mDNS doesn't reach (cross-subnet, locked-down corp networks), add a peer manually:
+
+```bash
+loopsy peers add 192.168.1.50
+```
+
+### MCP tools your agent gets
+
+When the Loopsy MCP server is wired into your agent, the agent gains:
+
+| Tool | What it does |
+|---|---|
+| `loopsy_list_peers` | Enumerate machines on the network with online/offline status. |
+| `loopsy_peer_status` | Health check a specific peer. |
+| `loopsy_execute` | Run a command on a remote machine. |
+| `loopsy_session_start` / `_stop` / `_list` / `_remove` | Long-lived PTY sessions on a peer. Spawn, poll, tear down. |
+| `loopsy_transfer_file` | Push a local file to a peer, or pull a peer's file. |
+| `loopsy_list_remote_files` | Browse a peer's filesystem (within configured allowed paths). |
+| `loopsy_context_set` / `_get` / `_list` / `_delete` | Shared key/value store on a peer. |
+| `loopsy_broadcast_context` | Same key/value, written to every online peer at once. |
+| `loopsy_send_message` | Protocol-compliant message to a peer's inbox, with envelope, outbox copy, TTL. |
+| `loopsy_check_inbox` | Pull pending messages addressed to this machine. |
+| `loopsy_check_ack` / `_ack_message` | Read receipts. |
+
+### What it actually looks like in practice
+
+A few real scenarios:
+
+- **Worker machine.** I have a Mac Studio sitting in another room. I tell Claude on my laptop, "kick off the iOS build on kai and let me know when it finishes." Claude calls `loopsy_session_start` against kai with the build command, polls until it exits, and reports back. My laptop stays cool and responsive.
+- **Long-running agent tasks on bigger hardware.** Spawn a Claude session on the Mac Studio, hand it a multi-file refactor, walk away. Check in from your laptop or phone hours later via `loopsy_session_list` (or the iOS app's session picker).
+- **Multi-agent pipelines.** Agent on machine A writes results into `loopsy_context_set` under a known key. Agent on machine B polls `loopsy_context_get` and picks up the work. Both agents are blissfully unaware of each other's existence beyond the shared key/value protocol.
+- **Pair programming with another developer's machine.** They run `loopsy peers add <your_ip>`, paste API keys, and now both your agents can transfer files and share context.
+
+### Messaging protocol
+
+There's a standard for AI agents to message each other across machines reliably (delivery, ACKs, retries). It uses the context store as the medium so any new machine can join without coordinating clients. Convention:
+
+| Pattern | Stored on | Purpose |
+|---|---|---|
+| `inbox:<recipient>:<msg_id>` | recipient's machine | message addressed to that peer |
+| `outbox:<msg_id>` | sender's machine | local copy of sent message |
+| `ack:<sender>` | sender's machine | last message id the recipient processed |
+
+Full envelope schema, polling intervals, TTL defaults, and the task queue protocol are in [AGENTS.md](AGENTS.md). It works the same whether there are 2 peers or 20.
+
+### LAN path security
+
+LAN agent-to-agent traffic does **not** go through the relay. Daemons talk directly over your local network. Bearer-auth on every request, API keys exchanged at pair time. If you want the daemon visible on the LAN you have to opt in (`loopsy start --lan`); the default is localhost-only.
 
 ## Security
 
