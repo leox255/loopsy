@@ -304,7 +304,7 @@ export class RelayClient {
         break;
       case 'session-attach':
         if (!sessionId) return;
-        this.handleSessionAttach(sessionId);
+        this.handleSessionAttach(sessionId, msg as { cols?: number; rows?: number });
         break;
       case 'session-detach':
         if (!sessionId) return;
@@ -358,6 +358,15 @@ export class RelayClient {
     },
   ): Promise<void> {
     if (this.sessions.has(sessionId)) return;
+    // Reattach path: PTY already exists. Resize it to the phone's current
+    // viewport BEFORE attach() serializes the snapshot — otherwise the
+    // snapshot is laid out at the old cols (often 120 from the original
+    // spawn) and renders into the phone's narrower viewport with every
+    // line wrapping at the wrong column. Showed up as visibly squished
+    // text and TUI borders running through prompt content.
+    if (this.pty.get(sessionId) && msg.cols && msg.rows) {
+      this.pty.resize(sessionId, msg.cols, msg.rows);
+    }
     if (!this.pty.get(sessionId)) {
       const agent: AgentKind = msg.agent ?? 'shell';
       // CSO #4 (revised 2026-04-27): auto-approve is the most-dangerous
@@ -442,12 +451,18 @@ export class RelayClient {
     this.sendText({ type: 'session-ready', sessionId });
   }
 
-  private handleSessionAttach(sessionId: string): void {
+  private handleSessionAttach(sessionId: string, msg: { cols?: number; rows?: number } = {}): void {
     if (this.sessions.has(sessionId)) return;
     const info = this.pty.get(sessionId);
     if (!info) {
       // No existing PTY — wait for phone to send session-open.
       return;
+    }
+    // Match the headless mirror to the new client's viewport before
+    // serializing, so the snapshot wraps at the same column the client
+    // will render at. Same reasoning as in handleSessionOpen.
+    if (msg.cols && msg.rows) {
+      this.pty.resize(sessionId, msg.cols, msg.rows);
     }
     const prefix = uuidToBytes(sessionId);
     const onData = (data: Buffer) => this.sendBinary(prefix, data);
