@@ -750,7 +750,12 @@ export const WEB_CLIENT_HTML = /* html */ `<!doctype html>
           brightYellow: '#FF9E64', brightBlue: '#7DA6FF', brightMagenta: '#BB9AF7',
           brightCyan: '#0DB9D7', brightWhite: '#D8E0F2',
         },
-        convertEol: true, allowProposedApi: true,
+        // convertEol must stay OFF for raw PTY streams. The daemon already
+        // sends CRLF for newlines; bare CR is used by progress spinners and
+        // status redraws to overwrite a single line in place. With convertEol
+        // on, xterm rewrites every CR as CRLF and each redraw ends up stacked
+        // on a new line instead of overwriting the previous one.
+        convertEol: false, allowProposedApi: true,
       });
       _fit = new FitAddon();
       _term.loadAddon(_fit);
