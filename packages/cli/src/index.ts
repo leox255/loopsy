@@ -232,12 +232,12 @@ yargs(hideBin(process.argv))
   .command('service-status', 'Check system service registration status', {}, serviceStatusCommand)
   .command(
     'mcp',
-    'Manage MCP server registration with Claude Code',
+    'Manage MCP server registration with installed AI coding agents (Claude Code, Gemini CLI, Codex CLI)',
     (yargs) =>
       yargs
-        .command('add', 'Register MCP server with Claude Code', {}, mcpAddCommand)
-        .command('remove', 'Unregister MCP server from Claude Code', {}, mcpRemoveCommand)
-        .command('status', 'Check MCP server registration', {}, mcpStatusCommand)
+        .command('add', 'Register MCP server with every installed AI coding agent (Claude, Gemini, Codex)', {}, mcpAddCommand)
+        .command('remove', 'Unregister MCP server from every installed AI coding agent (Claude, Gemini, Codex)', {}, mcpRemoveCommand)
+        .command('status', 'Check MCP server registration across Claude, Gemini, and Codex', {}, mcpStatusCommand)
         .demandCommand(1),
     () => {},
   )

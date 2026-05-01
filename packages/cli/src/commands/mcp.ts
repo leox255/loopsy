@@ -11,10 +11,14 @@ interface AgentCLI {
 
 const AGENTS: AgentCLI[] = [
   {
+    // Register at user scope (~/.claude.json) so the loopsy MCP is available
+    // from every project, not just the cwd where `loopsy mcp add` was run.
+    // Without -s user, claude defaults to local/project scope which made
+    // people see "no loopsy MCP" when they ran claude from any other dir.
     name: 'Claude Code',
     bin: 'claude',
-    addCmd: (p) => `claude mcp add loopsy -- node ${p}`,
-    removeCmd: 'claude mcp remove loopsy',
+    addCmd: (p) => `claude mcp add loopsy -s user -- node ${p}`,
+    removeCmd: 'claude mcp remove loopsy -s user',
     listCmd: 'claude mcp list',
   },
   {
@@ -44,6 +48,7 @@ function isAvailable(bin: string): boolean {
 
 export async function mcpAddCommand() {
   const serverPath = mcpServerPath();
+  console.log('Registering Loopsy MCP server with installed AI coding agents (Claude Code, Gemini CLI, Codex CLI)...\n');
   let registered = 0;
 
   for (const agent of AGENTS) {
