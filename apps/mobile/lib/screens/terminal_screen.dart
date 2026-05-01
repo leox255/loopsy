@@ -579,7 +579,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
                 textStyle: const TerminalStyle(
                   fontFamily: 'JetBrainsMono',
                   fontFamilyFallback: ['Menlo', 'Courier New', 'monospace'],
-                  fontSize: 13,
+                  fontSize: 12,
                 ),
                 theme: loopsyTerminalTheme,
               ),

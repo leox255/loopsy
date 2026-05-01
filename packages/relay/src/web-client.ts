@@ -29,9 +29,26 @@ export const WEB_CLIENT_HTML = /* html */ `<!doctype html>
   <title>${BRAND_NAME}</title>
   ${FAVICON_LINKS}
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600&display=swap" />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css" />
   <style>
+    /* Self-hosted Nerd-Font-patched JetBrains Mono so terminal prompts that
+       emit Powerline/devicon glyphs (P10k, Starship) render correctly
+       instead of falling back to ?-in-a-box. Subset to the Private Use
+       Area + box drawing + ASCII to keep each weight ~400KB. Mono variant
+       (single-cell glyphs) is required so prompt-width math stays correct. */
+    @font-face {
+      font-family: 'JetBrains Mono';
+      font-weight: 400;
+      font-display: swap;
+      src: url('/fonts/jbm-mono-regular.woff2') format('woff2');
+    }
+    @font-face {
+      font-family: 'JetBrains Mono';
+      font-weight: 700;
+      font-display: swap;
+      src: url('/fonts/jbm-mono-bold.woff2') format('woff2');
+    }
     ${TOKENS_CSS}
     html, body {
       width: 100%; height: 100dvh;

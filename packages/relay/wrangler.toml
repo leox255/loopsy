@@ -3,6 +3,13 @@ main = "src/index.ts"
 compatibility_date = "2025-04-01"
 compatibility_flags = ["nodejs_compat"]
 
+# Static assets (web client font files). Cloudflare matches assets first
+# before invoking the Worker, so /fonts/* short-circuits to the woff2 file
+# without touching our fetch handler. Everything else (WS, /app, /pair, etc.)
+# falls through to src/index.ts as before.
+[assets]
+directory = "./public"
+
 # Keep the *.workers.dev URL alive in addition to the custom domain — paired
 # phones from the pre-loopsy.dev era keep their connections working.
 workers_dev = true

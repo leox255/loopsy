@@ -20,10 +20,12 @@ import { fileURLToPath } from 'node:url';
 const here = dirname(fileURLToPath(import.meta.url));
 const pkgRoot = dirname(here);
 const relaySrc = join(pkgRoot, '..', 'relay', 'src');
+const relayPublic = join(pkgRoot, '..', 'relay', 'public');
 const relayPkgJson = join(pkgRoot, '..', 'relay', 'package.json');
 
 const workerOut = join(pkgRoot, 'worker');
 const workerSrcOut = join(workerOut, 'src');
+const workerPublicOut = join(workerOut, 'public');
 
 async function copyDir(src, dest) {
   await fs.mkdir(dest, { recursive: true });
@@ -43,6 +45,19 @@ async function main() {
 
   // Copy worker TS source verbatim
   await copyDir(relaySrc, workerSrcOut);
+
+  // Copy static assets (Nerd-patched font woff2). Wrangler [assets] binding
+  // serves these directly so the web client's /fonts/*.woff2 references
+  // resolve without a CDN dependency on self-hosted deploys.
+  try {
+    await copyDir(relayPublic, workerPublicOut);
+  } catch (err) {
+    if (err && err.code === 'ENOENT') {
+      // Older relay checkout without public/ — skip silently.
+    } else {
+      throw err;
+    }
+  }
 
   // Pull versions from the relay's own package.json so we stay in sync.
   const relayPkg = JSON.parse(await fs.readFile(relayPkgJson, 'utf8'));
@@ -75,6 +90,12 @@ async function main() {
 main = "src/index.ts"
 compatibility_date = "2025-04-01"
 compatibility_flags = ["nodejs_compat"]
+
+# Static assets — Nerd-Font-patched woff2 served at /fonts/*.woff2.
+# Cloudflare matches assets first, falls through to the worker for everything
+# else.
+[assets]
+directory = "./public"
 
 # Self-hosted deploys are app-only — '/' redirects to '/app' so the deploy
 # has no marketing surface. The loopsy.dev relay leaves this unset and
