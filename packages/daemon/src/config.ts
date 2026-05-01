@@ -39,16 +39,22 @@ export async function loadConfig(dataDir?: string): Promise<LoopsyConfig> {
   const dir = dataDir ?? DEFAULT_DATA_DIR;
   const configPath = join(dir, CONFIG_FILE);
   const defaults = defaultConfig();
+  let config: LoopsyConfig;
   try {
     const raw = await readFile(configPath, 'utf-8');
     const parsed = parseYaml(raw) as Partial<LoopsyConfig>;
-    const config = deepMerge(defaults, parsed) as LoopsyConfig;
-    config.server.dataDir = dir;
-    return config;
+    config = deepMerge(defaults, parsed) as LoopsyConfig;
   } catch {
-    defaults.server.dataDir = dir;
-    return defaults;
+    config = defaults;
   }
+  // Env override for `loopsy start --lan`. We don't rewrite config.yaml —
+  // the flag is per-launch so a forgotten `--lan` doesn't outlive the
+  // session that needed it.
+  if (process.env.LOOPSY_BIND_LAN === '1') {
+    config.server.host = '0.0.0.0';
+  }
+  config.server.dataDir = dir;
+  return config;
 }
 
 /**

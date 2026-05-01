@@ -8,11 +8,12 @@ compatibility_flags = ["nodejs_compat"]
 workers_dev = true
 
 [vars]
-# Allow up to 7 days for pair-token TTL on this deployment so the App
-# Store reviewer's pair URL stays valid for the full review window.
-# Self-hosters who deploy via @loopsy/deploy-relay don't get this — their
-# relay falls back to the 30-minute default for security.
-PAIR_TOKEN_MAX_TTL_SEC = "604800"
+# 1-hour ceiling on pair-token TTL. Long enough to scan a QR comfortably,
+# short enough that a leaked URL (screenshot, screen-share, paste-into-chat)
+# isn't an open invitation for a week. Self-hosters who deploy via
+# @loopsy/deploy-relay get the worker's compiled-in 30-minute default —
+# both well under what App Store Connect's review demo window needs.
+PAIR_TOKEN_MAX_TTL_SEC = "3600"
 
 # Workers Free plan supports SQLite-backed Durable Objects.
 # DeviceObject holds the persistent WebSocket from each laptop and

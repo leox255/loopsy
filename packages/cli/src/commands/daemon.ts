@@ -7,22 +7,28 @@ import { daemonRequest } from '../utils.js';
 import { daemonMainPath } from '../package-root.js';
 
 /** Spawn daemon, wrapping with caffeinate on macOS to prevent idle/system sleep */
-function spawnDaemon(daemonPath: string) {
+function spawnDaemon(daemonPath: string, opts: { lan?: boolean } = {}) {
+  // Pass LAN intent through an env var the daemon's config loader picks
+  // up. Default config now binds 127.0.0.1; --lan flips to 0.0.0.0 for
+  // people who want peer-to-peer over the local network.
+  const env = { ...process.env, ...(opts.lan ? { LOOPSY_BIND_LAN: '1' } : {}) };
   if (platform() === 'darwin') {
     return spawn('caffeinate', ['-is', process.execPath, daemonPath], {
       detached: true,
       stdio: 'ignore',
+      env,
     });
   }
   return spawn('node', [daemonPath], {
     detached: true,
     stdio: 'ignore',
+    env,
   });
 }
 
 const PID_FILE = join(homedir(), CONFIG_DIR, 'daemon.pid');
 
-export async function startCommand() {
+export async function startCommand(argv?: { lan?: boolean }) {
   // Check if already running
   try {
     const pid = parseInt(await readFile(PID_FILE, 'utf-8'), 10);
@@ -35,7 +41,7 @@ export async function startCommand() {
 
   const daemonPath = daemonMainPath();
 
-  const child = spawnDaemon(daemonPath);
+  const child = spawnDaemon(daemonPath, { lan: argv?.lan });
 
   if (child.pid) {
     await writeFile(PID_FILE, String(child.pid));
@@ -57,7 +63,7 @@ export async function stopCommand() {
   }
 }
 
-export async function restartCommand() {
+export async function restartCommand(argv?: { lan?: boolean }) {
   // Stop if running
   try {
     const pid = parseInt(await readFile(PID_FILE, 'utf-8'), 10);
@@ -72,7 +78,7 @@ export async function restartCommand() {
 
   // Start
   const daemonPath = daemonMainPath();
-  const child = spawnDaemon(daemonPath);
+  const child = spawnDaemon(daemonPath, { lan: argv?.lan });
 
   if (child.pid) {
     await writeFile(PID_FILE, String(child.pid));

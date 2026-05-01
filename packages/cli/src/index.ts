@@ -43,9 +43,23 @@ yargs(hideBin(process.argv))
   .scriptName('loopsy')
   .command('init', 'Initialize Loopsy config and generate API key', {}, initCommand)
   .command('connect', 'Interactive wizard to connect to another machine', {}, connectCommand)
-  .command('start', 'Start the Loopsy daemon', {}, startCommand)
+  .command(
+    'start',
+    'Start the Loopsy daemon',
+    (yargs) => yargs.option('lan', {
+      type: 'boolean',
+      default: false,
+      describe: 'Bind on 0.0.0.0 for LAN peer-to-peer instead of 127.0.0.1 (only the relay path is needed for mobile, so most users do not want this).',
+    }),
+    (argv) => startCommand(argv as { lan?: boolean }),
+  )
   .command('stop', 'Stop the Loopsy daemon', {}, stopCommand)
-  .command('restart', 'Restart the Loopsy daemon', {}, restartCommand)
+  .command(
+    'restart',
+    'Restart the Loopsy daemon',
+    (yargs) => yargs.option('lan', { type: 'boolean', default: false, describe: 'Bind on 0.0.0.0 for LAN peer-to-peer.' }),
+    (argv) => restartCommand(argv as { lan?: boolean }),
+  )
   .command('status', 'Show daemon status', {}, statusCommand)
   .command(
     'shell',

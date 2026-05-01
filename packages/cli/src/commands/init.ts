@@ -26,7 +26,12 @@ export async function initCommand() {
   const apiKey = randomBytes(32).toString('hex');
 
   const config = {
-    server: { port: DEFAULT_PORT, host: '0.0.0.0' },
+    // Bind to localhost by default — the relay handles WAN access for
+    // mobile, and the local Unix socket handles `loopsy shell` for the
+    // CLI. LAN peer-to-peer is opt-in via `loopsy start --lan` (or
+    // editing this to `0.0.0.0`). Hostile-network exposure is the
+    // common foot-gun we want to remove from the default install.
+    server: { port: DEFAULT_PORT, host: '127.0.0.1' },
     auth: {
       apiKey,
       allowedKeys: {},

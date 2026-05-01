@@ -129,14 +129,32 @@ See [AGENTS.md](AGENTS.md) for the full messaging protocol, task queue, and MCP 
 
 ## Security
 
-We ran a comprehensive security audit (`/cso`) over the codebase. 23 findings, 20 closed, 3 deferred to v2. Highlights:
+### Threat model, read this first
+
+Loopsy is a control surface for your own machine, accessed by your own phone, routed through a relay you can self-host. Some sharp edges fall out of that:
+
+- **The relay can read your terminal content.** The phone↔daemon connection is TLS-protected on the wire, but TLS terminates at the relay (your own Cloudflare Worker if you self-host, or `relay.loopsy.dev` if you use the default). Whoever operates that relay can see every byte of PTY input and output, including any password you type at a `sudo` prompt or any secret a script echoes. End-to-end encryption between phone and daemon is on the v1.1 roadmap. Until then, **if you don't fully trust the relay operator, self-host with `@loopsy/deploy-relay` — it takes about 30 seconds.** Or skip the mobile path entirely and use only `loopsy shell` over the local Unix socket.
+
+- **A paired phone is a credential.** Anyone holding your unlocked phone with the Loopsy app installed can run commands on your machine. The app itself doesn't add a passcode beyond iOS's lock screen. If auto-approve is enabled for a session, that session can run `claude --dangerously-skip-permissions` (or the equivalent for Codex / Gemini), meaning the agent will edit files and run shell commands without asking. Auto-approve defaults OFF and requires your macOS user password to enable; revoke a phone with `loopsy phone revoke <id>` if you lose it.
+
+- **Auto-approve sends your macOS password through the relay** (TLS-encrypted, but visible at the relay). Only enable auto-approve on a relay you trust. Self-hosting is again the answer here.
+
+- **The pair URL is the pairing.** It contains a one-time pair token plus a 4-digit SAS code shown on your laptop. Anyone who sees the URL *and* the SAS within an hour can pair as a phone. Don't paste pair URLs into shared channels. The TTL is 1 hour on the public relay and 30 minutes by default for self-hosters.
+
+- **Default daemon binding is `127.0.0.1`.** The relay handles WAN access for mobile and the local Unix socket handles `loopsy shell`, so most installs don't need LAN exposure. If you want peer-to-peer over your local network, opt in with `loopsy start --lan` (or set `server.host: 0.0.0.0` in `~/.loopsy/config.yaml`) and make sure you trust the network.
+
+- **Custom commands pin arbitrary binaries.** Anyone with phone access can pin `/bin/sh -c '...'` to the picker as a one-tap shortcut. Same trust model as having the phone, but worth knowing if multiple people share a paired phone.
+
+We ran a comprehensive `/cso` audit over the codebase. 23 findings, 20 closed, 3 deferred to v2 (E2E phone↔daemon encryption, forward secrecy, per-session ephemeral keys).
+
+### Hardening highlights
 
 - Bearer auth uses constant-time compare (`crypto.timingSafeEqual`).
 - 4-digit SAS verification on every pair. Defends against QR-leak / OCR-bot redeem races.
 - Phone secret is sent in the WebSocket subprotocol header, not the URL.
 - Secrets are SHA-256 hashed at rest in Durable Object storage.
 - Per-IP rate limit on `/device/register` (5/min) plus optional `REGISTRATION_SECRET`.
-- macOS dialog gate before auto-approve sessions; Linux/Windows fall back to terminal prompt.
+- Per-phone auto-approve token, revocable with `loopsy phone revoke`.
 - npm provenance via Trusted Publisher (OIDC) on every release.
 - `pnpm audit --prod` clean. CI gates the publish on any high CVE.
 
