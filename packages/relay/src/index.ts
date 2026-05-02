@@ -273,15 +273,21 @@ export default {
       });
       if (!verify.ok) return new Response('forbidden', { status: 403 });
 
-      let body: { ttl_seconds?: number } = {};
+      let body: { ttl_seconds?: number; multi?: boolean } = {};
       try {
         body = (await request.json()) as typeof body;
       } catch {
         // empty body is fine
       }
+      // Demo (multi-use) tokens get a separate, longer TTL ceiling because
+      // they're explicitly minted for App Store review where the reviewer
+      // needs days, not minutes. Regular single-use tokens still respect
+      // PAIR_TOKEN_MAX_TTL_SEC (1 hour by default on loopsy.dev).
+      const MAX_DEMO_TTL_SEC = 30 * 24 * 60 * 60; // 30 days
+      const maxTtl = body?.multi === true ? MAX_DEMO_TTL_SEC : pairTokenMaxTtl(env);
       const ttl = Math.max(
         30,
-        Math.min(body?.ttl_seconds ?? PAIR_TOKEN_DEFAULT_TTL_SEC, pairTokenMaxTtl(env)),
+        Math.min(body?.ttl_seconds ?? PAIR_TOKEN_DEFAULT_TTL_SEC, maxTtl),
       );
       const now = Math.floor(Date.now() / 1000);
       const nonce = base64urlEncode(crypto.getRandomValues(new Uint8Array(16)));
@@ -289,8 +295,11 @@ export default {
       const sasNum = (crypto.getRandomValues(new Uint32Array(1))[0] ?? 0) % 10000;
       const sas = String(sasNum).padStart(4, '0');
       const payload: PairTokenPayload = { did: device_id, iat: now, exp: now + ttl, nonce, sas };
+      // Demo-mode: token allows multiple redeems until exp. Off by default;
+      // only enabled when explicitly requested (App Store review demo).
+      if (body?.multi === true) payload.multi = true;
       const tokenStr = await signPairToken(payload, env.PAIR_TOKEN_SECRET);
-      return Response.json({ token: tokenStr, sas, expires_at: payload.exp });
+      return Response.json({ token: tokenStr, sas, expires_at: payload.exp, multi: payload.multi === true });
     }
 
     if (url.pathname === '/pair/redeem' && request.method === 'POST') {
@@ -318,7 +327,14 @@ export default {
       redeemUrl.searchParams.set('op', 'redeem-pair');
       const r = await stub.fetch(redeemUrl.toString(), {
         method: 'POST',
-        body: JSON.stringify({ nonce: payload.nonce, exp: payload.exp, label: body.label }),
+        body: JSON.stringify({
+          nonce: payload.nonce,
+          exp: payload.exp,
+          label: body.label,
+          // Forward the demo-mode flag so the DO can skip nonce-burn for
+          // tokens explicitly minted with multi=true.
+          multi: payload.multi === true,
+        }),
         headers: { 'content-type': 'application/json' },
       });
       if (!r.ok) return r;

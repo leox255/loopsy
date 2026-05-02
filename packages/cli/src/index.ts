@@ -269,7 +269,11 @@ yargs(hideBin(process.argv))
         .command(
           'pair',
           'Issue a pair token + render QR for the mobile app to scan',
-          { ttl: { type: 'number', default: 300, describe: 'Token TTL in seconds (60-2592000; the relay caps it lower unless PAIR_TOKEN_MAX_TTL_SEC is configured)' } },
+          {
+            ttl: { type: 'number', default: 300, describe: 'Token TTL in seconds (60-2592000; the relay caps it lower unless PAIR_TOKEN_MAX_TTL_SEC is configured)' },
+            'multi-use': { type: 'boolean', default: false, describe: 'Issue a multi-use token (App Store review demos). Reviewer can retry pairing without burning the URL.' },
+            'qr-png': { type: 'string', describe: 'Also write the QR as a PNG to this path (e.g., for App Store review attachments)' },
+          },
           mobilePairCommand,
         )
         .demandCommand(1),

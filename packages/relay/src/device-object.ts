@@ -142,13 +142,18 @@ export class DeviceObject {
    *   - return {phone_id, phone_secret}
    */
   private async handleRedeemPair(request: Request): Promise<Response> {
-    const body = (await request.json()) as { nonce: string; exp: number; label?: string };
+    const body = (await request.json()) as { nonce: string; exp: number; label?: string; multi?: boolean };
     if (!body?.nonce || typeof body.exp !== 'number') {
       return new Response('bad body', { status: 400 });
     }
     const nonceKey = `used_nonce:${body.nonce}`;
-    const already = await this.state.storage.get(nonceKey);
-    if (already) return new Response('nonce already used', { status: 409 });
+    // Multi-use (demo) tokens skip the nonce-burn check so Apple's reviewer
+    // can retry pairing without minting a fresh URL each time. Production
+    // tokens (multi=false / unset) keep single-use semantics.
+    if (body.multi !== true) {
+      const already = await this.state.storage.get(nonceKey);
+      if (already) return new Response('nonce already used', { status: 409 });
+    }
 
     const phone_id = generateUuid();
     const phone_secret = generateSecret();
@@ -159,9 +164,12 @@ export class DeviceObject {
       paired_at: Date.now(),
     };
     await this.state.storage.put(`phone:${phone_id}`, rec);
-    // Track the nonce as used. Each entry is tiny; periodic cleanup can be
-    // added later via DurableObjectState.setAlarm if we ever need it.
-    await this.state.storage.put(nonceKey, 1);
+    // Track the nonce as used (single-use tokens only). Each entry is tiny;
+    // periodic cleanup can be added later via DurableObjectState.setAlarm if
+    // we ever need it.
+    if (body.multi !== true) {
+      await this.state.storage.put(nonceKey, 1);
+    }
     return Response.json({ phone_id, phone_secret });
   }
 

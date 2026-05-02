@@ -68,4 +68,15 @@ export interface PairTokenPayload {
    * an attacker who didn't see the laptop's screen.
    */
   sas: string;
+  /**
+   * Demo-mode flag. When set, the relay does NOT burn the nonce on first
+   * redeem, so the same token (URL + SAS) can be redeemed multiple times
+   * until `exp`. Strictly opt-in — only used for App Store review demo
+   * tokens where Apple's reviewer may need to retry pairing. Production
+   * `loopsy mobile pair` issues single-use tokens (multi unset/false).
+   * Security tradeoff: anyone with the URL + SAS can pair a phone until
+   * the TTL expires, so multi-use tokens point at a sandboxed demo daemon
+   * that never sees real user data, never the operator's own machine.
+   */
+  multi?: boolean;
 }

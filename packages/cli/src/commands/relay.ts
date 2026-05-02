@@ -116,7 +116,7 @@ export async function relayUnsetCommand(): Promise<void> {
   console.log('Relay configuration removed. Restart the daemon to apply.');
 }
 
-export async function mobilePairCommand(argv: { ttl?: number }): Promise<void> {
+export async function mobilePairCommand(argv: { ttl?: number; multiUse?: boolean; qrPng?: string }): Promise<void> {
   const { config } = await loadConfig();
   if (!config.relay) {
     console.error('No relay configured. Run "loopsy relay configure <url>" first.');
@@ -134,7 +134,10 @@ export async function mobilePairCommand(argv: { ttl?: number }): Promise<void> {
       Authorization: `Bearer ${config.relay.deviceSecret}`,
       'content-type': 'application/json',
     },
-    body: JSON.stringify({ ttl_seconds: ttl }),
+    // multi-use: only set when --multi-use is passed. App Store review
+    // demos use this so the reviewer can retry pairing without burning
+    // the URL on the first attempt. Single-use is the default.
+    body: JSON.stringify({ ttl_seconds: ttl, ...(argv.multiUse ? { multi: true } : {}) }),
   });
   if (!res.ok) {
     const body = await res.text().catch(() => '');
@@ -166,7 +169,14 @@ export async function mobilePairCommand(argv: { ttl?: number }): Promise<void> {
   console.log('Or open this link on your phone:');
   console.log(`  ${webUrl}`);
   console.log('');
-  console.log(`Token expires in ${expiresIn}s. Single use.`);
+  const useLabel = argv.multiUse ? 'Multi-use (demo).' : 'Single use.';
+  console.log(`Token expires in ${expiresIn}s. ${useLabel}`);
+  // Optional: write a PNG QR to disk for App Store review attachments etc.
+  if (argv.qrPng) {
+    const QRCode = (await import('qrcode')).default;
+    await QRCode.toFile(argv.qrPng, webUrl, { width: 512, margin: 2 });
+    console.log(`QR PNG saved to: ${argv.qrPng}`);
+  }
 }
 
 /** CSO #8: list phones currently paired to this device. */
