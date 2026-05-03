@@ -20,7 +20,7 @@
   },
   "dependencies": {
     "wrangler": "^4.67.0",
-    "yaml": "^2.5.0"
+    "yaml": "^2.8.4"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
