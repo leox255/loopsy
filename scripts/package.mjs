@@ -91,34 +91,16 @@ for (const file of ['README.md', 'LICENSE']) {
   }
 }
 
-// ─── Create postinstall script ────────────────────────────────────────
-// This runs after `npm install` and creates @loopsy/* packages in node_modules
-// by copying the bundled dist/ outputs so bare imports resolve correctly.
-// Node.js ESM doesn't allow main/exports to point outside the package directory,
-// so we copy the files rather than using relative path references.
-
-mkdirSync(join(OUT, 'scripts'), { recursive: true });
-writeFileSync(
-  join(OUT, 'scripts', 'postinstall.mjs'),
-  `#!/usr/bin/env node
-/**
- * Postinstall: copy bundled @loopsy/* packages into node_modules so bare
- * specifier imports (e.g. from '@loopsy/protocol') resolve correctly.
- *
- * Node.js ESM forbids main/exports pointing outside the package directory,
- * so we copy the compiled files into each stub instead.
- */
-import { mkdirSync, writeFileSync, cpSync, existsSync } from 'node:fs';
-import { join, dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
-
-const __filename = fileURLToPath(import.meta.url);
-const pkgRoot = resolve(dirname(__filename), '..');
-
-// node_modules may be a sibling of the package (global install) or inside it
-// For global installs: <prefix>/lib/node_modules/loopsy/node_modules/
-// For local installs: <project>/node_modules/loopsy/node_modules/
-const nodeModules = join(pkgRoot, 'node_modules');
+// ─── Pre-bundle @loopsy/* workspace stubs ─────────────────────────────
+// Ship the workspace packages inside the published tarball under
+// node_modules/@loopsy/*. Combined with bundleDependencies in the
+// generated package.json (added below), this means bare imports like
+// `from '@loopsy/protocol'` resolve immediately after `npm install`
+// extracts the tarball — without needing a postinstall script to run.
+//
+// Postinstall used to create these stubs, but that breaks for users
+// who install with `--ignore-scripts` (a common security default and
+// the npx fallback path), causing ERR_MODULE_NOT_FOUND on first run.
 
 const stubs = [
   { name: 'protocol', distDir: 'protocol' },
@@ -126,16 +108,68 @@ const stubs = [
 ];
 
 for (const stub of stubs) {
-  const stubDir = join(nodeModules, '@loopsy', stub.name);
-
-  // Don't overwrite if somehow already present (e.g. in monorepo dev)
-  if (existsSync(join(stubDir, 'package.json'))) continue;
-
-  // Copy the compiled dist output into the stub directory
-  const srcDir = join(pkgRoot, 'dist', stub.distDir);
+  const stubDir = join(OUT, 'node_modules', '@loopsy', stub.name);
+  const srcDir = join(OUT, 'dist', stub.distDir);
   cpSync(srcDir, stubDir, { recursive: true });
+  writeFileSync(
+    join(stubDir, 'package.json'),
+    JSON.stringify({
+      name: `@loopsy/${stub.name}`,
+      version,
+      type: 'module',
+      main: 'index.js',
+      exports: { '.': './index.js' },
+    }, null, 2),
+  );
+  console.log(`  bundled node_modules/@loopsy/${stub.name}/`);
+}
 
-  // Write package.json pointing to the local index.js
+// ─── Create postinstall script ────────────────────────────────────────
+// Postinstall does two things:
+//   1. Belt-and-suspenders stub creation — bundleDependencies covers npm
+//      and pnpm, but Yarn 1 ignores it (yarnpkg/yarn#993). When Yarn 1
+//      installs without --ignore-scripts, this rebuilds the stubs from
+//      the bundled dist/ so the CLI loads. Already-present stubs are
+//      left alone (no-op for npm/pnpm where bundleDependencies already
+//      placed them).
+//   2. First-run `loopsy init` if no config exists.
+
+mkdirSync(join(OUT, 'scripts'), { recursive: true });
+writeFileSync(
+  join(OUT, 'scripts', 'postinstall.mjs'),
+  `#!/usr/bin/env node
+/**
+ * Postinstall responsibilities:
+ *
+ *   1. Yarn-1 fallback: rebuild @loopsy/* stubs in node_modules. npm and
+ *      pnpm respect bundleDependencies and have already placed them; this
+ *      is a no-op there. Yarn 1 strips bundled deps on install
+ *      (yarnpkg/yarn#993) and would otherwise crash on bare imports.
+ *      Users on \`--ignore-scripts\` will get a working CLI from the
+ *      bundleDependencies path; this fallback is only for the Yarn-1
+ *      / scripts-allowed case.
+ *
+ *   2. First-time \`loopsy init\` if no config exists yet.
+ */
+import { mkdirSync, writeFileSync, cpSync, existsSync } from 'node:fs';
+import { join, dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { execSync } from 'node:child_process';
+import { homedir } from 'node:os';
+
+const __filename = fileURLToPath(import.meta.url);
+const pkgRoot = resolve(dirname(__filename), '..');
+const nodeModules = join(pkgRoot, 'node_modules');
+
+// 1. Stub fallback for Yarn-1-style installs that strip bundleDependencies.
+const stubs = ${JSON.stringify(stubs)};
+for (const stub of stubs) {
+  const stubDir = join(nodeModules, '@loopsy', stub.name);
+  if (existsSync(join(stubDir, 'package.json'))) continue; // bundleDependencies already placed it
+  const srcDir = join(pkgRoot, 'dist', stub.distDir);
+  if (!existsSync(srcDir)) continue; // shouldn't happen — published tarball always has dist/
+  mkdirSync(stubDir, { recursive: true });
+  cpSync(srcDir, stubDir, { recursive: true });
   writeFileSync(
     join(stubDir, 'package.json'),
     JSON.stringify({
@@ -146,13 +180,10 @@ for (const stub of stubs) {
       exports: { '.': './index.js' },
     }, null, 2),
   );
+  console.log(\`loopsy: rebuilt @loopsy/\${stub.name} stub (Yarn 1 fallback)\`);
 }
 
-console.log('loopsy: workspace stubs created');
-
-// Auto-run 'loopsy init' if no config exists (first-time install)
-import { execSync } from 'node:child_process';
-import { homedir } from 'node:os';
+// 2. First-run init.
 const configPath = join(homedir(), '.loopsy', 'config.yaml');
 if (!existsSync(configPath)) {
   console.log('loopsy: first-time setup — running loopsy init...');
@@ -178,13 +209,24 @@ for (const pkg of packages) {
   const deps = pkgJson.dependencies || {};
 
   for (const [name, ver] of Object.entries(deps)) {
-    // Skip workspace deps (handled by postinstall stubs)
+    // Skip workspace deps — they're shipped as bundled stubs (see the
+    // bundleDependencies block below), not declared as registry deps.
     if (typeof ver === 'string' && ver.startsWith('workspace:')) continue;
     // Take highest version if conflict
     if (!allDeps[name] || allDeps[name] < ver) {
       allDeps[name] = ver;
     }
   }
+}
+
+// Declare bundled @loopsy/* packages alongside external deps. npm pack
+// includes anything listed in bundleDependencies from node_modules/ even
+// when `files` would otherwise exclude it, and resolves them locally
+// instead of fetching from the registry on install — so they survive
+// `--ignore-scripts` installs and offline npx runs.
+const bundleDependencies = stubs.map((s) => `@loopsy/${s.name}`);
+for (const name of bundleDependencies) {
+  allDeps[name] = version;
 }
 
 const packageJson = {
@@ -204,6 +246,7 @@ const packageJson = {
     postinstall: 'node scripts/postinstall.mjs',
   },
   dependencies: allDeps,
+  bundleDependencies,
   keywords: ['claude', 'claude-code', 'gemini', 'codex', 'mcp', 'cross-machine', 'p2p', 'remote-execution', 'ai-agents'],
   license: 'Apache-2.0',
   repository: {
