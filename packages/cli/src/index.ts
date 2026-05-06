@@ -273,6 +273,8 @@ yargs(hideBin(process.argv))
             ttl: { type: 'number', default: 300, describe: 'Token TTL in seconds (60-2592000; the relay caps it lower unless PAIR_TOKEN_MAX_TTL_SEC is configured)' },
             'multi-use': { type: 'boolean', default: false, describe: 'Issue a multi-use token (App Store review demos). Reviewer can retry pairing without burning the URL.' },
             'qr-png': { type: 'string', describe: 'Also write the QR as a PNG to this path (e.g., for App Store review attachments)' },
+            'use-public-relay': { type: 'boolean', default: false, describe: 'Non-interactive: register with relay.loopsy.dev (the maintainer-run public relay). See trust model in README before using.' },
+            'relay-url': { type: 'string', describe: 'Non-interactive: register with the relay at this URL (e.g., your self-hosted Cloudflare Worker).' },
           },
           mobilePairCommand,
         )
