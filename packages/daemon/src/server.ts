@@ -21,6 +21,7 @@ import { AiTaskManager } from './services/ai-task-manager.js';
 import { TlsManager } from './services/tls-manager.js';
 import { PtySessionManager } from './services/pty-session-manager.js';
 import { RelayClient } from './services/relay-client.js';
+import { registerRelayRoutes, type RelayClientHandle } from './routes/relay.js';
 import { LocalSocketServer } from './services/local-socket-server.js';
 import { registerPairRoutes } from './routes/pair.js';
 import { mountDashboard } from './dashboard.js';
@@ -72,26 +73,33 @@ export async function createDaemon(config: LoopsyConfig): Promise<DaemonServer> 
   const ptySessionManager = new PtySessionManager({
     idleTimeoutSec: config.relay?.sessionIdleTimeoutSec,
   });
-  const relayClient = config.relay
-    ? new RelayClient({
-        relay: config.relay,
-        pty: ptySessionManager,
-        logger: {
-          info: (msg, ctx) => app.log.info(ctx ?? {}, `[relay] ${msg}`),
-          warn: (msg, ctx) => app.log.warn(ctx ?? {}, `[relay] ${msg}`),
-          error: (msg, ctx) => app.log.error(ctx ?? {}, `[relay] ${msg}`),
-        },
-        // The picker-shortcut list lives in ~/.loopsy/config.yaml so it
-        // survives daemon restarts and stays consistent across every
-        // paired phone. Wire the relay client to mutate the in-memory
-        // copy and re-flush the YAML on every change.
-        customCommands: config.customCommands ?? [],
-        saveCustomCommands: async (commands) => {
-          config.customCommands = commands;
-          await saveConfig(config, dataDir);
-        },
-      })
-    : null;
+  // Wrapped in a mutable handle so /api/v1/relay/reconnect can swap
+  // the live RelayClient instance without restarting the daemon process.
+  // server.ts:267 stop() reads `relayHandle.current` so the swap is
+  // visible to shutdown too.
+  const relayLogger = {
+    info: (msg: string, ctx?: Record<string, unknown>) => app.log.info(ctx ?? {}, `[relay] ${msg}`),
+    warn: (msg: string, ctx?: Record<string, unknown>) => app.log.warn(ctx ?? {}, `[relay] ${msg}`),
+    error: (msg: string, ctx?: Record<string, unknown>) => app.log.error(ctx ?? {}, `[relay] ${msg}`),
+  };
+  const relayHandle: RelayClientHandle = {
+    current: config.relay
+      ? new RelayClient({
+          relay: config.relay,
+          pty: ptySessionManager,
+          logger: relayLogger,
+          // The picker-shortcut list lives in ~/.loopsy/config.yaml so it
+          // survives daemon restarts and stays consistent across every
+          // paired phone. Wire the relay client to mutate the in-memory
+          // copy and re-flush the YAML on every change.
+          customCommands: config.customCommands ?? [],
+          saveCustomCommands: async (commands) => {
+            config.customCommands = commands;
+            await saveConfig(config, dataDir);
+          },
+        })
+      : null,
+  };
 
   // Local IPC for `loopsy shell` / `loopsy attach`. Lives in dataDir
   // alongside config.yaml so it inherits the data-dir's permissions
@@ -190,6 +198,13 @@ export async function createDaemon(config: LoopsyConfig): Promise<DaemonServer> 
     tlsManager,
     dataDir,
   });
+  registerRelayRoutes(app, {
+    handle: relayHandle,
+    pty: ptySessionManager,
+    logger: relayLogger,
+    config,
+    dataDir,
+  });
 
   // Mount dashboard UI at /dashboard/
   await mountDashboard(app, {
@@ -256,7 +271,7 @@ export async function createDaemon(config: LoopsyConfig): Promise<DaemonServer> 
 
       discovery?.start();
       healthChecker?.start();
-      relayClient?.start();
+      relayHandle.current?.start();
       try {
         await localSocketServer.start();
       } catch (err) {
@@ -270,7 +285,7 @@ export async function createDaemon(config: LoopsyConfig): Promise<DaemonServer> 
       discovery?.stop();
       jobManager.killAll();
       aiTaskManager.cancelAll();
-      relayClient?.stop();
+      relayHandle.current?.stop();
       await localSocketServer.stop();
       ptySessionManager?.shutdown();
       contextStore.stopExpiryCheck();

@@ -101,6 +101,15 @@ export interface RelayClientConfig {
   saveCustomCommands?: (commands: CustomCommand[]) => Promise<void>;
 }
 
+export interface RelayClientStatus {
+  /** True iff the underlying WebSocket is OPEN and we haven't been stopped. */
+  connected: boolean;
+  /** Configured URL we're connecting to (or were last connected to). */
+  url: string;
+  /** Last connect/socket error surfaced from the WebSocket; null after a successful reconnect. */
+  lastError: string | null;
+}
+
 export class RelayClient {
   private cfg: RelayConfig;
   private pty: PtySessionManager;
@@ -115,6 +124,8 @@ export class RelayClient {
   /** Daemon-side custom command list. Mutated in-place and persisted. */
   private customCommands: CustomCommand[];
   private saveCustomCommands: (commands: CustomCommand[]) => Promise<void>;
+  /** Last error observed on the socket; cleared on successful (re)connect. */
+  private lastError: string | null = null;
 
   constructor(cfg: RelayClientConfig) {
     this.cfg = cfg.relay;
@@ -122,6 +133,16 @@ export class RelayClient {
     this.log = cfg.logger ?? noopLogger;
     this.customCommands = (cfg.customCommands ?? []).map(c => ({ ...c }));
     this.saveCustomCommands = cfg.saveCustomCommands ?? (async () => {});
+  }
+
+  /**
+   * Snapshot of the relay link state. Used by /api/v1/relay/status so the
+   * CLI can poll until a freshly-reconfigured RelayClient has actually
+   * established its WebSocket before issuing a pair QR.
+   */
+  getStatus(): RelayClientStatus {
+    const connected = !!this.ws && !this.stopped && this.ws.readyState === WebSocket.OPEN;
+    return { connected, url: this.cfg.url, lastError: this.lastError };
   }
 
   start(): void {
@@ -163,6 +184,7 @@ export class RelayClient {
     ws.on('open', () => {
       this.log.info('relay connected', { url: this.cfg.url, deviceId: this.cfg.deviceId });
       this.reconnectMs = RECONNECT_INITIAL_MS;
+      this.lastError = null;
       this.startHeartbeat();
     });
 
@@ -185,6 +207,7 @@ export class RelayClient {
     });
 
     ws.on('error', (err) => {
+      this.lastError = err.message;
       this.log.error('relay socket error', { message: err.message });
       // 'close' fires after error — handle reconnect there.
     });
