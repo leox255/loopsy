@@ -19,7 +19,7 @@ export const LANDING_HTML = /* html */ `<!doctype html>
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
   <meta name="theme-color" content="#0B0D10" />
   <title>${BRAND_NAME} — ${BRAND_TAGLINE}</title>
-  <meta name="description" content="Control Claude Code, Cursor, Codex, or any shell on your laptop from your phone. Open source, self-hosted on Cloudflare Workers." />
+  <meta name="description" content="Control Claude Code, Cursor, Codex, or any shell on your laptop from your phone. Open source. Maintainer-run public relay or self-host on Cloudflare." />
   <meta property="og:title" content="${BRAND_NAME} — ${BRAND_TAGLINE}" />
   <meta property="og:description" content="Control your laptop's terminal from your phone. Open source." />
   <meta property="og:type" content="website" />
@@ -584,8 +584,8 @@ export const LANDING_HTML = /* html */ `<!doctype html>
           <span class="pill done">${ICONS.check}3 pieces</span>
           <span class="task-id">architecture</span>
         </div>
-        <h3 class="task-title">Three pieces. Yours alone.</h3>
-        <p class="task-meta">Laptop daemon. Cloudflare Worker. Phone client.</p>
+        <h3 class="task-title">Three pieces.</h3>
+        <p class="task-meta">Laptop daemon. Cloudflare Worker (ours or yours). Phone client.</p>
 
         <div class="step">
           <div class="num">1</div>
