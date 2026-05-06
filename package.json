@@ -1,6 +1,6 @@
 {
   "name": "loopsy",
-  "version": "1.0.43",
+  "version": "1.1.0",
   "private": true,
   "description": "Control your terminal from your phone. Self-hosted on Cloudflare Workers.",
   "scripts": {
@@ -15,7 +15,10 @@
     "typecheck": "pnpm -r typecheck"
   },
   "pnpm": {
-    "onlyBuiltDependencies": ["node-pty", "esbuild"]
+    "onlyBuiltDependencies": [
+      "node-pty",
+      "esbuild"
+    ]
   },
   "engines": {
     "node": ">=20.0.0",

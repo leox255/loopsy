@@ -2,7 +2,7 @@
 
 **Your terminal, in your pocket.**
 
-Control Claude Code, Cursor, Codex, or any shell on your laptop from your phone. Self-hosted on Cloudflare Workers.
+Control Claude Code, Cursor, Codex, or any shell on your laptop from your phone. Maintainer-run public relay or self-host on Cloudflare Workers, your call.
 
 [![npm](https://img.shields.io/npm/v/loopsy.svg)](https://www.npmjs.com/package/loopsy)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
@@ -17,25 +17,27 @@ Control Claude Code, Cursor, Codex, or any shell on your laptop from your phone.
 ```bash
 # 1. Install on your laptop (any OS)
 npm install -g loopsy
+loopsy init && loopsy start
 
-# 2. Deploy your own relay to Cloudflare Workers (~30s, free tier)
-npx @loopsy/deploy-relay
-# prompts for worker name + optional custom domain
-# outputs: https://<your-relay>.workers.dev
-
-# 3. Wire the daemon to it and start
-loopsy init
-loopsy relay configure https://<your-relay>.workers.dev
-loopsy start
-
-# 4. Pair your phone
+# 2. Pair your phone
 loopsy mobile pair
-# scan the QR with your phone camera, enter the 4-digit code
-
-# 5. Open https://<your-relay>.workers.dev/app on your phone
+# first run prompts for relay choice (public or your own self-hosted),
+# then prints the QR + 4-digit verification code
 ```
 
 That's the whole thing. Pick any agent, type or dictate, the laptop runs it.
+
+> **Public relay vs self-hosted.** `relay.loopsy.dev` is run by the loopsy
+> maintainers and is the default if you accept the consent prompt. Convenient,
+> but the relay terminates TLS, so the operator can read and modify your
+> terminal traffic. For full privacy, self-host:
+>
+> ```bash
+> npx @loopsy/deploy-relay                                       # ~30s, your Cloudflare account, free tier
+> loopsy mobile pair --relay-url https://<your>.workers.dev      # skip the public-relay consent
+> ```
+>
+> See the [trust model](#threat-model-read-this-first) before pairing on the public relay.
 
 ## How it works
 
@@ -49,7 +51,7 @@ That's the whole thing. Pick any agent, type or dictate, the laptop runs it.
 
 The daemon opens an outbound WebSocket to a small Cloudflare Worker. Your phone connects to the same Worker. The Worker splices the two together. No port forwarding, no public IP, no VPN.
 
-The relay is yours: pair tokens are HMAC-signed, secrets are SHA-256 hashed at rest, and bearer tokens travel in `Sec-WebSocket-Protocol` headers — never query strings.
+Pair tokens are HMAC-signed, secrets are SHA-256 hashed at rest, and bearer tokens travel in `Sec-WebSocket-Protocol` headers — never query strings. Self-hosters keep all of that on their own Cloudflare account; the public `relay.loopsy.dev` is operated by the loopsy maintainers (see [trust model](#threat-model-read-this-first)).
 
 ## What you get
 
