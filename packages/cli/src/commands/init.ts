@@ -85,7 +85,11 @@ export async function initCommand() {
   console.log('');
   console.log('Next steps:');
   console.log('  1. Run "loopsy start" to start the daemon');
-  console.log('  2. On the other machine, run "loopsy init" and "loopsy start"');
-  console.log('  3. Run "loopsy pair <ip>" to securely exchange keys');
-  console.log('  4. Peers should auto-discover via mDNS, or add manually with "loopsy peers add <ip>"');
+  console.log('  2. Run "loopsy mobile pair" to control your laptop from your phone');
+  console.log('     (first run asks whether to use the public relay at relay.loopsy.dev,');
+  console.log('      or run "loopsy mobile pair --help" for self-host options)');
+  console.log('');
+  console.log('For agent-to-agent on a LAN (the original Loopsy):');
+  console.log('  • Run "loopsy init && loopsy start" on each machine');
+  console.log('  • "loopsy pair <ip>" to exchange keys; mDNS handles discovery');
 }
