@@ -31,3 +31,8 @@ apps/mobile/ios/Pods/
 apps/mobile/ios/.symlinks/
 apps/mobile/ios/Flutter/Flutter.framework/
 apps/mobile/ios/Flutter/Flutter.podspec
+
+# Android signing — never commit (Play Store rejects compromised keys + locked listing)
+apps/mobile/android/key.properties
+*.jks
+*.keystore
