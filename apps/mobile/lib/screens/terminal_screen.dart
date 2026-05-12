@@ -10,7 +10,7 @@ import '../services/relay_client.dart';
 import '../services/storage.dart';
 import '../theme.dart';
 import '../widgets/loopsy_modal.dart';
-import '../widgets/terminal_keyboard.dart';
+import '../widgets/terminal_accessory_bar.dart';
 
 class TerminalScreen extends StatefulWidget {
   final String sessionId;
@@ -46,6 +46,13 @@ class _TerminalScreenState extends State<TerminalScreen> {
   final StringBuffer _firstLine = StringBuffer();
   bool _summaryCaptured = false;
 
+  // One-shot modifiers from the accessory bar. The system soft keyboard
+  // has no concept of Ctrl/Alt, so we hold the latched state here and
+  // transform the very next byte the terminal emits before it leaves
+  // for the PTY.
+  bool _ctrlArmed = false;
+  bool _altArmed = false;
+
   // Voice
   final stt.SpeechToText _speech = stt.SpeechToText();
   bool _voiceReady = false;
@@ -63,7 +70,12 @@ class _TerminalScreenState extends State<TerminalScreen> {
       return;
     }
 
-    _terminal.onOutput = (data) => _session?.sendStdin(utf8.encode(data));
+    _terminal.onOutput = (data) {
+      final raw = utf8.encode(data);
+      final transformed = _applyModifiers(raw);
+      _session?.sendStdin(transformed);
+      _captureSummary(transformed);
+    };
     _terminal.onResize = (w, h, _, __) => _session?.resize(w, h);
 
     final session = RelaySession(
@@ -290,6 +302,42 @@ class _TerminalScreenState extends State<TerminalScreen> {
         LoopsyModalAction.primary('Enable', () => Navigator.pop(context, ctl.text)),
       ],
     );
+  }
+
+  /// Apply latched Ctrl/Alt modifiers (one-shot) to bytes coming out of
+  /// the terminal/system-keyboard. Only single-byte sequences participate
+  /// in the transform — multi-byte text (paste, autocomplete) just drops
+  /// the modifier and passes through, which matches what desktop terminals
+  /// do when the user pastes with Ctrl held.
+  List<int> _applyModifiers(List<int> bytes) {
+    if (!_ctrlArmed && !_altArmed) return bytes;
+    if (bytes.length == 1) {
+      final b = bytes[0];
+      if (_ctrlArmed) {
+        setState(() => _ctrlArmed = false);
+        if (b >= 0x61 && b <= 0x7a) return [b - 0x60];          // ctrl+a..z -> 0x01..0x1A
+        if (b >= 0x41 && b <= 0x5a) return [b - 0x40];          // ctrl+A..Z -> same
+        if (b == 0x5b) return [0x1b];                            // ctrl+[ -> ESC
+        return bytes;                                             // ctrl + non-letter: pass through
+      }
+      if (_altArmed) {
+        setState(() => _altArmed = false);
+        return [0x1b, b];                                         // alt+key -> ESC prefix
+      }
+    }
+    // Multi-byte input with a modifier armed: drop the modifier without
+    // applying. Better than mangling pasted text.
+    if (_ctrlArmed) setState(() => _ctrlArmed = false);
+    if (_altArmed) setState(() => _altArmed = false);
+    return bytes;
+  }
+
+  /// Send raw bytes straight to the PTY (no modifier transform). Used by
+  /// the accessory bar — Esc/Tab/arrows are the special keys, modifiers
+  /// don't compose with them in the soft-keyboard flow.
+  void _sendRawBytes(List<int> bytes) {
+    _session?.sendStdin(bytes);
+    _captureSummary(bytes);
   }
 
   /// Build a one-line summary from the first user input the session sees and
@@ -569,10 +617,13 @@ class _TerminalScreenState extends State<TerminalScreen> {
                 _terminal,
                 controller: _controller,
                 focusNode: _termFocus,
-                // readOnly + hardwareKeyboardOnly: never engage the iOS soft
-                // keyboard. Our custom TerminalKeyboard below sends raw bytes.
-                readOnly: true,
-                hardwareKeyboardOnly: true,
+                // System keyboard mode. `visiblePassword` is the lowest-
+                // friction layout iOS/Android expose for terminals: full
+                // QWERTY-style keys, no autocorrect, no period-on-double-
+                // space, no quote substitution. xterm.dart's internal
+                // CustomTextEdit handles the IME path and fires
+                // Terminal.onOutput with the right bytes per keystroke.
+                keyboardType: TextInputType.visiblePassword,
                 autofocus: false,
                 backgroundOpacity: 1,
                 padding: const EdgeInsets.all(6),
@@ -585,11 +636,12 @@ class _TerminalScreenState extends State<TerminalScreen> {
               ),
             ),
           ),
-          TerminalKeyboard(
-            onBytes: (bytes) {
-              _session?.sendStdin(bytes);
-              _captureSummary(bytes);
-            },
+          TerminalAccessoryBar(
+            onBytes: _sendRawBytes,
+            ctrlArmed: _ctrlArmed,
+            altArmed: _altArmed,
+            onToggleCtrl: () => setState(() { _ctrlArmed = !_ctrlArmed; if (_ctrlArmed) _altArmed = false; }),
+            onToggleAlt:  () => setState(() { _altArmed  = !_altArmed;  if (_altArmed)  _ctrlArmed = false; }),
             onVoice: _voiceReady ? _openVoiceSheet : null,
           ),
         ],
