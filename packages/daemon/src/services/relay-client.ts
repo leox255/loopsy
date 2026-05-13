@@ -590,6 +590,25 @@ export class RelayClient {
       });
       return;
     }
+    // Chat is currently only supported for Claude — it tails the JSONL
+    // Claude writes under ~/.claude/projects/<cwd>/. Gemini / Codex /
+    // OpenCode use different on-disk formats (and OpenCode emits no
+    // transcript at all). Fast-path the unavailable response so the
+    // phone doesn't sit through the 15s spawn-window poll only to be
+    // told "no" anyway.
+    if (info.agent !== 'claude') {
+      this.sendText({
+        type: 'chat-event',
+        sessionId,
+        event: {
+          v: 1,
+          kind: 'capability',
+          chat: 'unavailable',
+          reason: `chat is only available for Claude (this session runs ${info.agent})`,
+        } satisfies ChatEvent,
+      });
+      return;
+    }
     // If we've previously discovered the Claude session-id bound to this
     // loopsy session, pin to that JSONL directly. This is more precise
     // than birthtime correlation and survives Claude rotating its files

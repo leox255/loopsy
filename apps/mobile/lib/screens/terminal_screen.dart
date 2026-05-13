@@ -64,6 +64,14 @@ class _TerminalScreenState extends State<TerminalScreen> {
   int _chatRevision = 0;
   bool _chatSubscribed = false;
 
+  /// Chat is only meaningful for Claude — it tails Claude's JSONL
+  /// transcript. Gemini/Codex/OpenCode write to other places (or
+  /// nowhere) so we hide the toggle entirely for them and don't even
+  /// subscribe on the daemon. The daemon also fast-paths a
+  /// capability:unavailable for safety, but gating here keeps the UI
+  /// clean (no "chat unavailable" placeholder users have to dismiss).
+  bool get _chatSupported => widget.agent == 'claude';
+
   // Voice
   final stt.SpeechToText _speech = stt.SpeechToText();
   bool _voiceReady = false;
@@ -611,6 +619,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
   /// reconnect is handled by clearing this flag on session close (TODO
   /// when we add that recovery path; v1 expects one continuous session).
   void _ensureChatSubscribed() {
+    if (!_chatSupported) return;
     if (_chatSubscribed) return;
     if (_session == null) return;
     _session!.sendControl({'type': 'chat-subscribe'});
@@ -703,17 +712,22 @@ class _TerminalScreenState extends State<TerminalScreen> {
       // doesn't need the modifier row.
       body: Column(
         children: [
-          _ViewToggleBar(
-            mode: _view,
-            onChanged: (m) {
-              if (m == _view) return;
-              setState(() => _view = m);
-              if (m == _ViewMode.chat) _ensureChatSubscribed();
-            },
-          ),
+          // Only show the term/chat toggle when chat is actually
+          // available for this agent. For Gemini/Codex/OpenCode the
+          // user just sees the terminal — no toggle to a panel that
+          // can't render anything.
+          if (_chatSupported)
+            _ViewToggleBar(
+              mode: _view,
+              onChanged: (m) {
+                if (m == _view) return;
+                setState(() => _view = m);
+                if (m == _ViewMode.chat) _ensureChatSubscribed();
+              },
+            ),
           Expanded(
             child: IndexedStack(
-              index: _view == _ViewMode.terminal ? 0 : 1,
+              index: _chatSupported && _view == _ViewMode.chat ? 1 : 0,
               children: [
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
