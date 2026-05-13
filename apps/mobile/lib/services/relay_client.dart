@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 import 'package:web_socket_channel/web_socket_channel.dart';
+import 'package:web_socket_channel/io.dart';
 
 import '../models/pairing.dart';
 import 'pair_url.dart';
@@ -343,9 +344,17 @@ class RelaySession {
       '?phone_id=${Uri.encodeComponent(pairing.phoneId)}'
       '&session_id=${Uri.encodeComponent(sessionId)}',
     );
-    _channel = WebSocketChannel.connect(
+    // IOWebSocketChannel + pingInterval keeps the WS alive across
+    // Cloudflare Workers' ~100s idle timeout. Without this the WS
+    // silently goes dead while the chat panel is idle (no agent
+    // activity = no frames flowing), and the user only discovers it
+    // when they try to send — the symptom was "connection drops when
+    // I start typing". 25s mirrors the daemon's own heartbeat to the
+    // relay so both ends of the splice stay alive on the same cadence.
+    _channel = IOWebSocketChannel.connect(
       uri,
       protocols: ['loopsy.bearer.${pairing.phoneSecret}'],
+      pingInterval: const Duration(seconds: 25),
     );
     _sub = _channel!.stream.listen(
       (event) {
