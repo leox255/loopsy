@@ -6,6 +6,7 @@ import 'package:hugeicons/hugeicons.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'package:xterm/xterm.dart';
 
+import '../models/pairing.dart';
 import '../services/chat_event.dart';
 import '../services/relay_client.dart';
 import '../services/storage.dart';
@@ -65,6 +66,15 @@ class _TerminalScreenState extends State<TerminalScreen> {
   int _chatRevision = 0;
   bool _chatSubscribed = false;
 
+  // Auto-reconnect state. When the relay WS drops while the user is
+  // still on this screen, we transparently reopen the session so the
+  // user can keep typing or sending chat without having to back out and
+  // re-enter. Backoff bounds: 1s → 30s cap.
+  bool _disposed = false;
+  Timer? _reconnectTimer;
+  int _reconnectAttempt = 0;
+  String? _cachedSudoPassword; // first-time auto-approve password
+
   /// Agents whose CLI writes a transcript we can tail. Claude / Gemini
   /// / Codex each have their own on-disk format; the daemon picks the
   /// right adapter on subscribe. OpenCode is excluded because it stores
@@ -103,6 +113,45 @@ class _TerminalScreenState extends State<TerminalScreen> {
     _terminal.onResize = (w, h, pixelWidth, pixelHeight) =>
         _session?.resize(w, h);
 
+    // For auto-approve sessions, gate the FIRST open behind either a
+    // cached approval token or a macOS-password handshake. Subsequent
+    // reconnect attempts reuse the cached password so the user isn't
+    // prompted again mid-session.
+    if (widget.auto) {
+      final cached = await Storage.readApproveToken();
+      if (cached == null) {
+        if (!mounted) return;
+        _cachedSudoPassword = await _askSudoPassword();
+        if (_cachedSudoPassword == null) {
+          if (mounted) Navigator.of(context).pop('cancelled');
+          return;
+        }
+      }
+    }
+
+    // Order matters: bring the keyboard up *before* opening the
+    // session so the PTY is created with the post-keyboard cols/rows.
+    // Otherwise Claude/Codex/etc. render their prompt for the full-
+    // screen size, the keyboard pops in, SIGWINCH fires, and the
+    // agent redraws on top of itself.
+    _termFocus.requestFocus();
+    await _waitForTerminalLayout();
+
+    await _openSession(pairing);
+
+    // Lazy-init speech recognition; ignore errors silently — mic just
+    // becomes unavailable.
+    _voiceReady = await _speech.initialize(onError: (_) {});
+    if (mounted) setState(() {});
+  }
+
+  /// Build a fresh RelaySession + call session.open. Called once during
+  /// bootstrap, then again from [_scheduleReconnect] on transient
+  /// disconnects so the user doesn't have to back out + re-enter the
+  /// screen to recover.
+  Future<void> _openSession(Pairing pairing) async {
+    if (_disposed) return;
+
     final session = RelaySession(
       pairing: pairing,
       sessionId: widget.sessionId,
@@ -110,52 +159,38 @@ class _TerminalScreenState extends State<TerminalScreen> {
           _terminal.write(utf8.decode(bytes, allowMalformed: true)),
       onControl: _handleControl,
       onClose: (code, _) {
-        if (mounted) {
-          setState(() {
-            _status = 'closed (${code ?? '?'})';
-            _statusError = code != 1000;
-          });
+        if (!mounted || _disposed) return;
+        // Distinguish clean close (user backed out, code 1000) from a
+        // transient drop. For drops, schedule a reconnect; for clean
+        // closes leave the session dead.
+        final wasError = code != 1000 && code != null;
+        setState(() {
+          _status = wasError ? 'reconnecting…' : 'closed (${code ?? '?'})';
+          _statusError = wasError;
+          _session = null;
+          // Reset chat subscription state so the new session re-
+          // subscribes when the user is on the chat tab.
+          _chatSubscribed = false;
+        });
+        if (wasError || code == null) {
+          _scheduleReconnect(pairing);
         }
       },
     );
 
-    // For auto-approve sessions, gate the open behind either a cached
-    // approval token or a fresh macOS-password handshake (replaces the
-    // old osascript dialog so the user never has to walk to the laptop).
-    String? approveToken;
-    String? sudoPassword;
-    if (widget.auto) {
-      approveToken = await Storage.readApproveToken();
-      if (approveToken == null) {
-        if (!mounted) return;
-        sudoPassword = await _askSudoPassword();
-        if (sudoPassword == null) {
-          if (mounted) Navigator.of(context).pop('cancelled');
-          return;
-        }
-      }
-    }
+    // Cached approve token may have been minted on a prior connection
+    // in this session — re-read each time so we never re-prompt.
+    final approveToken = widget.auto ? await Storage.readApproveToken() : null;
 
-    // Order matters here. We bring the keyboard up *before* opening the
-    // session so the PTY is created with the post-keyboard cols/rows. If
-    // we opened first and then focused, Claude/Codex/etc. would render
-    // their prompt for the full-screen size, the keyboard would pop in,
-    // SIGWINCH would fire, and the agent would redraw on top of itself —
-    // which is what made the first claude session look like two sessions
-    // in scrollback.
-    _termFocus.requestFocus();
-    await _waitForTerminalLayout();
-
-    // Always send session-open: the daemon dedupes by sessionId — reuses an
-    // existing PTY or spawns a fresh one if nothing exists for that id (e.g.,
-    // after the daemon's idle timeout reaped the previous PTY).
     await session.open(
       agent: widget.agent,
       cols: _terminal.viewWidth,
       rows: _terminal.viewHeight,
       auto: widget.auto,
       approveToken: approveToken,
-      sudoPassword: sudoPassword,
+      // First-time password is only sent if we don't already have a
+      // token. Stored locally so reconnects don't re-prompt.
+      sudoPassword: (widget.auto && approveToken == null) ? _cachedSudoPassword : null,
       customCommandId: widget.customCommandId,
     );
     if (!mounted) return;
@@ -163,11 +198,34 @@ class _TerminalScreenState extends State<TerminalScreen> {
       _session = session;
       _status = 'connected';
       _statusError = false;
+      _reconnectAttempt = 0;
     });
 
-    // Lazy-init speech recognition; ignore errors silently — mic just becomes unavailable.
-    _voiceReady = await _speech.initialize(onError: (_) {});
-    if (mounted) setState(() {});
+    // If user was viewing chat when the connection dropped, re-subscribe
+    // automatically so they don't have to toggle tabs to recover.
+    if (_view == _ViewMode.chat) {
+      _ensureChatSubscribed();
+    }
+  }
+
+  /// Reconnect with exponential backoff: 1s, 2s, 4s, 8s, 16s, 30s, 30s…
+  /// Cancelled by [dispose] so navigating away doesn't keep retrying.
+  void _scheduleReconnect(Pairing pairing) {
+    if (_disposed) return;
+    _reconnectTimer?.cancel();
+    final delaySec = (1 << _reconnectAttempt.clamp(0, 5)).clamp(1, 30);
+    _reconnectAttempt++;
+    _reconnectTimer = Timer(Duration(seconds: delaySec), () async {
+      if (_disposed || !mounted) return;
+      try {
+        await _openSession(pairing);
+      } catch (_) {
+        // openSession failed (e.g., daemon still down). The onClose
+        // handler on the new RelaySession will fire and schedule
+        // another attempt with the next backoff step.
+        if (!_disposed && mounted) _scheduleReconnect(pairing);
+      }
+    });
   }
 
   /// Spin until the xterm widget reports a real viewWidth/Height. Without
@@ -718,6 +776,8 @@ class _TerminalScreenState extends State<TerminalScreen> {
 
   @override
   void dispose() {
+    _disposed = true;
+    _reconnectTimer?.cancel();
     if (_chatSubscribed) {
       _session?.sendControl({'type': 'chat-unsubscribe'});
     }
