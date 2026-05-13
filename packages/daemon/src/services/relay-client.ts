@@ -69,8 +69,13 @@ function autoApproveFlags(agent: AgentKind): string[] {
       // narrowly scoped (auto-approve, but still respects refusal rules).
       return ['-y'];
     case 'codex':
-      // OpenAI codex-cli auto mode.
-      return ['--full-auto'];
+      // OpenAI codex-cli: --full-auto was renamed. The current CLI
+      // exposes --dangerously-bypass-approvals-and-sandbox for full
+      // skip (no approvals, no sandbox). The old flag is parsed as
+      // the [PROMPT] positional and rejected by clap, which surfaces
+      // as "unexpected argument --full-auto" — that's the failure
+      // mode this name change fixes.
+      return ['--dangerously-bypass-approvals-and-sandbox'];
     case 'opencode':
       // sst.dev/opencode does not currently expose a single "skip all
       // confirmations" flag that we trust. We launch it in normal mode

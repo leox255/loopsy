@@ -30,7 +30,15 @@ export function defaultConfig(): LoopsyConfig {
       maxFileSize: MAX_FILE_SIZE,
     },
     rateLimits: { ...RATE_LIMITS },
-    discovery: { enabled: true, manualPeers: [] },
+    // mDNS discovery off by default. It's for laptop-to-laptop peer
+    // discovery over a LAN — a niche feature that most users never
+    // touch. Leaving it on means every fresh daemon triggers macOS's
+    // "node would like to find and connect to devices on your local
+    // network" prompt, which defeats the point of remote control if the
+    // user has to walk back to the machine to click Allow. Opt in with
+    // `discovery.enabled: true` in config.yaml or via the CLI when
+    // someone genuinely wants LAN peer discovery.
+    discovery: { enabled: false, manualPeers: [] },
     logging: { level: 'info' },
   };
 }
