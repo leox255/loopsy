@@ -21,6 +21,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { discoverClaudeSession } from './claude-session-tracker.js';
 import { execSync } from 'node:child_process';
 import * as pty from 'node-pty';
 import xtermHeadlessPkg from '@xterm/headless';
@@ -177,6 +178,18 @@ export class PtySessionManager {
       exitListeners: new Set(),
     };
     this.sessions.set(id, session);
+
+    // Claude-specific: fire-and-forget discovery of the JSONL file Claude
+    // writes on launch, so we can remember its session-id and pass
+    // --resume on future PTY respawns (preserves chat continuity across
+    // daemon restarts / idle reaps). No-op for other agents.
+    if (opts.agent === 'claude') {
+      void discoverClaudeSession({
+        loopsyId: id,
+        cwd,
+        spawnedAtMs: session.createdAt,
+      }).catch(() => { /* swallow — best-effort */ });
+    }
 
     ptyProcess.onData((data: string) => {
       session.lastActivityAt = Date.now();

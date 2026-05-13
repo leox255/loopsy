@@ -125,6 +125,22 @@ class _ChatPanelState extends State<ChatPanel> with WidgetsBindingObserver {
       }
     }
 
+    // Group consecutive same-role turns into one visual tile. Without
+    // this, a multi-step Claude response (msg1 thinking+tool → tool
+    // roundtrip → msg2 text) renders as TWO "Claude" labels stacked,
+    // which reads as "Claude said something, then Claude said something
+    // again" instead of one continuous response. Grouping lets us show
+    // ONE label with all internals collapsed and the final text bubble
+    // as the visible answer.
+    final groups = <List<ChatTurn>>[];
+    for (final t in visibleTurns) {
+      if (groups.isNotEmpty && groups.last.first.role == t.role) {
+        groups.last.add(t);
+      } else {
+        groups.add([t]);
+      }
+    }
+
     // Loading indicator: show "Claude is working…" when the most recent
     // *visible* turn is incomplete (assistant mid-stream) or is the user
     // prompt with no follow-up turn yet. Stops as soon as the assistant
@@ -152,17 +168,17 @@ class _ChatPanelState extends State<ChatPanel> with WidgetsBindingObserver {
           child: ListView.builder(
             controller: _scroll,
             padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
-            itemCount: visibleTurns.length + extraTop + extraBottom,
+            itemCount: groups.length + extraTop + extraBottom,
             itemBuilder: (context, i) {
               if (hasDroppedHeader && i == 0) {
                 return _DroppedHeader(count: log.droppedTurns);
               }
               final idx = i - extraTop;
-              if (idx < visibleTurns.length) {
-                return _TurnTile(turn: visibleTurns[idx], toolResults: toolResults);
+              if (idx < groups.length) {
+                return _TurnGroupTile(turns: groups[idx], toolResults: toolResults);
               }
               // Bottom slots: loading first, then error.
-              final tail = idx - visibleTurns.length;
+              final tail = idx - groups.length;
               if (showLoading && tail == 0) return const _LoadingRow();
               return _ErrorRow(log.lastError!);
             },
@@ -444,32 +460,37 @@ class _ErrorRow extends StatelessWidget {
   }
 }
 
-class _TurnTile extends StatefulWidget {
-  final ChatTurn turn;
+/// One visual tile per *group* of consecutive same-role turns. Groups
+/// emerge naturally from Claude's multi-step responses (msg1 thinking +
+/// tool_use → tool_result → msg2 text), and rendering them as one tile
+/// gives the user the "this was one Claude response" reading instead of
+/// "Claude said something, then said something else."
+class _TurnGroupTile extends StatefulWidget {
+  final List<ChatTurn> turns;
   final Map<String, ToolResultBlock> toolResults;
-  const _TurnTile({required this.turn, required this.toolResults});
+  const _TurnGroupTile({required this.turns, required this.toolResults});
 
   @override
-  State<_TurnTile> createState() => _TurnTileState();
+  State<_TurnGroupTile> createState() => _TurnGroupTileState();
 }
 
-class _TurnTileState extends State<_TurnTile> {
+class _TurnGroupTileState extends State<_TurnGroupTile> {
   bool _internalsExpanded = false;
 
   @override
   Widget build(BuildContext context) {
-    final isUser = widget.turn.role == ChatRole.user;
-    final blocks = widget.turn.blocks;
+    final isUser = widget.turns.first.role == ChatRole.user;
+    final allBlocks = widget.turns.expand((t) => t.blocks).toList();
 
-    // For assistant turns, split into "response" (text) vs "internals"
+    // For assistant groups, split into response (text) vs internals
     // (thinking + tool_use). Default state shows only response; internals
-    // live behind a small pill the user taps to expand.
+    // hide behind a single small pill the user can tap to expand.
     final responseBlocks = isUser
-        ? blocks
-        : blocks.where((b) => b is TextBlock).toList();
+        ? allBlocks
+        : allBlocks.whereType<TextBlock>().cast<ChatBlock>().toList();
     final internalBlocks = isUser
         ? const <ChatBlock>[]
-        : blocks.where((b) => b is ThinkingBlock || b is ToolUseBlock).toList();
+        : allBlocks.where((b) => b is ThinkingBlock || b is ToolUseBlock).toList();
     final thinkingCount = internalBlocks.whereType<ThinkingBlock>().length;
     final toolCount = internalBlocks.whereType<ToolUseBlock>().length;
 
@@ -478,6 +499,9 @@ class _TurnTileState extends State<_TurnTile> {
       child: Column(
         crossAxisAlignment: isUser ? CrossAxisAlignment.end : CrossAxisAlignment.start,
         children: [
+          // Single sender label per group. The previous design labeled
+          // every ChatTurn separately so a multi-step response read as
+          // multiple "Claude" headers stacked vertically.
           Row(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -499,11 +523,7 @@ class _TurnTileState extends State<_TurnTile> {
             ],
           ),
           const SizedBox(height: 4),
-          // Render response blocks (text bubbles, etc.) first so the user
-          // always sees the answer without scrolling past reasoning.
           for (final b in responseBlocks) _BlockView(block: b, isUser: isUser),
-          // Internals pill: only when there are internals AND it's an
-          // assistant turn.
           if (internalBlocks.isNotEmpty) ...[
             const SizedBox(height: 6),
             _InternalsToggle(
@@ -520,9 +540,9 @@ class _TurnTileState extends State<_TurnTile> {
                   children: [
                     for (final b in internalBlocks) ...[
                       _BlockView(block: b, isUser: false),
-                      // For tool_use blocks, also render the matching
-                      // tool_result inline so the user sees the full call
-                      // → return pair without hunting through other turns.
+                      // Pair each tool_use with its matching tool_result
+                      // when expanded — the user sees the full call →
+                      // return without hunting other turns.
                       if (b is ToolUseBlock && widget.toolResults[b.id] != null)
                         _BlockView(block: widget.toolResults[b.id]!, isUser: false),
                     ],
@@ -537,9 +557,8 @@ class _TurnTileState extends State<_TurnTile> {
 }
 
 /// Compact "Reasoning · 2 tools" pill that toggles the internals view.
-/// Mirrors how ChatGPT/Claude desktop hide chain-of-thought + tool use
-/// by default — the chat surface stays clean, expert mode is one tap
-/// away.
+/// Smaller than the prior iteration — chat surface stays clean, expert
+/// mode is one tap away.
 class _InternalsToggle extends StatelessWidget {
   final int thinkingCount;
   final int toolCount;
@@ -555,17 +574,17 @@ class _InternalsToggle extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final parts = <String>[];
-    if (thinkingCount > 0) parts.add(thinkingCount == 1 ? 'Reasoning' : 'Reasoning ($thinkingCount)');
+    if (thinkingCount > 0) parts.add(thinkingCount == 1 ? 'reasoning' : 'reasoning ($thinkingCount)');
     if (toolCount > 0) parts.add(toolCount == 1 ? '1 tool' : '$toolCount tools');
     final label = parts.join(' · ');
     return InkWell(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(20),
+      borderRadius: BorderRadius.circular(14),
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
         decoration: BoxDecoration(
           color: LoopsyColors.surfaceAlt,
-          borderRadius: BorderRadius.circular(20),
+          borderRadius: BorderRadius.circular(14),
           border: Border.all(color: LoopsyColors.border),
         ),
         child: Row(
@@ -576,14 +595,14 @@ class _InternalsToggle extends StatelessWidget {
                   ? HugeIcons.strokeRoundedArrowUp02
                   : HugeIcons.strokeRoundedArrowDown02,
               color: LoopsyColors.muted,
-              size: 12,
+              size: 10,
             ),
-            const SizedBox(width: 5),
+            const SizedBox(width: 3),
             Text(
               label,
               style: const TextStyle(
                 color: LoopsyColors.muted,
-                fontSize: 11,
+                fontSize: 9.5,
                 fontWeight: FontWeight.w600,
                 fontFamily: 'JetBrainsMono',
               ),

@@ -314,6 +314,17 @@ class JsonlTranslator {
           yield { v: 1, kind: 'error', code: 'schema-unknown', message: `unknown assistant block: ${b.type}` };
       }
     }
+
+    // Eager flush on terminal stop_reasons. Otherwise the very last turn
+    // of a conversation never sees a `turn-end` event (flushOpenTurn only
+    // fires when the NEXT turn arrives), so the mobile loading dots stay
+    // visible even though Claude is done responding. tool_use stays
+    // unflushed because Claude IS still working — a tool_result record
+    // and follow-up assistant message will arrive shortly.
+    const stop = rec.message?.stop_reason;
+    if (stop === 'end_turn' || stop === 'stop_sequence' || stop === 'max_tokens') {
+      yield* this.flushOpenTurn();
+    }
   }
 }
 

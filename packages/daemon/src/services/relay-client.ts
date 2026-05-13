@@ -22,6 +22,7 @@ import { PtySessionManager } from './pty-session-manager.js';
 import type { AgentKind } from './pty-session-manager.js';
 import { checkAutoApprove, grantAutoApprove, verifyMacPassword } from './auto-approve.js';
 import { ChatEventStream, type ChatEvent } from './chat-event-stream.js';
+import { getClaudeSessionForLoopsy } from './claude-session-tracker.js';
 
 const RECONNECT_INITIAL_MS = 1000;
 const RECONNECT_MAX_MS = 30_000;
@@ -476,7 +477,20 @@ export class RelayClient {
           });
         }
       }
+      // Resume the prior agent session if we've seen this loopsy session
+      // before. Without this, every PTY respawn (idle reap, daemon
+      // restart) creates a fresh conversation — the user loses the
+      // thread they were on. We only know how to resume agents that
+      // expose a stable resume CLI surface:
+      //   - claude: `--resume <session-id>`
+      //   - codex:  CLI exposes `codex resume`, but it's a sub-command
+      //     not a flag, so it requires different spawn plumbing —
+      //     deferred. Tracked at session-tracker level for future use.
+      //   - gemini, opencode: no resume mechanism in their CLIs today.
+      const resumeArgs = await this.resumeArgsForAgent(agent, sessionId);
+
       const args = [
+        ...resumeArgs,
         ...(auto ? autoApproveFlags(agent) : []),
         ...(msg.extraArgs ?? []),
       ];
@@ -526,6 +540,24 @@ export class RelayClient {
     this.sessions.set(sessionId, { sessionId, detach: handle.detach });
   }
 
+  /**
+   * Build the CLI argv prefix needed to resume a prior session for this
+   * agent, if any. Falls back to `[]` (fresh session) when:
+   *   - This is the first time we've seen the loopsy sessionId
+   *   - The agent doesn't expose a resume mechanism
+   *   - The stored session-id refers to a file that's been deleted
+   *
+   * The actual mapping is owned by ClaudeSessionTracker for now since
+   * Claude is the only agent we know how to resume via a flag. Codex's
+   * `codex resume` sub-command pattern needs different plumbing — track
+   * but don't act yet.
+   */
+  private async resumeArgsForAgent(agent: AgentKind, loopsySessionId: string): Promise<string[]> {
+    if (agent !== 'claude') return [];
+    const prior = await getClaudeSessionForLoopsy(loopsySessionId).catch(() => null);
+    return prior ? ['--resume', prior] : [];
+  }
+
   private handleSessionDetach(sessionId: string): void {
     const s = this.sessions.get(sessionId);
     if (!s) return;
@@ -558,39 +590,43 @@ export class RelayClient {
       });
       return;
     }
-    const stream = new ChatEventStream({
-      cwd: info.cwd,
-      startByteOffset: msg.fromOffset,
-      // Disambiguate when multiple Claude sessions share the same cwd:
-      // we want the JSONL whose birthtime matches this PTY's spawn, not
-      // whichever file in the project dir was mtimed most recently.
-      ptySpawnedAtMs: info.createdAt,
+    // If we've previously discovered the Claude session-id bound to this
+    // loopsy session, pin to that JSONL directly. This is more precise
+    // than birthtime correlation and survives Claude rotating its files
+    // (the stored id is the source of truth across daemon restarts).
+    // We Promise-resolve before constructing the stream so the start()
+    // call below sees the resolved sessionId.
+    void getClaudeSessionForLoopsy(sessionId).catch(() => null).then((priorClaudeId) => {
+      if (this.chats.has(sessionId)) return; // a newer subscribe already raced ahead
+      const stream = new ChatEventStream({
+        cwd: info.cwd,
+        startByteOffset: msg.fromOffset,
+        sessionId: priorClaudeId ?? undefined,
+        // Birthtime correlation is the fallback when no Claude id is
+        // stored yet (first-time spawn racing chat-subscribe).
+        ptySpawnedAtMs: info.createdAt,
+      });
+      stream.on('event', (event: ChatEvent) => {
+        const buffered = this.ws?.bufferedAmount ?? 0;
+        if (buffered > CHAT_BACKPRESSURE_BYTES) {
+          this.sendText({
+            type: 'chat-event',
+            sessionId,
+            event: {
+              v: 1,
+              kind: 'error',
+              code: 'tail-gap',
+              message: `client too slow (${Math.round(buffered / 1024 / 1024)} MiB buffered); chat stream dropped`,
+            } satisfies ChatEvent,
+          });
+          this.stopChatStream(sessionId);
+          return;
+        }
+        this.sendText({ type: 'chat-event', sessionId, event });
+      });
+      this.chats.set(sessionId, stream);
+      void stream.start();
     });
-    stream.on('event', (event: ChatEvent) => {
-      // Backpressure: if the outbound WS is congested, dropping chat
-      // events on the floor without telling the client would leave the UI
-      // showing a stale conversation. Surface a `tail-gap` and stop the
-      // stream so the user sees "reconnect to resync" instead of silent
-      // half-state.
-      const buffered = this.ws?.bufferedAmount ?? 0;
-      if (buffered > CHAT_BACKPRESSURE_BYTES) {
-        this.sendText({
-          type: 'chat-event',
-          sessionId,
-          event: {
-            v: 1,
-            kind: 'error',
-            code: 'tail-gap',
-            message: `client too slow (${Math.round(buffered / 1024 / 1024)} MiB buffered); chat stream dropped`,
-          } satisfies ChatEvent,
-        });
-        this.stopChatStream(sessionId);
-        return;
-      }
-      this.sendText({ type: 'chat-event', sessionId, event });
-    });
-    this.chats.set(sessionId, stream);
-    void stream.start();
   }
 
   private stopChatStream(sessionId: string): void {
