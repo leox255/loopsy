@@ -654,7 +654,10 @@ class _HomeScreenState extends State<HomeScreen> {
       body: SafeArea(
         top: false,
         child: ListView(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 96),
+          // Tighter side margins (12 vs 16) — pulls content closer to
+          // the edges so cards have more horizontal room without
+          // feeling cramped. Top trimmed from 8→6.
+          padding: const EdgeInsets.fromLTRB(12, 6, 12, 96),
           children: [
             // Slim paired-device strip — replaces the bulky card that
             // showed the raw device UUID. Shows the laptop's hostname
@@ -667,12 +670,12 @@ class _HomeScreenState extends State<HomeScreen> {
               connected: _deviceInfo != null,
             ),
 
-            const SizedBox(height: 24),
+            const SizedBox(height: 14),
             const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+              padding: EdgeInsets.symmetric(horizontal: 4, vertical: 4),
               child: Text(
                 'Sessions',
-                style: TextStyle(fontWeight: FontWeight.w600, color: LoopsyColors.muted),
+                style: TextStyle(fontWeight: FontWeight.w600, color: LoopsyColors.muted, fontSize: 13),
               ),
             ),
 
@@ -710,8 +713,22 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _newSession,
+        backgroundColor: LoopsyColors.accent,
+        // Explicit near-black foreground for max contrast on the
+        // medium-blue accent. The FAB theme already sets it, but
+        // declaring here too means the label widget doesn't fall
+        // back to a Material default that varies with the active
+        // brightness mode.
+        foregroundColor: LoopsyColors.bg,
         icon: const HugeIcon(icon: HugeIcons.strokeRoundedAdd01, color: LoopsyColors.bg),
-        label: const Text('New session'),
+        label: const Text(
+          'New session',
+          style: TextStyle(
+            color: LoopsyColors.bg,
+            fontWeight: FontWeight.w700,
+            fontSize: 14,
+          ),
+        ),
       ),
     );
   }
@@ -810,14 +827,14 @@ class _SessionCard extends StatelessWidget {
     final hasName = session.name != null && session.name!.trim().isNotEmpty;
     final hasSummary = session.summary != null && session.summary!.trim().isNotEmpty;
     return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.only(bottom: 8),
       child: Card(
         child: InkWell(
           borderRadius: BorderRadius.circular(4),
           onTap: onTap,
           onLongPress: onMore,
           child: Padding(
-            padding: const EdgeInsets.all(14),
+            padding: const EdgeInsets.all(12),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [

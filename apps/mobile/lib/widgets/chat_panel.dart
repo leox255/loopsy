@@ -38,12 +38,19 @@ class ChatPanel extends StatefulWidget {
   final int revision;
   final void Function(String text)? onSend;
   final String agentName;
+  /// Optional voice-input handler. When provided, the composer renders
+  /// a mic button that opens the parent's voice sheet (same flow the
+  /// terminal-accessory-bar uses, so behaviour is consistent across
+  /// the two surfaces). Pass null when speech recognition isn't
+  /// available — composer hides the mic.
+  final VoidCallback? onVoice;
   const ChatPanel({
     super.key,
     required this.log,
     required this.revision,
     required this.agentName,
     this.onSend,
+    this.onVoice,
   });
 
   @override
@@ -135,7 +142,12 @@ class _ChatPanelState extends State<ChatPanel> with WidgetsBindingObserver {
               waitingReason: log.unavailableReason ?? '',
             ),
           ),
-          _ChatComposer(onSend: widget.onSend, agentName: widget.agentName, theme: theme),
+          _ChatComposer(
+            onSend: widget.onSend,
+            onVoice: widget.onVoice,
+            agentName: widget.agentName,
+            theme: theme,
+          ),
         ],
       );
     }
@@ -194,7 +206,10 @@ class _ChatPanelState extends State<ChatPanel> with WidgetsBindingObserver {
             children: [
               ListView.builder(
                 controller: _scroll,
-                padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
+                // Tighter side padding (10) lets bubbles use more of
+                // the row so messages feel less crammed. Vertical (12)
+                // keeps the top/bottom breathing room.
+                padding: const EdgeInsets.fromLTRB(10, 12, 10, 12),
                 itemCount: groups.length + extraTop + extraBottom,
                 itemBuilder: (context, i) {
                   if (hasDroppedHeader && i == 0) {
@@ -234,7 +249,12 @@ class _ChatPanelState extends State<ChatPanel> with WidgetsBindingObserver {
             ],
           ),
         ),
-        _ChatComposer(onSend: widget.onSend, agentName: widget.agentName, theme: theme),
+        _ChatComposer(
+          onSend: widget.onSend,
+          onVoice: widget.onVoice,
+          agentName: widget.agentName,
+          theme: theme,
+        ),
       ],
     );
   }
@@ -865,9 +885,15 @@ class _ToolCardState extends State<_ToolCard> {
 /// app native, not "form input dropped at the bottom".
 class _ChatComposer extends StatefulWidget {
   final void Function(String text)? onSend;
+  final VoidCallback? onVoice;
   final String agentName;
   final _AgentTheme theme;
-  const _ChatComposer({required this.onSend, required this.agentName, required this.theme});
+  const _ChatComposer({
+    required this.onSend,
+    required this.onVoice,
+    required this.agentName,
+    required this.theme,
+  });
 
   @override
   State<_ChatComposer> createState() => _ChatComposerState();
@@ -920,10 +946,17 @@ class _ChatComposerState extends State<_ChatComposer> {
           child: SafeArea(
             top: false,
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(12, 10, 10, 10),
+              padding: const EdgeInsets.fromLTRB(10, 10, 10, 10),
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
+                  if (widget.onVoice != null) ...[
+                    _ComposerIconButton(
+                      icon: HugeIcons.strokeRoundedMic01,
+                      onTap: widget.onVoice!,
+                    ),
+                    const SizedBox(width: 6),
+                  ],
                   Expanded(
                     child: AnimatedContainer(
                       duration: const Duration(milliseconds: 150),
@@ -976,6 +1009,35 @@ class _ChatComposerState extends State<_ChatComposer> {
               ),
             ),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Square icon button matching the send button's geometry. Used for
+/// the mic (voice input) slot in the composer.
+class _ComposerIconButton extends StatelessWidget {
+  final IconData icon;
+  final VoidCallback onTap;
+  const _ComposerIconButton({required this.icon, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final shape = BorderRadius.circular(4);
+    return Material(
+      color: LoopsyColors.surfaceAlt,
+      borderRadius: shape,
+      child: InkWell(
+        borderRadius: shape,
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.all(13),
+          decoration: BoxDecoration(
+            borderRadius: shape,
+            border: Border.all(color: LoopsyColors.border),
+          ),
+          child: HugeIcon(icon: icon, color: LoopsyColors.fg, size: 18),
         ),
       ),
     );

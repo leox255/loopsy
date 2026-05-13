@@ -175,9 +175,16 @@ class _TerminalScreenState extends State<TerminalScreen> {
           _status = wasError ? 'reconnecting…' : 'closed (${code ?? '?'})';
           _statusError = wasError;
           _session = null;
-          // Reset chat subscription state so the new session re-
-          // subscribes when the user is on the chat tab.
           _chatSubscribed = false;
+          // Reset the chat log on reconnect: the daemon replays from
+          // byteOffset 0, so re-applying events to an already-populated
+          // log would duplicate every turn we've already seen. Clear
+          // here and let the replay re-render from scratch.
+          _chatLog.turns.clear();
+          _chatLog.available = false;
+          _chatLog.droppedTurns = 0;
+          _chatLog.lastError = null;
+          _chatRevision++;
         });
         if (wasError || code == null) {
           _scheduleReconnect(pairing);
@@ -217,14 +224,20 @@ class _TerminalScreenState extends State<TerminalScreen> {
     }
   }
 
-  /// Reconnect with exponential backoff: 1s, 2s, 4s, 8s, 16s, 30s, 30s…
-  /// Cancelled by [dispose] so navigating away doesn't keep retrying.
+  /// Reconnect with exponential backoff. First attempt fires almost
+  /// immediately (250ms — fast enough that a brief network blip is
+  /// invisible to the user); subsequent attempts back off 1s, 2s, 4s,
+  /// 8s, 16s, 30s, 30s…
   void _scheduleReconnect(Pairing pairing) {
     if (_disposed) return;
     _reconnectTimer?.cancel();
-    final delaySec = (1 << _reconnectAttempt.clamp(0, 5)).clamp(1, 30);
+    // attempt 0 → 250ms (snap-back for transient blips)
+    // attempt 1+ → 1s, 2s, 4s, 8s, 16s, 30s cap
+    final delayMs = _reconnectAttempt == 0
+        ? 250
+        : (1 << (_reconnectAttempt - 1).clamp(0, 5)).clamp(1, 30) * 1000;
     _reconnectAttempt++;
-    _reconnectTimer = Timer(Duration(seconds: delaySec), () async {
+    _reconnectTimer = Timer(Duration(milliseconds: delayMs), () async {
       if (_disposed || !mounted) return;
       try {
         await _openSession(pairing);
@@ -917,6 +930,9 @@ class _TerminalScreenState extends State<TerminalScreen> {
                   // user's first message is what causes the agent to
                   // create its transcript file in the first place.
                   onSend: _session == null ? null : _sendChatPrompt,
+                  // Same voice flow the terminal accessory bar uses,
+                  // so dictation works identically across both panels.
+                  onVoice: _voiceReady ? _openVoiceSheet : null,
                 ),
               ],
             ),
