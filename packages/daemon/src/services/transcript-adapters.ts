@@ -606,42 +606,54 @@ function extractCodexMessageText(content: unknown): string {
     .join('\n');
 }
 
+// Filename: rollout-YYYY-MM-DDTHH-MM-SS-<uuid>.jsonl
+const CODEX_FILENAME_RE = /^rollout-(\d{4})-(\d{2})-(\d{2})T(\d{2})-(\d{2})-(\d{2})-[0-9a-f-]+\.jsonl$/;
+
+function parseCodexFilenameStartMs(filename: string): number | null {
+  const m = CODEX_FILENAME_RE.exec(filename);
+  if (!m) return null;
+  // Codex writes the filename in UTC (the `T` follows ISO-8601 shape).
+  const iso = `${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6]}Z`;
+  const ms = Date.parse(iso);
+  return Number.isFinite(ms) ? ms : null;
+}
+
 export const codexAdapter: TranscriptAdapter = {
   async resolveFile(opts) {
-    // Codex shards by date: ~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<id>.jsonl.
-    // First narrow by stat-based birthtime window (cheap), THEN verify
-    // session_meta.cwd matches (expensive — opens the file). Order
-    // matters because rollouts in the same cwd can pile up over weeks
-    // and we'd otherwise pay a JSON parse for every one of them.
+    // Codex shards by date: ~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<id>.jsonl
     //
-    // Asymmetric window: file must be born AT-OR-AFTER spawn (with 1s
-    // past slack for clock skew), up to 90s into the future. Codex
-    // can take ~10s to initialize models/MCP before writing the first
-    // record, which broke the earlier ±10s symmetric check — the
-    // matching rollout's birthtime was 11s after spawn and got
-    // filtered out, leaving the chat panel stuck on "waiting for
-    // first message" indefinitely.
+    // CRITICAL: codex creates the rollout file LAZILY — it picks the
+    // filename at session start (with the session-start timestamp
+    // baked into the name) but doesn't actually create the file on
+    // disk until the user's first prompt arrives. So the file's
+    // birthtime can be MINUTES after PTY spawn (we saw 7 minutes in
+    // real use). Using birthtime here misses every session where the
+    // user paused before typing.
+    //
+    // Real signal: the timestamp encoded in the filename itself,
+    // which is the session start time. Parse that out and compare to
+    // PTY spawn. Asymmetric window because session-start is always
+    // very close to spawn (the codex CLI mints it within ~1s).
     const root = join(homedir(), '.codex', 'sessions');
-    const PAST_GRACE_MS = 1_000;
-    const FUTURE_WINDOW_MS = 90_000;
+    const PAST_GRACE_MS = 5_000;
+    const FUTURE_WINDOW_MS = 30_000;
     const days = [
       new Date(opts.spawnedAtMs),
       new Date(opts.spawnedAtMs - 86400_000),
       new Date(opts.spawnedAtMs + 86400_000),
     ];
 
-    const inWindow: { path: string; birthtimeMs: number }[] = [];
+    const inWindow: { path: string; startMs: number }[] = [];
     for (const d of days) {
       const dayDir = join(root, String(d.getUTCFullYear()), pad2(d.getUTCMonth() + 1), pad2(d.getUTCDate()));
       let entries: string[];
       try { entries = await readdir(dayDir); } catch { continue; }
       for (const f of entries.filter((e) => e.startsWith('rollout-') && e.endsWith('.jsonl'))) {
-        const full = join(dayDir, f);
-        let s;
-        try { s = await stat(full); } catch { continue; }
-        const delta = s.birthtimeMs - opts.spawnedAtMs;
+        const startMs = parseCodexFilenameStartMs(f);
+        if (startMs === null) continue;
+        const delta = startMs - opts.spawnedAtMs;
         if (delta >= -PAST_GRACE_MS && delta <= FUTURE_WINDOW_MS) {
-          inWindow.push({ path: full, birthtimeMs: s.birthtimeMs });
+          inWindow.push({ path: join(dayDir, f), startMs });
         }
       }
     }
@@ -650,7 +662,7 @@ export const codexAdapter: TranscriptAdapter = {
     // Verify cwd on the in-window candidates only. Closer-to-spawn
     // first so we typically only check one file.
     inWindow.sort((a, b) =>
-      Math.abs(a.birthtimeMs - opts.spawnedAtMs) - Math.abs(b.birthtimeMs - opts.spawnedAtMs),
+      Math.abs(a.startMs - opts.spawnedAtMs) - Math.abs(b.startMs - opts.spawnedAtMs),
     );
     for (const c of inWindow) {
       if (await codexFileMatchesCwd(c.path, opts.cwd)) return c.path;
