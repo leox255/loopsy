@@ -411,6 +411,12 @@ class _TerminalScreenState extends State<TerminalScreen> {
     // speech result, so we don't overwrite their edits on subsequent results.
     bool userEdited = false;
     String lastSpeech = '';
+    // Auto-start guard: gate the post-frame auto-start so it only fires on
+    // FIRST build, not on every rebuild. Without this, if the user cleared
+    // the field after stopping the mic, the auto-start would fire again
+    // and either crash the speech engine ("already listening") or fight
+    // the user's typing. This was the "click mic, try to type, crash" path.
+    bool autoStartFired = false;
 
     await showModalBottomSheet<void>(
       context: context,
@@ -421,30 +427,50 @@ class _TerminalScreenState extends State<TerminalScreen> {
       ),
       builder: (ctx) => StatefulBuilder(builder: (ctx, setSheet) {
         Future<void> startListening() async {
-          userEdited = false;
-          await _speech.listen(
-            onResult: (res) {
-              if (userEdited) return; // honor manual edits, stop overwriting
-              setSheet(() {
-                lastSpeech = res.recognizedWords;
-                ctl.value = TextEditingValue(
-                  text: lastSpeech,
-                  selection: TextSelection.collapsed(offset: lastSpeech.length),
-                );
-              });
-            },
-            listenOptions: stt.SpeechListenOptions(partialResults: true),
-          );
-          setSheet(() => listening = true);
+          // Guard against double-start: speech_to_text throws if listen() is
+          // called while a session is already active.
+          if (_speech.isListening) return;
+          try {
+            userEdited = false;
+            await _speech.listen(
+              onResult: (res) {
+                if (userEdited) return; // honor manual edits, stop overwriting
+                setSheet(() {
+                  lastSpeech = res.recognizedWords;
+                  ctl.value = TextEditingValue(
+                    text: lastSpeech,
+                    selection: TextSelection.collapsed(offset: lastSpeech.length),
+                  );
+                });
+              },
+              listenOptions: stt.SpeechListenOptions(partialResults: true),
+            );
+            setSheet(() => listening = true);
+          } catch (e) {
+            // Speech can fail mid-listen (mic permission revoked, system
+            // recognizer unavailable on simulator, AVAudioSession contention
+            // with another app). Surface as muted state instead of crashing
+            // the whole route.
+            setSheet(() => listening = false);
+          }
         }
 
         Future<void> stopListening() async {
-          await _speech.stop();
+          if (!_speech.isListening) {
+            setSheet(() => listening = false);
+            return;
+          }
+          try {
+            await _speech.stop();
+          } catch (_) {/* engine already torn down — fine */}
           setSheet(() => listening = false);
         }
 
-        // Auto-start listening when sheet opens.
-        if (!listening && ctl.text.isEmpty) {
+        // Auto-start listening ONCE when the sheet first opens. Gating on a
+        // flag rather than ctl.text/listening because those can flip during
+        // the session and we don't want to re-arm mid-edit.
+        if (!autoStartFired) {
+          autoStartFired = true;
           WidgetsBinding.instance.addPostFrameCallback((_) {
             if (Navigator.of(ctx).canPop()) startListening();
           });
@@ -570,7 +596,11 @@ class _TerminalScreenState extends State<TerminalScreen> {
         );
       }),
     );
-    await _speech.stop();
+    // Defensive: the sheet dismisses through several paths (Cancel, Send,
+    // swipe-down, route pop on backgrounding). Stopping speech here is the
+    // single common cleanup — wrap in try/catch since the engine may be
+    // already-stopped or never started in some of those paths.
+    try { await _speech.stop(); } catch (_) { /* already stopped */ }
     focus.dispose();
     ctl.dispose();
   }
@@ -607,7 +637,13 @@ class _TerminalScreenState extends State<TerminalScreen> {
           icon: const HugeIcon(icon: HugeIcons.strokeRoundedArrowLeft02, color: LoopsyColors.fg),
           onPressed: () => Navigator.of(context).maybePop(),
         ),
+        // Title kept tight: agent icon + agent name. The 6-char sessionId
+        // tail used to live here too, but cramming it next to the toggle
+        // and the status pill caused the AppBar to overflow on iPhones
+        // narrower than ~iPhone Plus. SessionId is shown on the home list
+        // and isn't load-bearing while you're inside the session.
         title: Row(
+          mainAxisSize: MainAxisSize.min,
           children: [
             HugeIcon(
               icon: _agentIcon(),
@@ -615,26 +651,16 @@ class _TerminalScreenState extends State<TerminalScreen> {
               size: 18,
             ),
             const SizedBox(width: 8),
-            Text(widget.agent, style: const TextStyle(fontFamily: 'JetBrainsMono')),
-            const SizedBox(width: 8),
-            Container(width: 4, height: 4, decoration: const BoxDecoration(color: LoopsyColors.muted, shape: BoxShape.circle)),
-            const SizedBox(width: 8),
-            Text(
-              widget.sessionId.substring(0, 6),
-              style: const TextStyle(fontFamily: 'JetBrainsMono', fontSize: 12, color: LoopsyColors.muted),
+            Flexible(
+              child: Text(
+                widget.agent,
+                style: const TextStyle(fontFamily: 'JetBrainsMono'),
+                overflow: TextOverflow.ellipsis,
+              ),
             ),
           ],
         ),
         actions: [
-          _ViewToggle(
-            mode: _view,
-            onChanged: (m) {
-              if (m == _view) return;
-              setState(() => _view = m);
-              if (m == _ViewMode.chat) _ensureChatSubscribed();
-            },
-          ),
-          const SizedBox(width: 8),
           Padding(
             padding: const EdgeInsets.only(right: 12),
             child: Row(
@@ -667,6 +693,15 @@ class _TerminalScreenState extends State<TerminalScreen> {
       // doesn't need the modifier row.
       body: Column(
         children: [
+          _ViewToggleBar(
+            mode: _view,
+            sessionIdShort: widget.sessionId.substring(0, 6),
+            onChanged: (m) {
+              if (m == _view) return;
+              setState(() => _view = m);
+              if (m == _ViewMode.chat) _ensureChatSubscribed();
+            },
+          ),
           Expanded(
             child: IndexedStack(
               index: _view == _ViewMode.terminal ? 0 : 1,
@@ -717,60 +752,108 @@ class _TerminalScreenState extends State<TerminalScreen> {
   }
 }
 
-/// Two-state segmented control in the AppBar that swaps the body between
-/// the terminal grid and the chat-style transcript. Stateless: parent
-/// owns [_ViewMode] and just rebuilds.
-class _ViewToggle extends StatelessWidget {
+/// Slim full-width strip pinned below the AppBar that switches between
+/// the terminal grid and the chat-style transcript. iOS-style "segmented
+/// control under the nav bar" pattern — much more legible than cramming
+/// the toggle into AppBar.actions next to a status pill (the previous
+/// layout overflowed on narrower iPhones).
+class _ViewToggleBar extends StatelessWidget {
   final _ViewMode mode;
+  final String sessionIdShort;
   final ValueChanged<_ViewMode> onChanged;
-  const _ViewToggle({required this.mode, required this.onChanged});
+  const _ViewToggleBar({
+    required this.mode,
+    required this.sessionIdShort,
+    required this.onChanged,
+  });
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      margin: const EdgeInsets.symmetric(vertical: 8),
-      decoration: BoxDecoration(
-        color: LoopsyColors.surfaceAlt,
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: LoopsyColors.border),
+      decoration: const BoxDecoration(
+        color: LoopsyColors.surface,
+        border: Border(bottom: BorderSide(color: LoopsyColors.border)),
       ),
+      padding: const EdgeInsets.fromLTRB(10, 6, 10, 8),
       child: Row(
-        mainAxisSize: MainAxisSize.min,
         children: [
-          _toggleButton(
-            label: 'term',
-            icon: HugeIcons.strokeRoundedCommandLine,
-            selected: mode == _ViewMode.terminal,
-            onTap: () => onChanged(_ViewMode.terminal),
+          // Session id moves here from the AppBar title so we still surface
+          // which session this is, without competing with the toggle.
+          Text(
+            sessionIdShort,
+            style: const TextStyle(
+              fontFamily: 'JetBrainsMono',
+              fontSize: 11,
+              color: LoopsyColors.muted,
+              fontWeight: FontWeight.w600,
+            ),
           ),
-          _toggleButton(
-            label: 'chat',
-            icon: HugeIcons.strokeRoundedAiChat02,
-            selected: mode == _ViewMode.chat,
-            onTap: () => onChanged(_ViewMode.chat),
+          const SizedBox(width: 12),
+          // Centered segmented control. Expanded so the two halves are
+          // equal width regardless of label length.
+          Expanded(
+            child: Container(
+              height: 32,
+              decoration: BoxDecoration(
+                color: LoopsyColors.surfaceAlt,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: LoopsyColors.border),
+              ),
+              padding: const EdgeInsets.all(2),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: _SegmentButton(
+                      label: 'term',
+                      icon: HugeIcons.strokeRoundedCommandLine,
+                      selected: mode == _ViewMode.terminal,
+                      onTap: () => onChanged(_ViewMode.terminal),
+                    ),
+                  ),
+                  Expanded(
+                    child: _SegmentButton(
+                      label: 'chat',
+                      icon: HugeIcons.strokeRoundedAiChat02,
+                      selected: mode == _ViewMode.chat,
+                      onTap: () => onChanged(_ViewMode.chat),
+                    ),
+                  ),
+                ],
+              ),
+            ),
           ),
         ],
       ),
     );
   }
+}
 
-  Widget _toggleButton({
-    required String label,
-    required IconData icon,
-    required bool selected,
-    required VoidCallback onTap,
-  }) {
+class _SegmentButton extends StatelessWidget {
+  final String label;
+  final IconData icon;
+  final bool selected;
+  final VoidCallback onTap;
+  const _SegmentButton({
+    required this.label,
+    required this.icon,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
     return InkWell(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(7),
+      borderRadius: BorderRadius.circular(6),
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 140),
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
         decoration: BoxDecoration(
           color: selected ? LoopsyColors.accent : Colors.transparent,
-          borderRadius: BorderRadius.circular(7),
+          borderRadius: BorderRadius.circular(6),
         ),
+        alignment: Alignment.center,
         child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
           mainAxisSize: MainAxisSize.min,
           children: [
             HugeIcon(
@@ -783,7 +866,7 @@ class _ViewToggle extends StatelessWidget {
               label,
               style: TextStyle(
                 color: selected ? LoopsyColors.bg : LoopsyColors.muted,
-                fontSize: 11,
+                fontSize: 12,
                 fontWeight: FontWeight.w700,
                 fontFamily: 'JetBrainsMono',
               ),

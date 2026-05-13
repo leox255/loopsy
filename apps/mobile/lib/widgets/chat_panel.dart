@@ -5,6 +5,7 @@ import 'package:hugeicons/hugeicons.dart';
 
 import '../services/chat_event.dart';
 import '../theme.dart';
+import 'markdown_text.dart';
 
 /// Read-only chat-style view of the live Claude conversation. Driven by a
 /// [ChatLog] populated from `chat-event` frames over the existing relay
@@ -228,10 +229,15 @@ class _TextBubble extends StatelessWidget {
   const _TextBubble({required this.text, required this.isUser});
   @override
   Widget build(BuildContext context) {
+    // User messages are typically short and never contain markdown they
+    // typed deliberately, so render them as plain text in the accent
+    // bubble. Assistant messages get the markdown renderer — code fences,
+    // inline code, bold, italics, URLs. Spike confirmed assistant text
+    // blocks arrive atomic so mid-render fence-flicker isn't a concern.
     return Align(
       alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
       child: ConstrainedBox(
-        constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.85),
+        constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.88),
         child: Container(
           margin: const EdgeInsets.only(top: 4),
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
@@ -240,10 +246,15 @@ class _TextBubble extends StatelessWidget {
             borderRadius: BorderRadius.circular(14),
             border: Border.all(color: isUser ? LoopsyColors.accentDark : LoopsyColors.border),
           ),
-          child: SelectableText(
-            text,
-            style: const TextStyle(color: LoopsyColors.fg, fontSize: 14, height: 1.4),
-          ),
+          child: isUser
+              ? SelectableText(
+                  text,
+                  style: const TextStyle(color: LoopsyColors.fg, fontSize: 14, height: 1.4),
+                )
+              : MarkdownText(
+                  text,
+                  baseStyle: const TextStyle(color: LoopsyColors.fg, fontSize: 14, height: 1.45),
+                ),
         ),
       ),
     );

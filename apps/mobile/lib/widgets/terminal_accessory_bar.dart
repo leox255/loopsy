@@ -59,10 +59,28 @@ class TerminalAccessoryBar extends StatelessWidget {
             scrollDirection: Axis.horizontal,
             child: Row(
               children: [
+                // Mic first: it's the highest-value tap in the bar
+                // (voice-to-prompt is what makes the phone faster than the
+                // laptop for long prompts), so it shouldn't be at the end
+                // where the user has to scroll to reach it.
+                if (onVoice != null)
+                  _IconKey(
+                    icon: HugeIcons.strokeRoundedMic01,
+                    color: LoopsyColors.accent,
+                    onTap: () { HapticFeedback.selectionClick(); onVoice!(); },
+                  ),
                 _LabelKey(label: 'ctrl', selected: ctrlArmed, onTap: () { HapticFeedback.selectionClick(); onToggleCtrl(); }),
                 _LabelKey(label: 'alt', selected: altArmed, onTap: () { HapticFeedback.selectionClick(); onToggleAlt(); }),
                 _LabelKey(label: 'esc', onTap: () => _tap([0x1b])),
                 _LabelKey(label: 'tab', onTap: () => _tap([0x09])),
+                // Backspace fallback: iOS's TextInputType.visiblePassword
+                // doesn't always deliver the system-keyboard delete event
+                // through xterm.dart's CustomTextEdit pipeline, so the
+                // PTY never sees it. A dedicated key here always works.
+                // Using the unicode glyph instead of an icon so it reads
+                // unambiguously as backspace (HugeIcons 0.0.11 only ships
+                // a generic Delete02 X-mark, which would read as "clear").
+                _LabelKey(label: '⌫', onTap: () => _tap([0x7f])),
                 _IconKey(icon: HugeIcons.strokeRoundedArrowUp02, onTap: () => _tap([0x1b, 0x5b, 0x41])),
                 _IconKey(icon: HugeIcons.strokeRoundedArrowDown02, onTap: () => _tap([0x1b, 0x5b, 0x42])),
                 _IconKey(icon: HugeIcons.strokeRoundedArrowLeft02, onTap: () => _tap([0x1b, 0x5b, 0x44])),
@@ -70,12 +88,6 @@ class TerminalAccessoryBar extends StatelessWidget {
                 _LabelKey(label: '|', onTap: () => _tap('|'.codeUnits)),
                 _LabelKey(label: '/', onTap: () => _tap('/'.codeUnits)),
                 _LabelKey(label: '~', onTap: () => _tap('~'.codeUnits)),
-                if (onVoice != null)
-                  _IconKey(
-                    icon: HugeIcons.strokeRoundedMic01,
-                    color: LoopsyColors.accent,
-                    onTap: () { HapticFeedback.selectionClick(); onVoice!(); },
-                  ),
               ],
             ),
           ),
