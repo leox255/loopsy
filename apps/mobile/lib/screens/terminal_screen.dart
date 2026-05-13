@@ -409,22 +409,24 @@ class _TerminalScreenState extends State<TerminalScreen> {
     final session = _session;
     if (session == null) return;
 
+    // Universal submit sequence verified against real PTY runs of all
+    // three agents (see packages/daemon/scripts/_test-{claude,codex,
+    // gemini}-input.mjs):
+    //
+    //   ESC[200~ <text> \n ESC[201~  +  160ms  +  \r
+    //
+    // The bracketed paste with an embedded LF satisfies Codex's
+    // requirement that the pasted content end with a newline before
+    // the subsequent Enter triggers submit. Gemini's 30ms "fast
+    // return" anti-spam guard is comfortably cleared by the 160ms
+    // gap before the CR. Claude accepts it as a normal pasted prompt
+    // followed by Enter. One sequence, three agents, no branches.
     final body = utf8.encode(text);
     _captureSummary([...body, 0x0d]);
 
-    if (widget.agent == 'claude') {
-      session.sendStdin([...body, 0x0d]);
-      return;
-    }
-
-    // Codex and Gemini both distinguish plain Enter from Ctrl+J/LF:
-    // Enter submits, while LF is treated as an insert-newline binding.
-    // Send the prompt as bracketed paste so their paste/fast-return
-    // heuristics do not reinterpret a fast synthetic send as multiline
-    // typing, then send a plain CR key event.
     const pasteStart = [0x1b, 0x5b, 0x32, 0x30, 0x30, 0x7e]; // ESC[200~
     const pasteEnd = [0x1b, 0x5b, 0x32, 0x30, 0x31, 0x7e]; // ESC[201~
-    session.sendStdin([...pasteStart, ...body, ...pasteEnd]);
+    session.sendStdin([...pasteStart, ...body, 0x0a, ...pasteEnd]);
     await Future<void>.delayed(const Duration(milliseconds: 160));
     session.sendStdin([0x0d]);
   }
