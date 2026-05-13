@@ -588,6 +588,13 @@ export class RelayClient {
   private handleChatSubscribe(sessionId: string, msg: { fromOffset?: number }): void {
     this.stopChatStream(sessionId);
     const info = this.pty.get(sessionId);
+    this.log.info('[chat-debug] subscribe', {
+      sessionId: sessionId.slice(0, 8),
+      hasPty: !!info,
+      agent: info?.agent,
+      cwd: info?.cwd,
+      createdAt: info?.createdAt,
+    });
     if (!info) {
       this.sendText({
         type: 'chat-event',
@@ -633,6 +640,16 @@ export class RelayClient {
       });
       stream.on('event', (event: ChatEvent) => {
         const buffered = this.ws?.bufferedAmount ?? 0;
+        this.log.info('[chat-debug] event', {
+          sessionId: sessionId.slice(0, 8),
+          kind: event.kind,
+          // @ts-expect-error optional fields per kind
+          role: event.role,
+          // @ts-expect-error optional fields per kind
+          blockType: event.block?.type,
+          // @ts-expect-error optional fields per kind
+          reason: event.reason,
+        });
         if (buffered > CHAT_BACKPRESSURE_BYTES) {
           this.sendText({
             type: 'chat-event',
@@ -650,6 +667,7 @@ export class RelayClient {
         this.sendText({ type: 'chat-event', sessionId, event });
       });
       this.chats.set(sessionId, stream);
+      this.log.info('[chat-debug] stream start', { sessionId: sessionId.slice(0, 8) });
       void stream.start();
     });
   }

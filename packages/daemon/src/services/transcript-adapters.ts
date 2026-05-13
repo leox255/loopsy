@@ -609,8 +609,17 @@ export const codexAdapter: TranscriptAdapter = {
     // session_meta.cwd matches (expensive — opens the file). Order
     // matters because rollouts in the same cwd can pile up over weeks
     // and we'd otherwise pay a JSON parse for every one of them.
+    //
+    // Asymmetric window: file must be born AT-OR-AFTER spawn (with 1s
+    // past slack for clock skew), up to 90s into the future. Codex
+    // can take ~10s to initialize models/MCP before writing the first
+    // record, which broke the earlier ±10s symmetric check — the
+    // matching rollout's birthtime was 11s after spawn and got
+    // filtered out, leaving the chat panel stuck on "waiting for
+    // first message" indefinitely.
     const root = join(homedir(), '.codex', 'sessions');
-    const GRACE_MS = 10_000;
+    const PAST_GRACE_MS = 1_000;
+    const FUTURE_WINDOW_MS = 90_000;
     const days = [
       new Date(opts.spawnedAtMs),
       new Date(opts.spawnedAtMs - 86400_000),
@@ -626,7 +635,8 @@ export const codexAdapter: TranscriptAdapter = {
         const full = join(dayDir, f);
         let s;
         try { s = await stat(full); } catch { continue; }
-        if (Math.abs(s.birthtimeMs - opts.spawnedAtMs) <= GRACE_MS) {
+        const delta = s.birthtimeMs - opts.spawnedAtMs;
+        if (delta >= -PAST_GRACE_MS && delta <= FUTURE_WINDOW_MS) {
           inWindow.push({ path: full, birthtimeMs: s.birthtimeMs });
         }
       }
@@ -680,7 +690,12 @@ async function pickBySpawnBirthtime(
   // created back-to-back in the same cwd shared their chat panel.
   // Filtering by ≥ spawn excludes prior siblings cleanly.
   graceMsPast = 1_000,
-  graceMsFuture = 60_000,
+  // 90s future window: agents like Codex can take ~10–15s before
+  // writing their first record (MCP init, model load), and we saw a
+  // 60s cap miss a legitimate file in real use. 90s gives generous
+  // headroom without widening collisions — old neighbouring files
+  // are excluded by the past-grace lower bound anyway.
+  graceMsFuture = 90_000,
 ): Promise<string | null> {
   const candidates: { path: string; birthtimeMs: number }[] = [];
   for (const f of filenames) {
