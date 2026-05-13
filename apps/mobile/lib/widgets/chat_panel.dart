@@ -529,58 +529,48 @@ class _TurnGroupTileState extends State<_TurnGroupTile> {
     final thinkingCount = internalBlocks.whereType<ThinkingBlock>().length;
     final toolCount = internalBlocks.whereType<ToolUseBlock>().length;
 
-    final content = Column(
-      crossAxisAlignment: isUser ? CrossAxisAlignment.end : CrossAxisAlignment.start,
-      children: [
-        for (final b in responseBlocks)
-          _BlockView(block: b, isUser: isUser, theme: widget.theme),
-        if (internalBlocks.isNotEmpty) ...[
-          const SizedBox(height: 6),
-          _InternalsToggle(
-            thinkingCount: thinkingCount,
-            toolCount: toolCount,
-            expanded: _internalsExpanded,
-            theme: widget.theme,
-            onTap: () => setState(() => _internalsExpanded = !_internalsExpanded),
-          ),
-          if (_internalsExpanded)
-            Padding(
-              padding: const EdgeInsets.only(top: 4),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  for (final b in internalBlocks) ...[
-                    _BlockView(block: b, isUser: false, theme: widget.theme),
-                    if (b is ToolUseBlock && widget.toolResults[b.id] != null)
-                      _BlockView(
-                        block: widget.toolResults[b.id]!,
-                        isUser: false,
-                        theme: widget.theme,
-                      ),
-                  ],
-                ],
-              ),
-            ),
-        ],
-      ],
-    );
-
+    // No per-message avatar column — bubble alignment + color carries
+    // the sender cue, and reclaiming the ~34px gutter on both sides
+    // gives the conversation noticeably more breathing room. The
+    // AppBar already shows which agent this session belongs to, and
+    // the typing bubble (when the assistant is mid-stream) keeps a
+    // small accent avatar so liveness still has a face.
     return Padding(
       padding: const EdgeInsets.only(bottom: 14),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: isUser
-            ? [
-                const SizedBox(),
-                Expanded(child: content),
-                const SizedBox(width: 8),
-                _Avatar(theme: widget.theme, isUser: true),
-              ]
-            : [
-                _Avatar(theme: widget.theme, isUser: false),
-                const SizedBox(width: 8),
-                Expanded(child: content),
-              ],
+      child: Column(
+        crossAxisAlignment: isUser ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+        children: [
+          for (final b in responseBlocks)
+            _BlockView(block: b, isUser: isUser, theme: widget.theme),
+          if (internalBlocks.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            _InternalsToggle(
+              thinkingCount: thinkingCount,
+              toolCount: toolCount,
+              expanded: _internalsExpanded,
+              theme: widget.theme,
+              onTap: () => setState(() => _internalsExpanded = !_internalsExpanded),
+            ),
+            if (_internalsExpanded)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    for (final b in internalBlocks) ...[
+                      _BlockView(block: b, isUser: false, theme: widget.theme),
+                      if (b is ToolUseBlock && widget.toolResults[b.id] != null)
+                        _BlockView(
+                          block: widget.toolResults[b.id]!,
+                          isUser: false,
+                          theme: widget.theme,
+                        ),
+                    ],
+                  ],
+                ),
+              ),
+          ],
+        ],
       ),
     );
   }
@@ -716,7 +706,10 @@ class _TextBubble extends StatelessWidget {
     return Align(
       alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
       child: ConstrainedBox(
-        constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.78),
+        // 88% — wider now that we dropped the per-message avatar
+        // column. Still leaves enough breathing room on the opposite
+        // edge for the alignment cue to read.
+        constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.88),
         child: Container(
           margin: const EdgeInsets.only(top: 2, bottom: 2),
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
