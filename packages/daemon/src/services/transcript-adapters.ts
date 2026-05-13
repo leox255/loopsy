@@ -612,9 +612,21 @@ const CODEX_FILENAME_RE = /^rollout-(\d{4})-(\d{2})-(\d{2})T(\d{2})-(\d{2})-(\d{
 function parseCodexFilenameStartMs(filename: string): number | null {
   const m = CODEX_FILENAME_RE.exec(filename);
   if (!m) return null;
-  // Codex writes the filename in UTC (the `T` follows ISO-8601 shape).
-  const iso = `${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6]}Z`;
-  const ms = Date.parse(iso);
+  // Codex writes the filename in LOCAL time (verified against the
+  // session_meta record which carries a Z-suffixed UTC timestamp:
+  // filename "T16-33-49" + payload "13:33:49.240Z" → 3h offset =
+  // Africa/Nairobi). We deliberately omit the trailing Z so JS parses
+  // it as local-time, matching the daemon's own clock that emitted
+  // spawnedAtMs in epoch-ms.
+  const local = new Date(
+    Number(m[1]),
+    Number(m[2]) - 1, // months 0-indexed
+    Number(m[3]),
+    Number(m[4]),
+    Number(m[5]),
+    Number(m[6]),
+  );
+  const ms = local.getTime();
   return Number.isFinite(ms) ? ms : null;
 }
 
