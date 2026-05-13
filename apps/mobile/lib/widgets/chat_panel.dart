@@ -7,10 +7,11 @@ import '../services/chat_event.dart';
 import '../theme.dart';
 import 'markdown_text.dart';
 
-/// Read-only chat-style view of the live Claude conversation. Driven by a
+/// Chat-style view of the live Claude conversation. Driven by a
 /// [ChatLog] populated from `chat-event` frames over the existing relay
-/// WebSocket. The terminal view is the input channel for v1; this panel
-/// renders the running conversation in a more legible shape.
+/// WebSocket. v1 ships with input: the composer at the bottom routes
+/// typed prompts back through the parent's PTY stdin path (same channel
+/// the terminal view uses), so chat is no longer read-only.
 ///
 /// Designed to mount/unmount cheaply — TerminalScreen keeps it in an
 /// IndexedStack alongside the xterm view so toggling between them costs
@@ -21,7 +22,12 @@ class ChatPanel extends StatefulWidget {
   /// through [revision] so the parent only has to call setState.
   final ChatLog log;
   final int revision;
-  const ChatPanel({super.key, required this.log, required this.revision});
+  /// Send a single-line prompt to the underlying PTY. The parent (which
+  /// owns the relay session) wraps the bytes with a trailing `\r` and
+  /// pushes via the existing terminal-input channel. Null when the
+  /// session isn't connected — composer renders disabled.
+  final void Function(String text)? onSend;
+  const ChatPanel({super.key, required this.log, required this.revision, this.onSend});
 
   @override
   State<ChatPanel> createState() => _ChatPanelState();
@@ -70,16 +76,179 @@ class _ChatPanelState extends State<ChatPanel> {
         subtitle: 'Type in the terminal to start. The conversation will mirror here.',
       );
     }
-    return ListView.builder(
-      controller: _scroll,
-      padding: const EdgeInsets.fromLTRB(12, 12, 12, 18),
-      itemCount: log.turns.length + (log.lastError != null ? 1 : 0),
-      itemBuilder: (context, i) {
-        if (i == log.turns.length && log.lastError != null) {
-          return _ErrorRow(log.lastError!);
-        }
-        return _TurnTile(turn: log.turns[i]);
-      },
+    final hasDroppedHeader = log.droppedTurns > 0;
+    final hasErrorFooter = log.lastError != null;
+    final extraTop = hasDroppedHeader ? 1 : 0;
+    return Column(
+      children: [
+        Expanded(
+          child: ListView.builder(
+            controller: _scroll,
+            padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
+            itemCount: log.turns.length + extraTop + (hasErrorFooter ? 1 : 0),
+            itemBuilder: (context, i) {
+              if (hasDroppedHeader && i == 0) {
+                return _DroppedHeader(count: log.droppedTurns);
+              }
+              final idx = i - extraTop;
+              if (idx == log.turns.length && hasErrorFooter) {
+                return _ErrorRow(log.lastError!);
+              }
+              return _TurnTile(turn: log.turns[idx]);
+            },
+          ),
+        ),
+        _ChatComposer(onSend: widget.onSend),
+      ],
+    );
+  }
+}
+
+/// Bottom-anchored prompt composer. v1: single-line input that routes
+/// through the PTY stdin path the terminal view already uses, sending
+/// `<text>\r` to mimic the user pressing Enter at the prompt.
+///
+/// Known limits (per /codex review of the chat-input design, deferring
+/// to v2):
+///   - Multi-line: only the first line + \r gets sent.
+///   - Paste of multi-line: ditto.
+///   - Bracketed paste mode: not supported.
+///   - IME composition: untested.
+class _ChatComposer extends StatefulWidget {
+  final void Function(String text)? onSend;
+  const _ChatComposer({required this.onSend});
+
+  @override
+  State<_ChatComposer> createState() => _ChatComposerState();
+}
+
+class _ChatComposerState extends State<_ChatComposer> {
+  final TextEditingController _ctl = TextEditingController();
+  final FocusNode _focus = FocusNode();
+  bool _hasText = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctl.addListener(() {
+      final has = _ctl.text.trim().isNotEmpty;
+      if (has != _hasText) setState(() => _hasText = has);
+    });
+  }
+
+  @override
+  void dispose() {
+    _ctl.dispose();
+    _focus.dispose();
+    super.dispose();
+  }
+
+  void _send() {
+    final t = _ctl.text.trim();
+    if (t.isEmpty || widget.onSend == null) return;
+    widget.onSend!(t);
+    _ctl.clear();
+    // Keep the focus so the user can fire successive prompts without
+    // re-tapping the field — common pattern in chat UIs.
+    _focus.requestFocus();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final enabled = widget.onSend != null;
+    return Material(
+      color: LoopsyColors.surface,
+      child: SafeArea(
+        top: false,
+        child: Container(
+          decoration: const BoxDecoration(
+            border: Border(top: BorderSide(color: LoopsyColors.border)),
+          ),
+          padding: const EdgeInsets.fromLTRB(10, 8, 8, 10),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _ctl,
+                  focusNode: _focus,
+                  enabled: enabled,
+                  minLines: 1,
+                  maxLines: 5,
+                  textCapitalization: TextCapitalization.sentences,
+                  textInputAction: TextInputAction.send,
+                  onSubmitted: (_) => _send(),
+                  style: const TextStyle(color: LoopsyColors.fg, fontSize: 14),
+                  decoration: InputDecoration(
+                    hintText: enabled ? 'Message Claude…' : 'Disconnected',
+                    hintStyle: const TextStyle(color: LoopsyColors.muted),
+                    filled: true,
+                    fillColor: LoopsyColors.surfaceAlt,
+                    isDense: true,
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(22),
+                      borderSide: const BorderSide(color: LoopsyColors.border),
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(22),
+                      borderSide: const BorderSide(color: LoopsyColors.border),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(22),
+                      borderSide: const BorderSide(color: LoopsyColors.accent),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 6),
+              Material(
+                color: (_hasText && enabled) ? LoopsyColors.accent : LoopsyColors.surfaceAlt,
+                shape: const CircleBorder(),
+                child: InkWell(
+                  customBorder: const CircleBorder(),
+                  onTap: (_hasText && enabled) ? _send : null,
+                  child: Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: HugeIcon(
+                      icon: HugeIcons.strokeRoundedSent,
+                      color: (_hasText && enabled) ? LoopsyColors.bg : LoopsyColors.muted,
+                      size: 18,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _DroppedHeader extends StatelessWidget {
+  final int count;
+  const _DroppedHeader({required this.count});
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 14),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const HugeIcon(icon: HugeIcons.strokeRoundedArchive01, color: LoopsyColors.muted, size: 12),
+          const SizedBox(width: 6),
+          Text(
+            '$count earlier turns hidden',
+            style: const TextStyle(
+              color: LoopsyColors.muted,
+              fontSize: 11,
+              fontFamily: 'JetBrainsMono',
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -290,17 +459,27 @@ class _ThinkingMarker extends StatelessWidget {
   }
 }
 
-class _ToolCard extends StatelessWidget {
+class _ToolCard extends StatefulWidget {
   final IconData icon;
   final String title;
   final Color color;
   final String body;
   const _ToolCard({required this.icon, required this.title, required this.color, required this.body});
   @override
+  State<_ToolCard> createState() => _ToolCardState();
+}
+
+class _ToolCardState extends State<_ToolCard> {
+  static const int _previewLimit = 800;
+  bool _expanded = false;
+
+  @override
   Widget build(BuildContext context) {
+    final body = widget.body;
+    final hasMore = body.length > _previewLimit;
+    final shown = (_expanded || !hasMore) ? body : body.substring(0, _previewLimit);
     return Container(
       margin: const EdgeInsets.only(top: 4),
-      padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
       decoration: BoxDecoration(
         color: LoopsyColors.surfaceAlt,
         borderRadius: BorderRadius.circular(10),
@@ -309,32 +488,84 @@ class _ToolCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              HugeIcon(icon: icon, color: color, size: 14),
-              const SizedBox(width: 6),
-              Text(
-                title,
-                style: TextStyle(
-                  color: color,
-                  fontSize: 11,
-                  fontWeight: FontWeight.w700,
-                  fontFamily: 'JetBrainsMono',
+          Padding(
+            padding: const EdgeInsets.fromLTRB(10, 8, 10, 0),
+            child: Row(
+              children: [
+                HugeIcon(icon: widget.icon, color: widget.color, size: 14),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    widget.title,
+                    style: TextStyle(
+                      color: widget.color,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                      fontFamily: 'JetBrainsMono',
+                    ),
+                  ),
                 ),
-              ),
-            ],
+                if (hasMore)
+                  Text(
+                    '${body.length} chars',
+                    style: const TextStyle(
+                      color: LoopsyColors.muted,
+                      fontSize: 10,
+                      fontFamily: 'JetBrainsMono',
+                    ),
+                  ),
+              ],
+            ),
           ),
           if (body.trim().isNotEmpty) ...[
-            const SizedBox(height: 6),
-            SelectableText(
-              body.length > 1200 ? '${body.substring(0, 1200)}\n…(${body.length - 1200} more chars)' : body,
-              style: const TextStyle(
-                color: LoopsyColors.fg,
-                fontFamily: 'JetBrainsMono',
-                fontSize: 11.5,
-                height: 1.35,
+            Padding(
+              padding: EdgeInsets.fromLTRB(10, 6, 10, hasMore ? 0 : 10),
+              child: SelectableText(
+                shown,
+                style: const TextStyle(
+                  color: LoopsyColors.fg,
+                  fontFamily: 'JetBrainsMono',
+                  fontSize: 11.5,
+                  height: 1.35,
+                ),
               ),
             ),
+            // Expand affordance only when there's more to see. Tap on the
+            // whole row so it's an easy mobile target, not just the chevron.
+            if (hasMore)
+              InkWell(
+                onTap: () => setState(() => _expanded = !_expanded),
+                borderRadius: const BorderRadius.vertical(bottom: Radius.circular(10)),
+                child: Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  decoration: const BoxDecoration(
+                    border: Border(top: BorderSide(color: LoopsyColors.border)),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      HugeIcon(
+                        icon: _expanded
+                            ? HugeIcons.strokeRoundedArrowUp02
+                            : HugeIcons.strokeRoundedArrowDown02,
+                        color: LoopsyColors.muted,
+                        size: 12,
+                      ),
+                      const SizedBox(width: 6),
+                      Text(
+                        _expanded ? 'show less' : 'show ${body.length - _previewLimit} more',
+                        style: const TextStyle(
+                          color: LoopsyColors.muted,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          fontFamily: 'JetBrainsMono',
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
           ],
         ],
       ),

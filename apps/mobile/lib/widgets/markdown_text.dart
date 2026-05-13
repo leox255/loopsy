@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:hugeicons/hugeicons.dart';
 
 import '../theme.dart';
 
@@ -143,10 +145,29 @@ List<InlineSpan> _inlineSpans(String text, TextStyle base) {
   return spans;
 }
 
-class _CodeBlock extends StatelessWidget {
+class _CodeBlock extends StatefulWidget {
   final String text;
   final String lang;
   const _CodeBlock({required this.text, required this.lang});
+
+  @override
+  State<_CodeBlock> createState() => _CodeBlockState();
+}
+
+class _CodeBlockState extends State<_CodeBlock> {
+  bool _justCopied = false;
+
+  Future<void> _copy() async {
+    await Clipboard.setData(ClipboardData(text: widget.text.trimRight()));
+    HapticFeedback.selectionClick();
+    if (!mounted) return;
+    setState(() => _justCopied = true);
+    // Revert the icon after a moment so the user sees the affordance again
+    // next time they want to copy. 1.5s is enough to read "copied".
+    Future.delayed(const Duration(milliseconds: 1500), () {
+      if (mounted) setState(() => _justCopied = false);
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -160,29 +181,67 @@ class _CodeBlock extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          if (lang.isNotEmpty)
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-              decoration: const BoxDecoration(
-                border: Border(bottom: BorderSide(color: LoopsyColors.border)),
-              ),
-              child: Text(
-                lang,
-                style: const TextStyle(
-                  color: LoopsyColors.muted,
-                  fontSize: 10,
-                  fontFamily: 'JetBrainsMono',
-                  fontWeight: FontWeight.w600,
-                  letterSpacing: 0.5,
-                ),
-              ),
+          // Header row: language tag on the left, copy button on the right.
+          // We always show the row even when lang is empty so the copy
+          // affordance stays consistent — code blocks are the main thing
+          // users want to lift out of a chat reply onto their laptop.
+          Container(
+            padding: const EdgeInsets.fromLTRB(10, 2, 4, 2),
+            decoration: const BoxDecoration(
+              border: Border(bottom: BorderSide(color: LoopsyColors.border)),
             ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    widget.lang.isEmpty ? 'code' : widget.lang,
+                    style: const TextStyle(
+                      color: LoopsyColors.muted,
+                      fontSize: 10,
+                      fontFamily: 'JetBrainsMono',
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: 0.5,
+                    ),
+                  ),
+                ),
+                InkWell(
+                  onTap: _copy,
+                  borderRadius: BorderRadius.circular(6),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        HugeIcon(
+                          icon: _justCopied
+                              ? HugeIcons.strokeRoundedCheckmarkCircle02
+                              : HugeIcons.strokeRoundedCopy01,
+                          color: _justCopied ? LoopsyColors.good : LoopsyColors.muted,
+                          size: 14,
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          _justCopied ? 'copied' : 'copy',
+                          style: TextStyle(
+                            color: _justCopied ? LoopsyColors.good : LoopsyColors.muted,
+                            fontSize: 10,
+                            fontFamily: 'JetBrainsMono',
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
           Padding(
             padding: const EdgeInsets.all(10),
             child: SingleChildScrollView(
               scrollDirection: Axis.horizontal,
               child: SelectableText(
-                text.trimRight(),
+                widget.text.trimRight(),
                 style: const TextStyle(
                   color: LoopsyColors.fg,
                   fontFamily: 'JetBrainsMono',

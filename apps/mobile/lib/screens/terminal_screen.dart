@@ -665,6 +665,16 @@ class _TerminalScreenState extends State<TerminalScreen> {
             padding: const EdgeInsets.only(right: 12),
             child: Row(
               children: [
+                Text(
+                  widget.sessionId.substring(0, 6),
+                  style: const TextStyle(
+                    color: LoopsyColors.muted,
+                    fontSize: 12,
+                    fontFamily: 'JetBrainsMono',
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(width: 10),
                 Container(
                   width: 7,
                   height: 7,
@@ -695,7 +705,6 @@ class _TerminalScreenState extends State<TerminalScreen> {
         children: [
           _ViewToggleBar(
             mode: _view,
-            sessionIdShort: widget.sessionId.substring(0, 6),
             onChanged: (m) {
               if (m == _view) return;
               setState(() => _view = m);
@@ -724,7 +733,23 @@ class _TerminalScreenState extends State<TerminalScreen> {
                     theme: loopsyTerminalTheme,
                   ),
                 ),
-                ChatPanel(log: _chatLog, revision: _chatRevision),
+                ChatPanel(
+                  log: _chatLog,
+                  revision: _chatRevision,
+                  // Chat input v1 routes through the same PTY stdin channel
+                  // the terminal view uses. Echo into the local terminal
+                  // emulator too so the user sees their prompt land in
+                  // term view if they toggle back — Claude's JSONL writer
+                  // doesn't see the keystrokes until Claude itself
+                  // processes them, so we'd lose the prompt otherwise.
+                  onSend: _session == null
+                      ? null
+                      : (text) {
+                          final bytes = utf8.encode('$text\r');
+                          _session!.sendStdin(bytes);
+                          _captureSummary(bytes);
+                        },
+                ),
               ],
             ),
           ),
@@ -752,20 +777,14 @@ class _TerminalScreenState extends State<TerminalScreen> {
   }
 }
 
-/// Slim full-width strip pinned below the AppBar that switches between
-/// the terminal grid and the chat-style transcript. iOS-style "segmented
-/// control under the nav bar" pattern — much more legible than cramming
-/// the toggle into AppBar.actions next to a status pill (the previous
-/// layout overflowed on narrower iPhones).
+/// Full-width segmented strip pinned below the AppBar. Session-id moved
+/// back to the AppBar actions next to the status pill so this bar can
+/// span edge-to-edge — easier tap targets and matches the iOS pattern
+/// of full-width segmented controls under the nav.
 class _ViewToggleBar extends StatelessWidget {
   final _ViewMode mode;
-  final String sessionIdShort;
   final ValueChanged<_ViewMode> onChanged;
-  const _ViewToggleBar({
-    required this.mode,
-    required this.sessionIdShort,
-    required this.onChanged,
-  });
+  const _ViewToggleBar({required this.mode, required this.onChanged});
 
   @override
   Widget build(BuildContext context) {
@@ -775,54 +794,34 @@ class _ViewToggleBar extends StatelessWidget {
         border: Border(bottom: BorderSide(color: LoopsyColors.border)),
       ),
       padding: const EdgeInsets.fromLTRB(10, 6, 10, 8),
-      child: Row(
-        children: [
-          // Session id moves here from the AppBar title so we still surface
-          // which session this is, without competing with the toggle.
-          Text(
-            sessionIdShort,
-            style: const TextStyle(
-              fontFamily: 'JetBrainsMono',
-              fontSize: 11,
-              color: LoopsyColors.muted,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-          const SizedBox(width: 12),
-          // Centered segmented control. Expanded so the two halves are
-          // equal width regardless of label length.
-          Expanded(
-            child: Container(
-              height: 32,
-              decoration: BoxDecoration(
-                color: LoopsyColors.surfaceAlt,
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: LoopsyColors.border),
-              ),
-              padding: const EdgeInsets.all(2),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: _SegmentButton(
-                      label: 'term',
-                      icon: HugeIcons.strokeRoundedCommandLine,
-                      selected: mode == _ViewMode.terminal,
-                      onTap: () => onChanged(_ViewMode.terminal),
-                    ),
-                  ),
-                  Expanded(
-                    child: _SegmentButton(
-                      label: 'chat',
-                      icon: HugeIcons.strokeRoundedAiChat02,
-                      selected: mode == _ViewMode.chat,
-                      onTap: () => onChanged(_ViewMode.chat),
-                    ),
-                  ),
-                ],
+      child: Container(
+        height: 32,
+        decoration: BoxDecoration(
+          color: LoopsyColors.surfaceAlt,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: LoopsyColors.border),
+        ),
+        padding: const EdgeInsets.all(2),
+        child: Row(
+          children: [
+            Expanded(
+              child: _SegmentButton(
+                label: 'term',
+                icon: HugeIcons.strokeRoundedCommandLine,
+                selected: mode == _ViewMode.terminal,
+                onTap: () => onChanged(_ViewMode.terminal),
               ),
             ),
-          ),
-        ],
+            Expanded(
+              child: _SegmentButton(
+                label: 'chat',
+                icon: HugeIcons.strokeRoundedAiChat02,
+                selected: mode == _ViewMode.chat,
+                onTap: () => onChanged(_ViewMode.chat),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

@@ -161,10 +161,27 @@ class ChatError extends ChatEvent {
 /// Aggregated state of a chat conversation, fed by a stream of ChatEvents.
 /// The widget layer just calls [apply] on each event and re-reads [turns].
 class ChatLog {
+  /// Hard cap on retained turns. Chat sessions running for hours can
+  /// produce thousands of turns; ListView.builder virtualizes rendering
+  /// but the data structure itself grows unbounded. We trim from the head
+  /// in batches (cheap amortized cost) once we cross [_maxTurns].
+  static const int _maxTurns = 500;
+  static const int _trimBatch = 50;
+
   final List<ChatTurn> turns = [];
   bool available = false;
   String? unavailableReason;
   String? lastError;
+  /// Cumulative count of turns dropped from the head. Surfaced so the UI
+  /// can show "(N earlier turns hidden)" when the user scrolls to the top.
+  int droppedTurns = 0;
+
+  void _trimIfNeeded() {
+    if (turns.length <= _maxTurns) return;
+    final drop = _trimBatch + (turns.length - _maxTurns);
+    droppedTurns += drop;
+    turns.removeRange(0, drop);
+  }
 
   void apply(ChatEvent ev) {
     switch (ev) {
@@ -177,6 +194,7 @@ class ChatLog {
         final existing = turns.indexWhere((t) => t.turnId == turnId);
         if (existing < 0) {
           turns.add(ChatTurn(turnId: turnId, role: role, ts: ts, messageId: messageId));
+          _trimIfNeeded();
         }
       case ChatBlockEvent(:final turnId, :final block):
         // createIfMissing: true so this is non-null. The `!` is here only
