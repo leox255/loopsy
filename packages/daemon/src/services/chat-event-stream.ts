@@ -115,29 +115,51 @@ export class ChatEventStream extends EventEmitter {
 
     let path = await this.adapter.resolveFile(resolveOpts());
 
-    // Race-window poll: when the PTY just spawned, the agent CLI takes a
-    // moment to create its transcript AND the loopsy→agent-session-id
-    // tracker takes a moment to discover and persist the mapping. The
-    // adapter's resolveFile re-checks both on every iteration so we pick
-    // up whichever signal lands first. 30s gives slow systems plenty of
-    // headroom — agent first-write is normally <2s.
+    // Indefinite poll: the agent's transcript file appears the first time
+    // the user sends a prompt. If the user lingers in the chat tab for
+    // a couple of minutes before typing anything, we still need to find
+    // the file the moment it shows up. The earlier 30s deadline made
+    // chat "die" silently in that case — users had to back out and
+    // re-enter the session.
+    //
+    // Backoff: 500ms for the first 30s (catches the fresh-spawn race),
+    // then 2s steady-state. Daemon-side cost is negligible (one stat()
+    // per file-listing per agent dir per tick); stopChatStream() on
+    // session-detach/close tears down the timer cleanly so we don't leak.
     if (!path && this.ptySpawnedAtMs !== undefined) {
-      const deadline = Date.now() + 30_000;
-      while (!path && !this.stopped && Date.now() < deadline) {
-        await new Promise((r) => setTimeout(r, 500));
+      // Emit an interim capability so the UI can show "waiting for
+      // transcript" if it wants, rather than blank. The composer is
+      // explicitly NOT gated on this — the user's first message goes
+      // through the PTY (terminal input), which is what makes the
+      // transcript appear in the first place.
+      this.emit('event', {
+        v: 1,
+        kind: 'capability',
+        chat: 'unavailable',
+        reason: 'waiting for first message — send a prompt to start',
+      } satisfies ChatEvent);
+
+      const startedAt = Date.now();
+      while (!path && !this.stopped) {
+        const elapsed = Date.now() - startedAt;
+        const interval = elapsed < 30_000 ? 500 : 2000;
+        await new Promise((r) => setTimeout(r, interval));
         path = await this.adapter.resolveFile(resolveOpts());
       }
     }
 
     if (this.stopped) return;
     if (!path) {
+      // Reached only when no spawn-time hint was provided AND initial
+      // resolve found nothing — e.g., a manual chat-tail invocation
+      // against a missing project dir.
       this.emit('event', {
         v: 1,
         kind: 'capability',
         chat: 'unavailable',
         reason: this.sessionId
           ? `no transcript file for sessionId=${this.sessionId} in ${this.cwd}`
-          : `no transcript appeared within 30s of spawn — agent may not write a transcript`,
+          : `no transcript found for this session`,
       } satisfies ChatEvent);
       return;
     }

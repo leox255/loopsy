@@ -755,14 +755,14 @@ class _TerminalScreenState extends State<TerminalScreen> {
                   log: _chatLog,
                   revision: _chatRevision,
                   agentName: _agentDisplayName(),
-                  // Composer is gated on chat-capability being confirmed
-                  // by the daemon (i.e., we've found the transcript and
-                  // the agent is actively writing to it). Sending into
-                  // the PTY before the agent has fully booted risked
-                  // the input landing in a buffer the agent hadn't yet
-                  // started reading from — looked like the message
-                  // "didn't go through". Once chat is available, this
-                  // path uses three deliberate choices:
+                  // Composer is enabled whenever we have a live PTY
+                  // session — NOT gated on chat capability, because the
+                  // user's first message is what causes the agent to
+                  // create its transcript file in the first place. The
+                  // poll loop on the daemon side will pick the file up
+                  // the moment it appears and back-fill the chat panel.
+                  //
+                  // The send sequence has three deliberate choices:
                   //   1. Bracketed paste around the text so ratatui-
                   //      style TUIs (Codex) treat the body as ONE unit
                   //      and don't interpret embedded newlines mid-
@@ -773,7 +773,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
                   //   3. \r\n as submit so TUIs that treat \r as
                   //      cursor-to-start still see the line feed and
                   //      fire submit.
-                  onSend: (_session == null || !_chatLog.available)
+                  onSend: _session == null
                       ? null
                       : (text) async {
                           final session = _session;

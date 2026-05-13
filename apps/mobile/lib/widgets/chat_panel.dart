@@ -103,18 +103,29 @@ class _ChatPanelState extends State<ChatPanel> with WidgetsBindingObserver {
   @override
   Widget build(BuildContext context) {
     final log = widget.log;
-    if (!log.available && log.unavailableReason != null) {
-      return _PlaceholderMessage(
-        icon: HugeIcons.strokeRoundedAiChat02,
-        title: 'Chat unavailable for this session',
-        subtitle: log.unavailableReason ?? '',
-      );
-    }
+
+    // Empty / waiting state: show the placeholder in the LIST area but
+    // keep the composer mounted underneath so the user can fire the
+    // first prompt without backing out. The first prompt is what
+    // causes the agent to create its transcript file, which the
+    // daemon's poll loop then picks up and renders here.
     if (log.turns.isEmpty) {
-      return const _PlaceholderMessage(
-        icon: HugeIcons.strokeRoundedAiChat02,
-        title: 'Waiting for the first message',
-        subtitle: 'Type in the terminal to start. The conversation will mirror here.',
+      final waiting = !log.available && log.unavailableReason != null;
+      return Column(
+        children: [
+          Expanded(
+            child: _PlaceholderMessage(
+              icon: HugeIcons.strokeRoundedAiChat02,
+              title: waiting
+                  ? 'Waiting for ${widget.agentName} to start'
+                  : 'Send a message to start',
+              subtitle: waiting
+                  ? (log.unavailableReason ?? '')
+                  : '${widget.agentName} will respond and the conversation will appear here.',
+            ),
+          ),
+          _ChatComposer(onSend: widget.onSend, agentName: widget.agentName),
+        ],
       );
     }
     // Filter out tool-result-only "user" turns — they're SDK plumbing,
