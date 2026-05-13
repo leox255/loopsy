@@ -263,6 +263,10 @@ class RelaySession {
   WebSocketChannel? _channel;
   StreamSubscription<dynamic>? _sub;
   bool _closed = false;
+  /// Resolved when the daemon emits `session-ready` after handleSessionOpen
+  /// has spawned the PTY. open() awaits this so callers (like the chat
+  /// composer) can fire follow-up control frames knowing the PTY exists.
+  Completer<void>? _readyCompleter;
 
   RelaySession({
     required this.pairing,
@@ -294,6 +298,10 @@ class RelaySession {
     String? customCommandId,
   }) async {
     _connect();
+    // Arm the ready-completer BEFORE we send session-open so we don't
+    // miss a fast session-ready ack (handleSessionOpen on the daemon
+    // can return within a few ms on the reattach path).
+    _readyCompleter = Completer<void>();
     sendControl({
       'type': 'session-open',
       'agent': agent,
@@ -305,6 +313,16 @@ class RelaySession {
       if (auto && approveToken != null) 'approveToken': approveToken,
       if (agent == 'custom' && customCommandId != null) 'customCommandId': customCommandId,
     });
+    // Wait for daemon's session-ready ack so callers can safely fire
+    // follow-up frames (chat-subscribe, etc) without racing the PTY
+    // spawn. Bounded 10s timeout — if the daemon never acks, fall
+    // through to let the caller proceed anyway (better than hanging
+    // the screen).
+    try {
+      await _readyCompleter!.future.timeout(const Duration(seconds: 10));
+    } catch (_) {
+      // timeout / completer reset — proceed best-effort
+    }
   }
 
   /// Send a `session-close` control to the daemon so the PTY is torn down,
@@ -336,6 +354,14 @@ class RelaySession {
         } else if (event is String) {
           try {
             final msg = jsonDecode(event) as Map<String, dynamic>;
+            // session-ready resolves the open() Future so callers can
+            // fire follow-up control frames knowing the daemon has the
+            // PTY. Forward to onControl too in case the screen wants
+            // to react to it.
+            if (msg['type'] == 'session-ready') {
+              final c = _readyCompleter;
+              if (c != null && !c.isCompleted) c.complete();
+            }
             onControl?.call(msg);
           } catch (_) {/* malformed text frame */}
         }
