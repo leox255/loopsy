@@ -16,6 +16,7 @@
 
 import { resolve } from 'node:path';
 import { ChatEventStream, type ChatEvent } from '../src/services/chat-event-stream.ts';
+import { adapterForAgent } from '../src/services/transcript-adapters.ts';
 
 function parseArgs() {
   const argv = process.argv.slice(2);
@@ -23,21 +24,23 @@ function parseArgs() {
   let sessionId: string | undefined;
   let noReplay = false;
   let fromOffset: number | undefined;
+  let agent = 'claude';
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--cwd') cwd = resolve(argv[++i]);
     else if (a === '--session-id') sessionId = argv[++i];
+    else if (a === '--agent') agent = argv[++i];
     else if (a === '--no-replay') noReplay = true;
     else if (a === '--from-offset') fromOffset = Number(argv[++i]);
     else if (a === '--help' || a === '-h') {
-      console.error(`Usage: chat-tail [--cwd <path>] [--session-id <uuid>] [--no-replay] [--from-offset <N>]`);
+      console.error(`Usage: chat-tail [--cwd <path>] [--agent claude|gemini|codex] [--session-id <id>] [--no-replay] [--from-offset <N>]`);
       process.exit(0);
     } else {
       console.error(`Unknown arg: ${a}`);
       process.exit(2);
     }
   }
-  return { cwd, sessionId, noReplay, fromOffset };
+  return { cwd, sessionId, noReplay, fromOffset, agent };
 }
 
 // Minimal ANSI helpers — no chalk dep so this can run straight via ts-strip.
@@ -92,38 +95,23 @@ function render(ev: ChatEvent): string {
 
 async function main() {
   const args = parseArgs();
-  console.error(c.dim(`chat-tail cwd=${args.cwd} sessionId=${args.sessionId ?? '(newest)'}\n`));
+  const adapter = adapterForAgent(args.agent);
+  if (!adapter) {
+    console.error(`No transcript adapter for agent: ${args.agent}`);
+    process.exit(2);
+  }
+  console.error(c.dim(`chat-tail agent=${args.agent} cwd=${args.cwd} sessionId=${args.sessionId ?? '(by spawn time)'}\n`));
+  // For the verifier, treat the current time as the spawn time so the
+  // adapter resolves a freshly-active file. --no-replay still works
+  // through startByteOffset (the existing inflation hack), and the
+  // stream will tail from there.
   const stream = new ChatEventStream({
+    adapter,
     cwd: args.cwd,
     sessionId: args.sessionId,
-    startByteOffset: args.fromOffset ?? (args.noReplay ? Number.MAX_SAFE_INTEGER : 0),
+    ptySpawnedAtMs: Date.now(),
+    startByteOffset: args.fromOffset ?? 0,
   });
-
-  // --no-replay: jump straight to current end-of-file. We approximate by
-  // starting at MAX_SAFE_INTEGER, which the tail rejects as a tail-gap. So
-  // do the proper thing: resolve the file first, stat it, pass the size.
-  if (args.noReplay) {
-    const { stat, readdir } = await import('node:fs/promises');
-    const { join } = await import('node:path');
-    const { homedir } = await import('node:os');
-    const root = join(homedir(), '.claude', 'projects', args.cwd.replace(/\//g, '-'));
-    try {
-      const entries = (await readdir(root)).filter((e) => e.endsWith('.jsonl'));
-      let newest = '';
-      let newestMt = 0;
-      for (const e of entries) {
-        const s = await stat(join(root, e));
-        if (s.mtimeMs > newestMt) { newest = join(root, e); newestMt = s.mtimeMs; }
-      }
-      if (newest) {
-        const s = await stat(newest);
-        const cur = new ChatEventStream({ cwd: args.cwd, sessionId: args.sessionId, startByteOffset: s.size });
-        wireAndRun(cur);
-        return;
-      }
-    } catch { /* fall through */ }
-  }
-
   wireAndRun(stream);
 }
 

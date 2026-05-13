@@ -26,7 +26,7 @@ import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { encodeCwdToProjectDir } from './chat-event-stream.js';
+import { encodeCwdToClaudeProjectDir as encodeCwdToProjectDir } from './transcript-adapters.js';
 
 const STATE_PATH = join(homedir(), '.loopsy', 'claude-sessions.json');
 

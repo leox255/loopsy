@@ -1,35 +1,27 @@
 /**
- * Reads a Claude CLI session's JSONL log and translates the raw records into
- * a stable `ChatEvent` stream that a chat-style UI can render.
+ * Per-session chat event stream — tails an agent's transcript file and
+ * emits a stable `ChatEvent` shape the mobile chat panel renders.
  *
- * Why this exists, in one line: PTY output is great for terminal rendering
- * but useless for "show me the conversation as a chat". The Claude CLI
- * already writes a structured trail of every turn to
- * `~/.claude/projects/<encoded-cwd>/<sessionId>.jsonl`; we tail that file.
+ * The agent-specific bits (where the file lives, how to translate
+ * records into ChatEvents) live in transcript-adapters.ts. This module
+ * owns the generic tail loop: byte-offset replay, fs.watch + polling
+ * fallback, size-delta gap detection, per-session backpressure
+ * coordination.
  *
- * Spike findings (2026-05-13) that shaped this design:
- *   - Each `assistant` record carries ONE content block (text / thinking /
- *     tool_use). The same `message.id` recurs across multiple records that
- *     belong to one logical turn. We group on messageId.
- *   - First line of every JSONL file contains the sessionId, so resolving
- *     "which JSONL belongs to this cwd" is just: pick newest *.jsonl in the
- *     project dir.
- *   - Tool results come back inside `user` records as
- *     `message.content[].type === "tool_result"`.
- *   - `fs.watch` alone is lossy on macOS — atomic rewrites and rapid
- *     appends can miss events. We pair it with a 500ms poll + size-delta
- *     check so we never lose data.
- *
- * The shape here is intentionally NOT exported to `@loopsy/protocol` yet.
- * This is the daemon-internal translator; once we trust it, the wire
- * protocol version gets carved out from it.
+ * Wire shape is co-located here so the relay client can `satisfies
+ * ChatEvent` against the emitted payloads without an extra dep. The
+ * shape is intentionally NOT exported to `@loopsy/protocol` yet — once
+ * we trust it across all four adapters, the version gets carved out.
  */
 
 import { EventEmitter } from 'node:events';
-import { readdir, readFile, stat } from 'node:fs/promises';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { readFile, stat } from 'node:fs/promises';
 import * as fs from 'node:fs';
+import {
+  encodeCwdToClaudeProjectDir,
+  type RecordTranslator,
+  type TranscriptAdapter,
+} from './transcript-adapters.js';
 
 export type ChatBlock =
   | { type: 'text'; text: string }
@@ -41,8 +33,8 @@ export type ChatErrorCode =
   | 'tail-gap'           // file shrank or rotated — we cannot guarantee we saw everything
   | 'jsonl-missing'      // expected file vanished
   | 'schema-unknown'     // a record had a shape we don't know how to translate
-  | 'session-ended'      // Claude session exited cleanly
-  | 'project-dir-missing'; // no `~/.claude/projects/<encoded-cwd>/` directory yet
+  | 'session-ended'      // session exited cleanly
+  | 'project-dir-missing';
 
 export type ChatEvent =
   | { v: 1; kind: 'capability'; chat: 'available' | 'unavailable'; reason?: string }
@@ -52,22 +44,17 @@ export type ChatEvent =
   | { v: 1; kind: 'error'; code: ChatErrorCode; message: string };
 
 export interface ChatEventStreamOptions {
-  /** The cwd Claude was launched from. Used to compute the project dir. */
+  /** Agent-specific adapter (knows where the transcript file lives + how to translate). */
+  adapter: TranscriptAdapter;
+  /** The cwd the PTY was launched from. */
   cwd: string;
-  /** Optional sessionId. When omitted, we resolve by birthtime / mtime. */
+  /** Optional sessionId hint — used by adapters that support exact lookup. */
   sessionId?: string;
   /**
-   * Epoch-ms timestamp when the owning PTY was spawned. Used to bind to
-   * the *correct* JSONL when multiple sessions share a cwd: Claude creates
-   * a fresh `<sessionId>.jsonl` immediately on launch, so the file whose
-   * `birthtime` is closest to our spawn time is ours. Without this, two
-   * concurrent Claude sessions in the same directory would both resolve
-   * to the most-recently-mtimed file and the wrong conversation would
-   * render in the chat panel.
+   * Epoch-ms when the owning PTY was spawned. Used to bind to the right
+   * file when multiple sessions share a directory.
    */
   ptySpawnedAtMs?: number;
-  /** Override Claude's project root. Default `~/.claude/projects`. Mostly for testing. */
-  claudeProjectsRoot?: string;
   /** Polling interval used as fs.watch backup. Default 500ms. */
   pollMs?: number;
   /** Byte offset to start tailing from. Default 0 (full replay). */
@@ -76,320 +63,59 @@ export interface ChatEventStreamOptions {
 
 const DEFAULT_POLL_MS = 500;
 
-/**
- * Encode a filesystem path the way Claude does for its projects directory:
- * leading `/` becomes the leading `-`, and every other `/` becomes `-`. The
- * encoding is lossy for paths containing literal dashes — that's Claude's
- * choice, not ours. We accept the same lossiness so directory lookups
- * agree with how Claude wrote the files.
- */
+/** Back-compat re-export so external callers don't have to learn the new module. */
 export function encodeCwdToProjectDir(cwd: string): string {
-  return cwd.replace(/\//g, '-');
+  return encodeCwdToClaudeProjectDir(cwd);
 }
 
-/**
- * Resolve the JSONL file path for a session.
- *
- * Resolution order:
- *   1. Explicit `sessionId` → exact `<sessionId>.jsonl` lookup.
- *   2. `ptySpawnedAtMs` → file whose birthtime is closest to spawn time,
- *      within a ±10s grace window. This disambiguates between multiple
- *      Claude sessions sharing a cwd (the bug fix: previously two PTYs
- *      in the same directory both resolved to the most-recently-mtimed
- *      file, so the wrong conversation rendered).
- *   3. Newest mtime — best-effort fallback when neither hint is given,
- *      and a second-line fallback when the spawn-time window matches no
- *      files (e.g., Claude hadn't yet written the JSONL at subscribe
- *      time on a slow filesystem).
- */
-async function resolveSessionFile(opts: {
-  cwd: string;
-  sessionId?: string;
-  ptySpawnedAtMs?: number;
-  claudeProjectsRoot: string;
-}): Promise<string | null> {
-  const dir = join(opts.claudeProjectsRoot, encodeCwdToProjectDir(opts.cwd));
-  let entries: string[];
-  try {
-    entries = await readdir(dir);
-  } catch {
-    return null;
-  }
-  const jsonls = entries.filter((e) => e.endsWith('.jsonl'));
-  if (jsonls.length === 0) return null;
-
-  if (opts.sessionId) {
-    const match = jsonls.find((e) => e === `${opts.sessionId}.jsonl`);
-    return match ? join(dir, match) : null;
-  }
-
-  // Stat all candidates once. `birthtimeMs` is the file creation time —
-  // present on macOS and Windows natively, falls back to ctime on Linux
-  // (which is fine for our purposes since Claude's JSONLs aren't moved
-  // or hard-linked).
-  const stats: { path: string; birthtimeMs: number; mtimeMs: number }[] = [];
-  for (const f of jsonls) {
-    const full = join(dir, f);
-    try {
-      const s = await stat(full);
-      stats.push({ path: full, birthtimeMs: s.birthtimeMs, mtimeMs: s.mtimeMs });
-    } catch { /* skip unreadable */ }
-  }
-  if (stats.length === 0) return null;
-
-  if (opts.ptySpawnedAtMs !== undefined) {
-    const spawn = opts.ptySpawnedAtMs;
-    const GRACE_MS = 10_000;
-    const inWindow = stats.filter(
-      (s) => Math.abs(s.birthtimeMs - spawn) <= GRACE_MS,
-    );
-    if (inWindow.length > 0) {
-      inWindow.sort((a, b) =>
-        Math.abs(a.birthtimeMs - spawn) - Math.abs(b.birthtimeMs - spawn),
-      );
-      return inWindow[0].path;
-    }
-    // STRICT MODE: when the caller gave us a spawn-time hint, refuse to
-    // fall back to newest-mtime. Two sessions in the same cwd would both
-    // see the same fallback file and the wrong conversation would render
-    // (the original "chat mixes up sessions" bug). Return null and let
-    // start() poll until our actual JSONL appears.
-    return null;
-  }
-
-  stats.sort((a, b) => b.mtimeMs - a.mtimeMs);
-  return stats[0].path;
-}
-
-interface ParsedLine {
-  raw: any;
-  byteOffset: number;
-}
-
-/**
- * Translate raw JSONL records into `ChatEvent`s, with `messageId` grouping
- * so the consumer can render multi-block assistant turns as a single
- * conversation entry.
- */
-class JsonlTranslator {
-  private currentTurnId: string | null = null;
-  private currentMessageId: string | null = null;
-  private blockIndex = 0;
-  private currentStopReason: string | undefined;
-
-  *translate(rec: any): Generator<ChatEvent> {
-    if (!rec || typeof rec !== 'object') return;
-
-    switch (rec.type) {
-      case 'user':
-        yield* this.handleUser(rec);
-        return;
-      case 'assistant':
-        yield* this.handleAssistant(rec);
-        return;
-      // Records we deliberately drop: noise for a chat view.
-      case 'permission-mode':
-      case 'file-history-snapshot':
-      case 'last-prompt':
-      case 'ai-title':
-      case 'queue-operation':
-      case 'attachment':
-      case 'system':
-        return;
-      default:
-        // Unknown — emit a soft error so the UI can surface "we missed something".
-        yield { v: 1, kind: 'error', code: 'schema-unknown', message: `unknown record type: ${rec.type}` };
-    }
-  }
-
-  /** Flush any open assistant turn — called at end-of-replay so the UI knows the turn closed. */
-  *flushOpenTurn(): Generator<ChatEvent> {
-    if (this.currentTurnId) {
-      yield { v: 1, kind: 'turn-end', turnId: this.currentTurnId, stopReason: this.currentStopReason };
-      this.currentTurnId = null;
-      this.currentMessageId = null;
-      this.blockIndex = 0;
-      this.currentStopReason = undefined;
-    }
-  }
-
-  private *handleUser(rec: any): Generator<ChatEvent> {
-    // Close any open assistant turn first; user turns are atomic in the JSONL.
-    yield* this.flushOpenTurn();
-
-    const turnId = rec.uuid ?? `user-${Date.now()}`;
-    const content = rec.message?.content;
-
-    // User records carry either a literal prompt string OR an array of
-    // content blocks that may include `tool_result`. We split: prompts get
-    // emitted as user turn-start+text-block+turn-end; tool_results become
-    // their own turn-start/block/turn-end triplets so the chat UI can
-    // render them inline.
-    if (typeof content === 'string') {
-      yield { v: 1, kind: 'turn-start', turnId, role: 'user', ts: rec.timestamp };
-      yield { v: 1, kind: 'block', turnId, messageId: turnId, index: 0, block: { type: 'text', text: content } };
-      yield { v: 1, kind: 'turn-end', turnId };
-      return;
-    }
-    if (!Array.isArray(content)) return;
-
-    let i = 0;
-    for (const b of content) {
-      if (b?.type === 'tool_result') {
-        const trId = `${turnId}#tr${i}`;
-        yield { v: 1, kind: 'turn-start', turnId: trId, role: 'user', ts: rec.timestamp };
-        yield {
-          v: 1,
-          kind: 'block',
-          turnId: trId,
-          messageId: trId,
-          index: 0,
-          block: {
-            type: 'tool_result',
-            toolUseId: b.tool_use_id,
-            content: b.content,
-            isError: b.is_error === true,
-          },
-        };
-        yield { v: 1, kind: 'turn-end', turnId: trId };
-      } else if (b?.type === 'text' && typeof b.text === 'string') {
-        const tId = `${turnId}#u${i}`;
-        yield { v: 1, kind: 'turn-start', turnId: tId, role: 'user', ts: rec.timestamp };
-        yield { v: 1, kind: 'block', turnId: tId, messageId: tId, index: 0, block: { type: 'text', text: b.text } };
-        yield { v: 1, kind: 'turn-end', turnId: tId };
-      }
-      i++;
-    }
-  }
-
-  private *handleAssistant(rec: any): Generator<ChatEvent> {
-    const messageId: string | undefined = rec.message?.id;
-    if (!messageId) {
-      yield { v: 1, kind: 'error', code: 'schema-unknown', message: 'assistant record missing message.id' };
-      return;
-    }
-    // Start a new turn whenever messageId changes. Same messageId across
-    // multiple records → same turn (one block per record).
-    if (this.currentMessageId !== messageId) {
-      yield* this.flushOpenTurn();
-      this.currentTurnId = messageId;
-      this.currentMessageId = messageId;
-      this.blockIndex = 0;
-      yield { v: 1, kind: 'turn-start', turnId: messageId, role: 'assistant', ts: rec.timestamp, messageId };
-    }
-    this.currentStopReason = rec.message?.stop_reason ?? this.currentStopReason;
-
-    const blocks = Array.isArray(rec.message?.content) ? rec.message.content : [];
-    for (const b of blocks) {
-      if (!b || typeof b !== 'object') continue;
-      const turnId = this.currentTurnId!;
-      const idx = this.blockIndex++;
-      switch (b.type) {
-        case 'text':
-          if (typeof b.text === 'string') {
-            yield { v: 1, kind: 'block', turnId, messageId, index: idx, block: { type: 'text', text: b.text } };
-          }
-          break;
-        case 'thinking':
-          // Thinking blocks may be empty / signature-only. Emit anyway so
-          // the UI can show "Claude is reasoning…" affordance.
-          yield {
-            v: 1,
-            kind: 'block',
-            turnId,
-            messageId,
-            index: idx,
-            block: { type: 'thinking', text: typeof b.thinking === 'string' ? b.thinking : '' },
-          };
-          break;
-        case 'tool_use':
-          yield {
-            v: 1,
-            kind: 'block',
-            turnId,
-            messageId,
-            index: idx,
-            block: { type: 'tool_use', id: b.id, name: b.name, input: b.input },
-          };
-          break;
-        default:
-          yield { v: 1, kind: 'error', code: 'schema-unknown', message: `unknown assistant block: ${b.type}` };
-      }
-    }
-
-    // Eager flush on terminal stop_reasons. Otherwise the very last turn
-    // of a conversation never sees a `turn-end` event (flushOpenTurn only
-    // fires when the NEXT turn arrives), so the mobile loading dots stay
-    // visible even though Claude is done responding. tool_use stays
-    // unflushed because Claude IS still working — a tool_result record
-    // and follow-up assistant message will arrive shortly.
-    const stop = rec.message?.stop_reason;
-    if (stop === 'end_turn' || stop === 'stop_sequence' || stop === 'max_tokens') {
-      yield* this.flushOpenTurn();
-    }
-  }
-}
-
-/**
- * EventEmitter-based file tail. Emits `event` for each ChatEvent, `error`
- * for fatal errors that ended the tail, and `end` when stop() is called.
- *
- * Tailing strategy:
- *   1. fs.watch on the file (low latency on most platforms, lossy on some).
- *   2. setInterval poll every `pollMs` as a backup. We re-stat the file
- *      and compare size; if it grew, read the new bytes; if it shrank,
- *      emit a `tail-gap` error and stop.
- *   3. Partial last line is held in `pendingBuffer` until the next read
- *      delivers the closing `\n`.
- */
 export class ChatEventStream extends EventEmitter {
-  private opts: Required<Omit<ChatEventStreamOptions, 'sessionId' | 'startByteOffset' | 'ptySpawnedAtMs'>> & Pick<ChatEventStreamOptions, 'sessionId' | 'startByteOffset' | 'ptySpawnedAtMs'>;
+  private adapter: TranscriptAdapter;
+  private cwd: string;
+  private sessionId?: string;
+  private ptySpawnedAtMs?: number;
+  private pollMs: number;
+  private startByteOffset?: number;
+
   private filePath: string | null = null;
   private watcher: fs.FSWatcher | null = null;
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private nextByteOffset = 0;
   private pendingBuffer = '';
-  private translator = new JsonlTranslator();
+  private translator: RecordTranslator;
   private stopped = false;
   private reading = false;
 
   constructor(options: ChatEventStreamOptions) {
     super();
-    this.opts = {
-      cwd: options.cwd,
-      sessionId: options.sessionId,
-      ptySpawnedAtMs: options.ptySpawnedAtMs,
-      claudeProjectsRoot: options.claudeProjectsRoot ?? join(homedir(), '.claude', 'projects'),
-      pollMs: options.pollMs ?? DEFAULT_POLL_MS,
-      startByteOffset: options.startByteOffset,
-    };
+    this.adapter = options.adapter;
+    this.cwd = options.cwd;
+    this.sessionId = options.sessionId;
+    this.ptySpawnedAtMs = options.ptySpawnedAtMs;
+    this.pollMs = options.pollMs ?? DEFAULT_POLL_MS;
+    this.startByteOffset = options.startByteOffset;
     this.nextByteOffset = options.startByteOffset ?? 0;
+    this.translator = this.adapter.createTranslator();
   }
 
   async start(): Promise<void> {
-    let path = await resolveSessionFile({
-      cwd: this.opts.cwd,
-      sessionId: this.opts.sessionId,
-      ptySpawnedAtMs: this.opts.ptySpawnedAtMs,
-      claudeProjectsRoot: this.opts.claudeProjectsRoot,
+    let path = await this.adapter.resolveFile({
+      cwd: this.cwd,
+      spawnedAtMs: this.ptySpawnedAtMs ?? 0,
+      sessionId: this.sessionId,
     });
 
-    // Race-window poll: when the PTY just spawned, Claude takes ~500ms to
-    // create its JSONL — chat-subscribe often arrives before the file
-    // exists. Without polling we'd fail capability or (worse, with
-    // non-strict resolution) bind to a stale neighbour file. Poll every
-    // 500ms for up to 15s. If we still see nothing, the session may not
-    // be Claude (shell/gemini/etc.) and we fall back to capability
-    // unavailable.
-    if (!path && this.opts.ptySpawnedAtMs !== undefined) {
+    // Race-window poll: when the PTY just spawned, the agent CLI takes a
+    // moment to create its transcript. Without polling we'd either fail
+    // capability immediately or (with non-strict resolution) bind to a
+    // stale neighbour file. Poll every 500ms for up to 15s.
+    if (!path && this.ptySpawnedAtMs !== undefined) {
       const deadline = Date.now() + 15_000;
       while (!path && !this.stopped && Date.now() < deadline) {
         await new Promise((r) => setTimeout(r, 500));
-        path = await resolveSessionFile({
-          cwd: this.opts.cwd,
-          sessionId: this.opts.sessionId,
-          ptySpawnedAtMs: this.opts.ptySpawnedAtMs,
-          claudeProjectsRoot: this.opts.claudeProjectsRoot,
+        path = await this.adapter.resolveFile({
+          cwd: this.cwd,
+          spawnedAtMs: this.ptySpawnedAtMs,
+          sessionId: this.sessionId,
         });
       }
     }
@@ -400,26 +126,22 @@ export class ChatEventStream extends EventEmitter {
         v: 1,
         kind: 'capability',
         chat: 'unavailable',
-        reason: this.opts.sessionId
-          ? `no JSONL file for sessionId=${this.opts.sessionId} under ${encodeCwdToProjectDir(this.opts.cwd)}`
-          : `no Claude JSONL appeared within 15s of spawn — agent may not be Claude`,
+        reason: this.sessionId
+          ? `no transcript file for sessionId=${this.sessionId} in ${this.cwd}`
+          : `no transcript appeared within 15s of spawn — agent may not write a transcript`,
       } satisfies ChatEvent);
       return;
     }
     this.filePath = path;
     this.emit('event', { v: 1, kind: 'capability', chat: 'available' } satisfies ChatEvent);
 
-    // Replay everything from startByteOffset.
     await this.readNew();
 
     if (this.stopped) return;
-    // Switch to live tailing.
     try {
       this.watcher = fs.watch(this.filePath, () => { void this.readNew(); });
-    } catch {
-      // fs.watch can throw on some filesystems — polling alone still works.
-    }
-    this.pollTimer = setInterval(() => { void this.readNew(); }, this.opts.pollMs);
+    } catch { /* polling-only fallback */ }
+    this.pollTimer = setInterval(() => { void this.readNew(); }, this.pollMs);
   }
 
   stop(): void {
@@ -449,9 +171,6 @@ export class ChatEventStream extends EventEmitter {
         return;
       }
       if (st.size < this.nextByteOffset) {
-        // File truncated or rotated. We can't know whether we missed events
-        // mid-stream, so we surface this and stop. Restart with a fresh
-        // ChatEventStream if recovery is desired.
         this.emitEvent({ v: 1, kind: 'error', code: 'tail-gap', message: 'file shrank — possible rotation' });
         this.stop();
         return;
@@ -466,9 +185,10 @@ export class ChatEventStream extends EventEmitter {
       this.pendingBuffer = lastNl === -1 ? text : text.slice(lastNl + 1);
 
       if (!complete) return;
+
       for (const line of complete.split('\n')) {
         if (!line) continue;
-        let rec: any;
+        let rec: unknown;
         try {
           rec = JSON.parse(line);
         } catch {
@@ -490,12 +210,6 @@ export class ChatEventStream extends EventEmitter {
   }
 }
 
-/**
- * Read [start, end) from a file. Node's `readFile` reads the whole thing,
- * so we use a low-level file handle for a single ranged read. Allocating
- * a Buffer of size `end - start` is fine for the chunks we expect (single
- * appended assistant record is typically <50 KB).
- */
 async function readFileSlice(path: string, start: number, end: number): Promise<string> {
   if (end <= start) return '';
   const { open } = await import('node:fs/promises');

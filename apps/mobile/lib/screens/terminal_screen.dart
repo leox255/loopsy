@@ -64,13 +64,17 @@ class _TerminalScreenState extends State<TerminalScreen> {
   int _chatRevision = 0;
   bool _chatSubscribed = false;
 
-  /// Chat is only meaningful for Claude — it tails Claude's JSONL
-  /// transcript. Gemini/Codex/OpenCode write to other places (or
-  /// nowhere) so we hide the toggle entirely for them and don't even
-  /// subscribe on the daemon. The daemon also fast-paths a
-  /// capability:unavailable for safety, but gating here keeps the UI
+  /// Agents whose CLI writes a transcript we can tail. Claude / Gemini
+  /// / Codex each have their own on-disk format; the daemon picks the
+  /// right adapter on subscribe. OpenCode is excluded because it stores
+  /// transcripts in a SQLite database — a separate adapter shape we
+  /// haven't built yet. The daemon also fast-paths capability:unavailable
+  /// for any agent without an adapter, but gating here keeps the UI
   /// clean (no "chat unavailable" placeholder users have to dismiss).
-  bool get _chatSupported => widget.agent == 'claude';
+  bool get _chatSupported =>
+      widget.agent == 'claude' ||
+      widget.agent == 'gemini' ||
+      widget.agent == 'codex';
 
   // Voice
   final stt.SpeechToText _speech = stt.SpeechToText();

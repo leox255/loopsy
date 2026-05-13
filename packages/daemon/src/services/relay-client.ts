@@ -23,6 +23,7 @@ import type { AgentKind } from './pty-session-manager.js';
 import { checkAutoApprove, grantAutoApprove, verifyMacPassword } from './auto-approve.js';
 import { ChatEventStream, type ChatEvent } from './chat-event-stream.js';
 import { getClaudeSessionForLoopsy } from './claude-session-tracker.js';
+import { adapterForAgent } from './transcript-adapters.js';
 
 const RECONNECT_INITIAL_MS = 1000;
 const RECONNECT_MAX_MS = 30_000;
@@ -590,13 +591,12 @@ export class RelayClient {
       });
       return;
     }
-    // Chat is currently only supported for Claude — it tails the JSONL
-    // Claude writes under ~/.claude/projects/<cwd>/. Gemini / Codex /
-    // OpenCode use different on-disk formats (and OpenCode emits no
-    // transcript at all). Fast-path the unavailable response so the
-    // phone doesn't sit through the 15s spawn-window poll only to be
-    // told "no" anyway.
-    if (info.agent !== 'claude') {
+    // Pick the per-agent transcript adapter. Returns null only for
+    // agents we don't have transcript support for yet (currently:
+    // opencode, which is SQLite-backed). Fast-path unavailable so the
+    // phone doesn't sit through the 15s spawn-window poll for nothing.
+    const adapter = adapterForAgent(info.agent);
+    if (!adapter) {
       this.sendText({
         type: 'chat-event',
         sessionId,
@@ -604,25 +604,25 @@ export class RelayClient {
           v: 1,
           kind: 'capability',
           chat: 'unavailable',
-          reason: `chat is only available for Claude (this session runs ${info.agent})`,
+          reason: `chat is not yet implemented for ${info.agent}`,
         } satisfies ChatEvent,
       });
       return;
     }
-    // If we've previously discovered the Claude session-id bound to this
-    // loopsy session, pin to that JSONL directly. This is more precise
-    // than birthtime correlation and survives Claude rotating its files
-    // (the stored id is the source of truth across daemon restarts).
-    // We Promise-resolve before constructing the stream so the start()
-    // call below sees the resolved sessionId.
-    void getClaudeSessionForLoopsy(sessionId).catch(() => null).then((priorClaudeId) => {
+
+    // For Claude, prefer the persisted session-id from the tracker so we
+    // resume across daemon restarts. Other agents fall back to spawn-
+    // time correlation in the adapter's resolveFile.
+    void (info.agent === 'claude'
+      ? getClaudeSessionForLoopsy(sessionId).catch(() => null)
+      : Promise.resolve(null)
+    ).then((priorSessionId) => {
       if (this.chats.has(sessionId)) return; // a newer subscribe already raced ahead
       const stream = new ChatEventStream({
+        adapter,
         cwd: info.cwd,
         startByteOffset: msg.fromOffset,
-        sessionId: priorClaudeId ?? undefined,
-        // Birthtime correlation is the fallback when no Claude id is
-        // stored yet (first-time spawn racing chat-subscribe).
+        sessionId: priorSessionId ?? undefined,
         ptySpawnedAtMs: info.createdAt,
       });
       stream.on('event', (event: ChatEvent) => {
