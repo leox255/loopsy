@@ -414,20 +414,21 @@ class _ScrollToBottomChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final shape = BorderRadius.circular(4);
     return Material(
       color: LoopsyColors.surfaceAlt,
-      shape: const CircleBorder(),
+      borderRadius: shape,
       elevation: 4,
       shadowColor: Colors.black.withValues(alpha: 0.35),
       child: InkWell(
-        customBorder: const CircleBorder(),
+        borderRadius: shape,
         onTap: onTap,
         child: Container(
           width: 36,
           height: 36,
           alignment: Alignment.center,
           decoration: BoxDecoration(
-            shape: BoxShape.circle,
+            borderRadius: shape,
             border: Border.all(color: LoopsyColors.border),
           ),
           child: const HugeIcon(
@@ -595,12 +596,12 @@ class _InternalsToggle extends StatelessWidget {
     final label = parts.join(' · ');
     return InkWell(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(14),
+      borderRadius: BorderRadius.circular(4),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
         decoration: BoxDecoration(
           color: theme.soft.withValues(alpha: 0.5),
-          borderRadius: BorderRadius.circular(14),
+          borderRadius: BorderRadius.circular(4),
           border: Border.all(color: theme.accent.withValues(alpha: 0.35)),
         ),
         child: Row(
@@ -769,7 +770,7 @@ class _ToolCardState extends State<_ToolCard> {
       margin: const EdgeInsets.only(top: 4),
       decoration: BoxDecoration(
         color: LoopsyColors.surfaceAlt,
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(4),
         border: Border.all(color: LoopsyColors.border),
       ),
       child: Column(
@@ -820,7 +821,7 @@ class _ToolCardState extends State<_ToolCard> {
             if (hasMore)
               InkWell(
                 onTap: () => setState(() => _expanded = !_expanded),
-                borderRadius: const BorderRadius.vertical(bottom: Radius.circular(10)),
+                borderRadius: const BorderRadius.vertical(bottom: Radius.circular(4)),
                 child: Container(
                   width: double.infinity,
                   padding: const EdgeInsets.symmetric(vertical: 8),
@@ -929,7 +930,7 @@ class _ChatComposerState extends State<_ChatComposer> {
                       curve: Curves.easeOut,
                       decoration: BoxDecoration(
                         color: LoopsyColors.surfaceAlt,
-                        borderRadius: BorderRadius.circular(22),
+                        borderRadius: BorderRadius.circular(4),
                         border: Border.all(
                           color: _focused ? widget.theme.accent : LoopsyColors.border,
                           width: _focused ? 1.5 : 1,
@@ -981,9 +982,9 @@ class _ChatComposerState extends State<_ChatComposer> {
   }
 }
 
-/// Animated send button. Inactive state is a muted neutral circle; on
-/// "ready" the background fills with the agent's accent and the icon
-/// flips to high-contrast — telegraphs "ready to fly."
+/// Animated send button — 4px square matching the rest of the chrome.
+/// Inactive: muted surface tile. Active: accent-gradient with drop
+/// shadow and a high-contrast send icon.
 class _SendButton extends StatelessWidget {
   final bool enabled;
   final Color accent;
@@ -992,6 +993,7 @@ class _SendButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final shape = BorderRadius.circular(4);
     return AnimatedContainer(
       duration: const Duration(milliseconds: 160),
       curve: Curves.easeOut,
@@ -1004,7 +1006,7 @@ class _SendButton extends StatelessWidget {
               )
             : null,
         color: enabled ? null : LoopsyColors.surfaceAlt,
-        shape: BoxShape.circle,
+        borderRadius: shape,
         boxShadow: enabled
             ? [
                 BoxShadow(
@@ -1017,9 +1019,9 @@ class _SendButton extends StatelessWidget {
       ),
       child: Material(
         color: Colors.transparent,
-        shape: const CircleBorder(),
+        borderRadius: shape,
         child: InkWell(
-          customBorder: const CircleBorder(),
+          borderRadius: shape,
           onTap: enabled ? onTap : null,
           child: Padding(
             padding: const EdgeInsets.all(13),

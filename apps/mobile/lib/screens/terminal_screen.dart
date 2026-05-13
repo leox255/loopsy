@@ -993,7 +993,7 @@ class _ViewToggleBar extends StatelessWidget {
         height: 32,
         decoration: BoxDecoration(
           color: LoopsyColors.surfaceAlt,
-          borderRadius: BorderRadius.circular(8),
+          borderRadius: BorderRadius.circular(4),
           border: Border.all(color: LoopsyColors.border),
         ),
         padding: const EdgeInsets.all(2),
@@ -1039,12 +1039,12 @@ class _SegmentButton extends StatelessWidget {
   Widget build(BuildContext context) {
     return InkWell(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(6),
+      borderRadius: BorderRadius.circular(3),
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 140),
         decoration: BoxDecoration(
           color: selected ? LoopsyColors.accent : Colors.transparent,
-          borderRadius: BorderRadius.circular(6),
+          borderRadius: BorderRadius.circular(3),
         ),
         alignment: Alignment.center,
         child: Row(

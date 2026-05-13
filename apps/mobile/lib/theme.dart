@@ -44,7 +44,7 @@ ThemeData loopsyTheme() {
       color: LoopsyColors.surface,
       elevation: 0,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(4),
         side: const BorderSide(color: LoopsyColors.border),
       ),
     ),
@@ -55,7 +55,7 @@ ThemeData loopsyTheme() {
         backgroundColor: LoopsyColors.accent,
         foregroundColor: LoopsyColors.bg,
         padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
         textStyle: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15),
       ),
     ),
@@ -67,7 +67,7 @@ ThemeData loopsyTheme() {
       filled: true,
       fillColor: LoopsyColors.surfaceAlt,
       border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(4),
         borderSide: BorderSide.none,
       ),
       contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),

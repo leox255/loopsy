@@ -656,64 +656,15 @@ class _HomeScreenState extends State<HomeScreen> {
         child: ListView(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 96),
           children: [
-            // Paired-device card
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Container(
-                          width: 36,
-                          height: 36,
-                          decoration: BoxDecoration(
-                            color: LoopsyColors.surfaceAlt,
-                            borderRadius: BorderRadius.circular(10),
-                            border: Border.all(color: LoopsyColors.border),
-                          ),
-                          child: const HugeIcon(icon: HugeIcons.strokeRoundedLaptop, color: LoopsyColors.accent),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const Text(
-                                'Paired machine',
-                                style: TextStyle(color: LoopsyColors.muted, fontSize: 12),
-                              ),
-                              const SizedBox(height: 2),
-                              Text(
-                                p.deviceId,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(fontFamily: 'JetBrainsMono', fontSize: 12),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 10),
-                    Row(
-                      children: [
-                        const HugeIcon(icon: HugeIcons.strokeRoundedGlobe02, color: LoopsyColors.muted, size: 14),
-                        const SizedBox(width: 6),
-                        Expanded(
-                          child: Text(
-                            p.relayUrl,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(color: LoopsyColors.muted, fontSize: 11),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
+            // Slim paired-device strip — replaces the bulky card that
+            // showed the raw device UUID. Shows the laptop's hostname
+            // when device-info is available, falls back to the relay
+            // subdomain when not. Connection-status dot signals live
+            // relay link without needing words.
+            _PairedStrip(
+              hostname: _deviceInfo?.hostname,
+              relayUrl: p.relayUrl,
+              connected: _deviceInfo != null,
             ),
 
             const SizedBox(height: 24),
@@ -766,6 +717,78 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 }
 
+/// Slim header strip — laptop hostname (when device-info has loaded)
+/// or a generic "Connected" label + relay subdomain. Replaces the
+/// big card that showed the raw device UUID, which carries zero
+/// information for the user and ate vertical space on the landing.
+class _PairedStrip extends StatelessWidget {
+  final String? hostname;
+  final String relayUrl;
+  final bool connected;
+  const _PairedStrip({
+    required this.hostname,
+    required this.relayUrl,
+    required this.connected,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final relayHost = _hostOnly(relayUrl);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: LoopsyColors.surface,
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: LoopsyColors.border),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 8,
+            height: 8,
+            decoration: BoxDecoration(
+              color: connected ? LoopsyColors.good : LoopsyColors.muted,
+              shape: BoxShape.circle,
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  hostname ?? (connected ? 'Connected' : 'Connecting…'),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: LoopsyColors.fg,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 1),
+                Text(
+                  'via $relayHost',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: LoopsyColors.muted, fontSize: 11),
+                ),
+              ],
+            ),
+          ),
+          const HugeIcon(icon: HugeIcons.strokeRoundedLaptop, color: LoopsyColors.muted, size: 18),
+        ],
+      ),
+    );
+  }
+
+  static String _hostOnly(String url) {
+    final m = RegExp(r'^https?://([^/]+)').firstMatch(url);
+    return m?.group(1) ?? url;
+  }
+}
+
 class _SessionCard extends StatelessWidget {
   final SessionMeta session;
   final VoidCallback onTap;
@@ -790,7 +813,7 @@ class _SessionCard extends StatelessWidget {
       padding: const EdgeInsets.only(bottom: 10),
       child: Card(
         child: InkWell(
-          borderRadius: BorderRadius.circular(16),
+          borderRadius: BorderRadius.circular(4),
           onTap: onTap,
           onLongPress: onMore,
           child: Padding(
@@ -799,11 +822,11 @@ class _SessionCard extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Container(
-                  width: 40,
-                  height: 40,
+                  width: 38,
+                  height: 38,
                   decoration: BoxDecoration(
                     color: LoopsyColors.surfaceAlt,
-                    borderRadius: BorderRadius.circular(10),
+                    borderRadius: BorderRadius.circular(4),
                   ),
                   child: HugeIcon(icon: _iconFor(), color: LoopsyColors.accent),
                 ),
@@ -825,7 +848,7 @@ class _SessionCard extends StatelessWidget {
                             padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
                             decoration: BoxDecoration(
                               color: LoopsyColors.surfaceAlt,
-                              borderRadius: BorderRadius.circular(6),
+                              borderRadius: BorderRadius.circular(3),
                             ),
                             child: Text(
                               session.agent,
@@ -837,9 +860,13 @@ class _SessionCard extends StatelessWidget {
                             ),
                           ),
                           const SizedBox(width: 8),
+                          // Relative timestamp ("2m ago", "yesterday")
+                          // replaces the 6-char UUID — actually useful
+                          // info at a glance instead of an opaque
+                          // identifier.
                           Text(
-                            session.id.substring(0, 6),
-                            style: const TextStyle(color: LoopsyColors.muted, fontSize: 11, fontFamily: 'JetBrainsMono'),
+                            _relativeTime(session.lastUsedMs),
+                            style: const TextStyle(color: LoopsyColors.muted, fontSize: 11),
                           ),
                           if (hasName && hasSummary) ...[
                             const SizedBox(width: 8),
@@ -916,4 +943,21 @@ String _humanIdle(int lastActivityAt) {
   final hrs = mins ~/ 60;
   if (hrs < 24) return '${hrs}h';
   return '${hrs ~/ 24}d';
+}
+
+/// "just now", "5m ago", "2h ago", "3d ago", or the date for older
+/// entries. Shown on session tiles in place of the 6-char loopsy
+/// session id — actually useful at a glance instead of opaque.
+String _relativeTime(int ms) {
+  if (ms <= 0) return '';
+  final now = DateTime.now().millisecondsSinceEpoch;
+  final delta = (now - ms) ~/ 1000;
+  if (delta < 30) return 'just now';
+  if (delta < 3600) return '${delta ~/ 60}m ago';
+  if (delta < 86400) return '${delta ~/ 3600}h ago';
+  if (delta < 7 * 86400) return '${delta ~/ 86400}d ago';
+  final d = DateTime.fromMillisecondsSinceEpoch(ms);
+  // Mon DD, e.g., "May 6"
+  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  return '${months[d.month - 1]} ${d.day}';
 }
