@@ -754,18 +754,24 @@ class _TerminalScreenState extends State<TerminalScreen> {
                 ChatPanel(
                   log: _chatLog,
                   revision: _chatRevision,
+                  agentName: _agentDisplayName(),
                   // Chat input v1 routes through the same PTY stdin channel
-                  // the terminal view uses. Echo into the local terminal
-                  // emulator too so the user sees their prompt land in
-                  // term view if they toggle back — Claude's JSONL writer
-                  // doesn't see the keystrokes until Claude itself
-                  // processes them, so we'd lose the prompt otherwise.
+                  // the terminal view uses. Two-step send: text first,
+                  // brief delay, then \r as a separate write. This
+                  // mimics "type then press Enter" as the agent CLI
+                  // would observe it from a real keyboard, instead of
+                  // one fused buffer. Codex's TUI specifically rejects
+                  // the fused form ("seems to break"), while Claude
+                  // accepted both — splitting works for both agents.
                   onSend: _session == null
                       ? null
-                      : (text) {
-                          final bytes = utf8.encode('$text\r');
-                          _session!.sendStdin(bytes);
-                          _captureSummary(bytes);
+                      : (text) async {
+                          final session = _session;
+                          if (session == null) return;
+                          session.sendStdin(utf8.encode(text));
+                          _captureSummary(utf8.encode(text));
+                          await Future.delayed(const Duration(milliseconds: 60));
+                          session.sendStdin(utf8.encode('\r'));
                         },
                 ),
               ],
@@ -791,6 +797,18 @@ class _TerminalScreenState extends State<TerminalScreen> {
       case 'gemini': return HugeIcons.strokeRoundedAiBrain02;
       case 'codex':  return HugeIcons.strokeRoundedSourceCode;
       default:       return HugeIcons.strokeRoundedCommandLine;
+    }
+  }
+
+  /// Display name used in chat: turn-group headers ("Codex"), composer
+  /// hint ("Message Codex…"), and loading dots ("Codex is working…").
+  String _agentDisplayName() {
+    switch (widget.agent) {
+      case 'claude': return 'Claude';
+      case 'gemini': return 'Gemini';
+      case 'codex':  return 'Codex';
+      case 'opencode': return 'OpenCode';
+      default:       return widget.agent;
     }
   }
 }

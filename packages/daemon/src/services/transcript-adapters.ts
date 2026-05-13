@@ -410,7 +410,6 @@ class CodexTranslator implements RecordTranslator {
     const rec = recIn as any;
     if (!rec || typeof rec !== 'object') return;
 
-    // Codex frames everything as {timestamp, type, payload}.
     const t = rec.type;
     const p = rec.payload ?? {};
 
@@ -419,37 +418,20 @@ class CodexTranslator implements RecordTranslator {
 
     if (t === 'response_item') {
       const sub = p.type;
-      if (sub === 'message') {
-        const role = p.role === 'user' ? 'user' : 'assistant';
-        yield* this.openTurn(role, rec.timestamp);
-        const text = extractCodexMessageText(p.content);
-        if (text) {
-          yield {
-            v: 1,
-            kind: 'block',
-            turnId: this.currentTurnId!,
-            messageId: this.currentTurnId!,
-            index: this.blockIndex++,
-            block: { type: 'text', text },
-          };
-        }
-        // Codex messages are atomic — each record is one full message.
-        yield* this.flushOpenTurn();
-        return;
-      }
-      if (sub === 'reasoning') {
-        yield* this.openTurn('assistant', rec.timestamp);
-        const text = extractCodexMessageText(p.content) || p.summary || '';
-        yield {
-          v: 1,
-          kind: 'block',
-          turnId: this.currentTurnId!,
-          messageId: this.currentTurnId!,
-          index: this.blockIndex++,
-          block: { type: 'thinking', text },
-        };
-        return;
-      }
+      // Use event_msg/{user_message,agent_message,agent_reasoning} as the
+      // canonical text source instead of response_item/message because:
+      //   - response_item/message includes role=developer and role=system
+      //     entries (permissions instructions, apps instructions, etc.)
+      //     that aren't part of the user-visible chat.
+      //   - role=user response_items include the codex CLI's
+      //     env-context wrapper (AGENTS.md content, <INSTRUCTIONS>
+      //     blocks). The event_msg/user_message form has the same text
+      //     but at least we know it's the "live event" — which we can
+      //     clean up uniformly.
+      // We keep response_item only for tool calls/results, since those
+      // aren't duplicated in event_msg.
+      if (sub === 'message' || sub === 'reasoning') return;
+
       if (sub === 'function_call' || sub === 'custom_tool_call' || sub === 'web_search_call') {
         yield* this.openTurn('assistant', rec.timestamp);
         yield {
@@ -489,12 +471,51 @@ class CodexTranslator implements RecordTranslator {
 
     if (t === 'event_msg') {
       const sub = p.type;
-      // Codex emits both `response_item/message` (the canonical record)
-      // and `event_msg/{user_message,agent_message}` (the live stream
-      // event). The response_item arrives later with the full content;
-      // skip the event_msg to avoid duplication.
       if (sub === 'task_started' || sub === 'task_complete' || sub === 'token_count' || sub === 'turn_aborted' || sub === 'context_compacted') return;
-      if (sub === 'user_message' || sub === 'agent_message' || sub === 'agent_reasoning') return;
+
+      if (sub === 'user_message') {
+        const cleaned = cleanCodexUserMessage(typeof p.message === 'string' ? p.message : '');
+        if (!cleaned) return; // pure env-context wrapper, nothing to show
+        yield* this.flushOpenTurn();
+        const turnId = `codex-user-${rec.timestamp ?? Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        yield { v: 1, kind: 'turn-start', turnId, role: 'user', ts: rec.timestamp };
+        yield { v: 1, kind: 'block', turnId, messageId: turnId, index: 0, block: { type: 'text', text: cleaned } };
+        yield { v: 1, kind: 'turn-end', turnId };
+        return;
+      }
+
+      if (sub === 'agent_message') {
+        yield* this.openTurn('assistant', rec.timestamp);
+        const text = typeof p.message === 'string' ? p.message : '';
+        if (text) {
+          yield {
+            v: 1,
+            kind: 'block',
+            turnId: this.currentTurnId!,
+            messageId: this.currentTurnId!,
+            index: this.blockIndex++,
+            block: { type: 'text', text },
+          };
+        }
+        yield* this.flushOpenTurn();
+        return;
+      }
+
+      if (sub === 'agent_reasoning') {
+        yield* this.openTurn('assistant', rec.timestamp);
+        const text = typeof p.text === 'string' ? p.text : (typeof p.message === 'string' ? p.message : '');
+        if (text) {
+          yield {
+            v: 1,
+            kind: 'block',
+            turnId: this.currentTurnId!,
+            messageId: this.currentTurnId!,
+            index: this.blockIndex++,
+            block: { type: 'thinking', text },
+          };
+        }
+        return;
+      }
       return;
     }
   }
@@ -523,6 +544,27 @@ class CodexTranslator implements RecordTranslator {
       this.blockIndex = 0;
     }
   }
+}
+
+/**
+ * Strip the env-context wrapper that Codex's CLI prepends to user
+ * messages (AGENTS.md content, <INSTRUCTIONS> blocks, system prefixes
+ * like "IMPORTANT: …"). Returns an empty string when the message is
+ * 100% wrapper — the translator drops those entirely so the chat feed
+ * doesn't show session setup as if it were a user prompt.
+ */
+function cleanCodexUserMessage(raw: string): string {
+  if (!raw) return '';
+  let text = raw;
+  // Drop <INSTRUCTIONS>...</INSTRUCTIONS> blocks (Codex injects these).
+  text = text.replace(/<INSTRUCTIONS>[\s\S]*?<\/INSTRUCTIONS>/g, '').trim();
+  // Drop AGENTS.md preamble: lines that start with "# AGENTS.md
+  // instructions for …" through the next blank line.
+  text = text.replace(/^#\s+AGENTS\.md instructions for[\s\S]*?(?:\n\n|$)/i, '').trim();
+  // Drop the "IMPORTANT: Do NOT read or execute…" preflight prefix the
+  // orchestrator injects to scope agent access — that's not user content.
+  text = text.replace(/^IMPORTANT:[\s\S]*?\n\n/i, '').trim();
+  return text;
 }
 
 function extractCodexMessageText(content: unknown): string {

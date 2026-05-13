@@ -27,7 +27,17 @@ class ChatPanel extends StatefulWidget {
   /// pushes via the existing terminal-input channel. Null when the
   /// session isn't connected — composer renders disabled.
   final void Function(String text)? onSend;
-  const ChatPanel({super.key, required this.log, required this.revision, this.onSend});
+  /// Display name of the agent rendering this conversation. Used in
+  /// turn-group headers ("Claude"/"Codex"/"Gemini"), composer hint
+  /// ("Message <agent>…"), and loading indicator.
+  final String agentName;
+  const ChatPanel({
+    super.key,
+    required this.log,
+    required this.revision,
+    required this.agentName,
+    this.onSend,
+  });
 
   @override
   State<ChatPanel> createState() => _ChatPanelState();
@@ -175,23 +185,28 @@ class _ChatPanelState extends State<ChatPanel> with WidgetsBindingObserver {
               }
               final idx = i - extraTop;
               if (idx < groups.length) {
-                return _TurnGroupTile(turns: groups[idx], toolResults: toolResults);
+                return _TurnGroupTile(
+                  turns: groups[idx],
+                  toolResults: toolResults,
+                  agentName: widget.agentName,
+                );
               }
               // Bottom slots: loading first, then error.
               final tail = idx - groups.length;
-              if (showLoading && tail == 0) return const _LoadingRow();
+              if (showLoading && tail == 0) return _LoadingRow(agentName: widget.agentName);
               return _ErrorRow(log.lastError!);
             },
           ),
         ),
-        _ChatComposer(onSend: widget.onSend),
+        _ChatComposer(onSend: widget.onSend, agentName: widget.agentName),
       ],
     );
   }
 }
 
 class _LoadingRow extends StatefulWidget {
-  const _LoadingRow();
+  final String agentName;
+  const _LoadingRow({required this.agentName});
   @override
   State<_LoadingRow> createState() => _LoadingRowState();
 }
@@ -238,9 +253,9 @@ class _LoadingRowState extends State<_LoadingRow> with SingleTickerProviderState
             },
           ),
           const SizedBox(width: 10),
-          const Text(
-            'Claude is working…',
-            style: TextStyle(color: LoopsyColors.muted, fontSize: 12, fontStyle: FontStyle.italic),
+          Text(
+            '${widget.agentName} is working…',
+            style: const TextStyle(color: LoopsyColors.muted, fontSize: 12, fontStyle: FontStyle.italic),
           ),
         ],
       ),
@@ -267,7 +282,8 @@ class _LoadingRowState extends State<_LoadingRow> with SingleTickerProviderState
 ///   - IME composition: untested.
 class _ChatComposer extends StatefulWidget {
   final void Function(String text)? onSend;
-  const _ChatComposer({required this.onSend});
+  final String agentName;
+  const _ChatComposer({required this.onSend, required this.agentName});
 
   @override
   State<_ChatComposer> createState() => _ChatComposerState();
@@ -331,7 +347,7 @@ class _ChatComposerState extends State<_ChatComposer> {
                   onSubmitted: (_) => _send(),
                   style: const TextStyle(color: LoopsyColors.fg, fontSize: 14),
                   decoration: InputDecoration(
-                    hintText: enabled ? 'Message Claude…' : 'Disconnected',
+                    hintText: enabled ? 'Message ${widget.agentName}…' : 'Disconnected',
                     hintStyle: const TextStyle(color: LoopsyColors.muted),
                     filled: true,
                     fillColor: LoopsyColors.surfaceAlt,
@@ -468,7 +484,12 @@ class _ErrorRow extends StatelessWidget {
 class _TurnGroupTile extends StatefulWidget {
   final List<ChatTurn> turns;
   final Map<String, ToolResultBlock> toolResults;
-  const _TurnGroupTile({required this.turns, required this.toolResults});
+  final String agentName;
+  const _TurnGroupTile({
+    required this.turns,
+    required this.toolResults,
+    required this.agentName,
+  });
 
   @override
   State<_TurnGroupTile> createState() => _TurnGroupTileState();
@@ -512,7 +533,7 @@ class _TurnGroupTileState extends State<_TurnGroupTile> {
               ),
               const SizedBox(width: 6),
               Text(
-                isUser ? 'You' : 'Claude',
+                isUser ? 'You' : widget.agentName,
                 style: TextStyle(
                   color: isUser ? LoopsyColors.muted : LoopsyColors.accent,
                   fontSize: 11,
