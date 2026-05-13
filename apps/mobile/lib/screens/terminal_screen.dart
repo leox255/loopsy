@@ -61,7 +61,11 @@ class _TerminalScreenState extends State<TerminalScreen> {
 
   // Chat view state. The chat stream piggy-backs on the same relay
   // sessionId — terminal and chat are two renderings of one session.
-  _ViewMode _view = _ViewMode.terminal;
+  // Initial view is set after _chatSupported can be evaluated (see
+  // initState) — chat by default for supported agents, terminal for
+  // the rest. Defaulting to chat reflects the primary UX: most users
+  // want the conversation, not the raw terminal grid.
+  late _ViewMode _view;
   final ChatLog _chatLog = ChatLog();
   int _chatRevision = 0;
   bool _chatSubscribed = false;
@@ -94,6 +98,9 @@ class _TerminalScreenState extends State<TerminalScreen> {
   @override
   void initState() {
     super.initState();
+    // Chat-first when the agent supports a transcript; terminal-first
+    // for opencode and similar agents we haven't built an adapter for.
+    _view = _chatSupported ? _ViewMode.chat : _ViewMode.terminal;
     _bootstrap();
   }
 
@@ -201,9 +208,11 @@ class _TerminalScreenState extends State<TerminalScreen> {
       _reconnectAttempt = 0;
     });
 
-    // If user was viewing chat when the connection dropped, re-subscribe
-    // automatically so they don't have to toggle tabs to recover.
-    if (_view == _ViewMode.chat) {
+    // Subscribe to chat immediately when the session opens if the user
+    // is on the chat tab — covers both the chat-default initial open
+    // AND post-reconnect resubscribe. Without this, the user would see
+    // an empty chat panel until they toggled tabs once.
+    if (_view == _ViewMode.chat && _chatSupported) {
       _ensureChatSubscribed();
     }
   }
@@ -990,20 +999,21 @@ class _ViewToggleBar extends StatelessWidget {
         padding: const EdgeInsets.all(2),
         child: Row(
           children: [
-            Expanded(
-              child: _SegmentButton(
-                label: 'term',
-                icon: HugeIcons.strokeRoundedCommandLine,
-                selected: mode == _ViewMode.terminal,
-                onTap: () => onChanged(_ViewMode.terminal),
-              ),
-            ),
+            // chat first — primary UX surface
             Expanded(
               child: _SegmentButton(
                 label: 'chat',
                 icon: HugeIcons.strokeRoundedAiChat02,
                 selected: mode == _ViewMode.chat,
                 onTap: () => onChanged(_ViewMode.chat),
+              ),
+            ),
+            Expanded(
+              child: _SegmentButton(
+                label: 'term',
+                icon: HugeIcons.strokeRoundedCommandLine,
+                selected: mode == _ViewMode.terminal,
+                onTap: () => onChanged(_ViewMode.terminal),
               ),
             ),
           ],

@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:hugeicons/hugeicons.dart';
@@ -7,29 +8,35 @@ import '../services/chat_event.dart';
 import '../theme.dart';
 import 'markdown_text.dart';
 
-/// Chat-style view of the live Claude conversation. Driven by a
-/// [ChatLog] populated from `chat-event` frames over the existing relay
+/// Per-agent accent palette. Subtle differentiation so each agent has
+/// its own visual identity inside the chat — avatar background, send
+/// button tint when no text, internals pill border. Not full theming;
+/// the broader UI stays consistent.
+class _AgentTheme {
+  final Color accent;
+  final Color soft;
+  final String initial;
+  const _AgentTheme(this.accent, this.soft, this.initial);
+}
+
+const _agentThemes = <String, _AgentTheme>{
+  'Claude': _AgentTheme(Color(0xFFE0AF68), Color(0xFF332B1F), 'C'), // amber
+  'Codex': _AgentTheme(Color(0xFF9ECE6A), Color(0xFF243024), 'X'),  // emerald
+  'Gemini': _AgentTheme(Color(0xFF7DCFFF), Color(0xFF1E2E3A), 'G'), // sky
+  'OpenCode': _AgentTheme(Color(0xFFBB9AF7), Color(0xFF2A2438), 'O'), // violet
+};
+
+_AgentTheme _themeFor(String agentName) =>
+    _agentThemes[agentName] ?? const _AgentTheme(LoopsyColors.accent, Color(0xFF1D2128), '?');
+
+/// Chat-style view of the live conversation. Driven by a [ChatLog]
+/// populated from `chat-event` frames over the existing relay
 /// WebSocket. v1 ships with input: the composer at the bottom routes
-/// typed prompts back through the parent's PTY stdin path (same channel
-/// the terminal view uses), so chat is no longer read-only.
-///
-/// Designed to mount/unmount cheaply — TerminalScreen keeps it in an
-/// IndexedStack alongside the xterm view so toggling between them costs
-/// no reconnect.
+/// typed prompts back through the parent's PTY stdin path.
 class ChatPanel extends StatefulWidget {
-  /// The live state. Caller mutates this with [ChatLog.apply] as events
-  /// arrive; this widget redraws via a stream of "version bumps" delivered
-  /// through [revision] so the parent only has to call setState.
   final ChatLog log;
   final int revision;
-  /// Send a single-line prompt to the underlying PTY. The parent (which
-  /// owns the relay session) wraps the bytes with a trailing `\r` and
-  /// pushes via the existing terminal-input channel. Null when the
-  /// session isn't connected — composer renders disabled.
   final void Function(String text)? onSend;
-  /// Display name of the agent rendering this conversation. Used in
-  /// turn-group headers ("Claude"/"Codex"/"Gemini"), composer hint
-  /// ("Message <agent>…"), and loading indicator.
   final String agentName;
   const ChatPanel({
     super.key,
@@ -46,16 +53,22 @@ class ChatPanel extends StatefulWidget {
 class _ChatPanelState extends State<ChatPanel> with WidgetsBindingObserver {
   final ScrollController _scroll = ScrollController();
   int _lastRevision = -1;
+  bool _showScrollToBottom = false;
 
   @override
   void initState() {
     super.initState();
-    // Observe so we can re-pin to bottom when the keyboard pops up (viewport
-    // shrinks → previously-visible "latest" content scrolls out of view if
-    // we don't react). Combined with the revision-based scroll on new
-    // events, this keeps the conversation glued to the bottom whether the
-    // change is a new event or a layout change.
     WidgetsBinding.instance.addObserver(this);
+    _scroll.addListener(_onScroll);
+  }
+
+  void _onScroll() {
+    if (!_scroll.hasClients) return;
+    final atBottom = _scroll.position.pixels >= _scroll.position.maxScrollExtent - 80;
+    final shouldShow = !atBottom;
+    if (shouldShow != _showScrollToBottom) {
+      setState(() => _showScrollToBottom = shouldShow);
+    }
   }
 
   @override
@@ -66,14 +79,17 @@ class _ChatPanelState extends State<ChatPanel> with WidgetsBindingObserver {
   @override
   void didUpdateWidget(covariant ChatPanel old) {
     super.didUpdateWidget(old);
-    // Scroll on EVERY revision bump (each new event), not just turn-count
-    // change. Assistant turns commonly span multiple records that
-    // share a messageId, so blocks get appended to the same ChatTurn —
-    // without this, the chat appeared to "freeze" mid-response while
-    // text was actively streaming in.
     if (widget.revision != _lastRevision) {
       _lastRevision = widget.revision;
-      _scrollToBottom(animated: true);
+      // Only auto-scroll if the user is already near the bottom — don't
+      // yank them back if they're reading older messages.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || !_scroll.hasClients) return;
+        final pos = _scroll.position;
+        if (pos.pixels >= pos.maxScrollExtent - 120) {
+          _scrollToBottom(animated: true);
+        }
+      });
     }
   }
 
@@ -84,8 +100,8 @@ class _ChatPanelState extends State<ChatPanel> with WidgetsBindingObserver {
       if (animated) {
         _scroll.animateTo(
           target,
-          duration: const Duration(milliseconds: 200),
-          curve: Curves.easeOut,
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOutCubic,
         );
       } else {
         _scroll.jumpTo(target);
@@ -95,6 +111,7 @@ class _ChatPanelState extends State<ChatPanel> with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    _scroll.removeListener(_onScroll);
     WidgetsBinding.instance.removeObserver(this);
     _scroll.dispose();
     super.dispose();
@@ -103,42 +120,33 @@ class _ChatPanelState extends State<ChatPanel> with WidgetsBindingObserver {
   @override
   Widget build(BuildContext context) {
     final log = widget.log;
+    final theme = _themeFor(widget.agentName);
 
-    // Empty / waiting state: show the placeholder in the LIST area but
-    // keep the composer mounted underneath so the user can fire the
-    // first prompt without backing out. The first prompt is what
-    // causes the agent to create its transcript file, which the
-    // daemon's poll loop then picks up and renders here.
+    // Empty / waiting state: hero placeholder + composer underneath so
+    // the user can fire the first prompt without leaving the panel.
     if (log.turns.isEmpty) {
       final waiting = !log.available && log.unavailableReason != null;
       return Column(
         children: [
           Expanded(
-            child: _PlaceholderMessage(
-              icon: HugeIcons.strokeRoundedAiChat02,
-              title: waiting
-                  ? 'Waiting for ${widget.agentName} to start'
-                  : 'Send a message to start',
-              subtitle: waiting
-                  ? (log.unavailableReason ?? '')
-                  : '${widget.agentName} will respond and the conversation will appear here.',
+            child: _EmptyState(
+              agentName: widget.agentName,
+              waiting: waiting,
+              waitingReason: log.unavailableReason ?? '',
             ),
           ),
-          _ChatComposer(onSend: widget.onSend, agentName: widget.agentName),
+          _ChatComposer(onSend: widget.onSend, agentName: widget.agentName, theme: theme),
         ],
       );
     }
-    // Filter out tool-result-only "user" turns — they're SDK plumbing,
-    // not user prompts. They're surfaced inside the relevant assistant
-    // turn's expand-tools view via the toolResults index built below.
+
+    // Filter out tool-result-only "user" turns (SDK plumbing).
     final visibleTurns = [
       for (final t in log.turns)
         if (!t.isToolResultOnly) t,
     ];
 
-    // Build a tool_use_id → ToolResultBlock map across all turns so each
-    // assistant turn's tool_use cards can show their matching result
-    // when the user expands the tools section.
+    // Build a tool_use_id → ToolResultBlock map across all turns.
     final toolResults = <String, ToolResultBlock>{};
     for (final t in log.turns) {
       for (final b in t.blocks) {
@@ -146,13 +154,7 @@ class _ChatPanelState extends State<ChatPanel> with WidgetsBindingObserver {
       }
     }
 
-    // Group consecutive same-role turns into one visual tile. Without
-    // this, a multi-step Claude response (msg1 thinking+tool → tool
-    // roundtrip → msg2 text) renders as TWO "Claude" labels stacked,
-    // which reads as "Claude said something, then Claude said something
-    // again" instead of one continuous response. Grouping lets us show
-    // ONE label with all internals collapsed and the final text bubble
-    // as the visible answer.
+    // Group consecutive same-role turns into one tile.
     final groups = <List<ChatTurn>>[];
     for (final t in visibleTurns) {
       if (groups.isNotEmpty && groups.last.first.role == t.role) {
@@ -162,67 +164,189 @@ class _ChatPanelState extends State<ChatPanel> with WidgetsBindingObserver {
       }
     }
 
-    // Loading indicator: show "Claude is working…" when the most recent
-    // *visible* turn is incomplete (assistant mid-stream) or is the user
-    // prompt with no follow-up turn yet. Stops as soon as the assistant
-    // turn finishes (turn-end arrives).
-    bool showLoading = false;
+    // Typing indicator: show when the most recent turn is incomplete OR
+    // is a user prompt without a follow-up. The bubble lives at the
+    // bottom of the list so it appears right where the next response
+    // will materialize.
+    bool showTyping = false;
     if (visibleTurns.isNotEmpty) {
       final last = visibleTurns.last;
       if (last.role == ChatRole.user) {
-        // User just sent; Claude hasn't started responding yet.
-        showLoading = true;
+        showTyping = true;
       } else if (last.role == ChatRole.assistant && !last.done) {
-        // Claude is partway through its turn.
-        showLoading = true;
+        // Only show typing for the empty-thinking case — if the assistant
+        // is already streaming visible text we let the bubble itself
+        // signal liveness.
+        final hasText = last.blocks.any((b) => b is TextBlock && (b).text.trim().isNotEmpty);
+        if (!hasText) showTyping = true;
       }
     }
 
     final hasDroppedHeader = log.droppedTurns > 0;
     final hasErrorFooter = log.lastError != null;
     final extraTop = hasDroppedHeader ? 1 : 0;
-    final extraBottom = (showLoading ? 1 : 0) + (hasErrorFooter ? 1 : 0);
+    final extraBottom = (showTyping ? 1 : 0) + (hasErrorFooter ? 1 : 0);
 
     return Column(
       children: [
         Expanded(
-          child: ListView.builder(
-            controller: _scroll,
-            padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
-            itemCount: groups.length + extraTop + extraBottom,
-            itemBuilder: (context, i) {
-              if (hasDroppedHeader && i == 0) {
-                return _DroppedHeader(count: log.droppedTurns);
-              }
-              final idx = i - extraTop;
-              if (idx < groups.length) {
-                return _TurnGroupTile(
-                  turns: groups[idx],
-                  toolResults: toolResults,
-                  agentName: widget.agentName,
-                );
-              }
-              // Bottom slots: loading first, then error.
-              final tail = idx - groups.length;
-              if (showLoading && tail == 0) return _LoadingRow(agentName: widget.agentName);
-              return _ErrorRow(log.lastError!);
-            },
+          child: Stack(
+            children: [
+              ListView.builder(
+                controller: _scroll,
+                padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
+                itemCount: groups.length + extraTop + extraBottom,
+                itemBuilder: (context, i) {
+                  if (hasDroppedHeader && i == 0) {
+                    return _DroppedHeader(count: log.droppedTurns);
+                  }
+                  final idx = i - extraTop;
+                  if (idx < groups.length) {
+                    return _TurnGroupTile(
+                      turns: groups[idx],
+                      toolResults: toolResults,
+                      agentName: widget.agentName,
+                      theme: theme,
+                    );
+                  }
+                  final tail = idx - groups.length;
+                  if (showTyping && tail == 0) {
+                    return _TypingBubble(theme: theme);
+                  }
+                  return _ErrorRow(log.lastError!);
+                },
+              ),
+              // Floating "scroll to bottom" chevron — appears when the
+              // user has scrolled up from the live edge.
+              AnimatedPositioned(
+                duration: const Duration(milliseconds: 180),
+                curve: Curves.easeOut,
+                right: 14,
+                bottom: _showScrollToBottom ? 14 : -40,
+                child: AnimatedOpacity(
+                  duration: const Duration(milliseconds: 180),
+                  opacity: _showScrollToBottom ? 1 : 0,
+                  child: _ScrollToBottomChip(
+                    onTap: () => _scrollToBottom(animated: true),
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
-        _ChatComposer(onSend: widget.onSend, agentName: widget.agentName),
+        _ChatComposer(onSend: widget.onSend, agentName: widget.agentName, theme: theme),
       ],
     );
   }
 }
 
-class _LoadingRow extends StatefulWidget {
+/// Hero empty state — big circular avatar with the agent's color and
+/// initial, welcome line, hint. Replaces the small icon + text combo.
+class _EmptyState extends StatelessWidget {
   final String agentName;
-  const _LoadingRow({required this.agentName});
+  final bool waiting;
+  final String waitingReason;
+  const _EmptyState({
+    required this.agentName,
+    required this.waiting,
+    required this.waitingReason,
+  });
+
   @override
-  State<_LoadingRow> createState() => _LoadingRowState();
+  Widget build(BuildContext context) {
+    final theme = _themeFor(agentName);
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 72,
+              height: 72,
+              decoration: BoxDecoration(
+                color: theme.soft,
+                shape: BoxShape.circle,
+                border: Border.all(color: theme.accent.withValues(alpha: 0.4), width: 2),
+              ),
+              alignment: Alignment.center,
+              child: Text(
+                theme.initial,
+                style: TextStyle(
+                  color: theme.accent,
+                  fontSize: 30,
+                  fontWeight: FontWeight.w800,
+                  fontFamily: 'JetBrainsMono',
+                ),
+              ),
+            ),
+            const SizedBox(height: 18),
+            Text(
+              waiting ? '$agentName is warming up' : 'Talk to $agentName',
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: LoopsyColors.fg, fontSize: 17, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              waiting
+                  ? waitingReason
+                  : 'Send a prompt below. Your conversation will live here in real time, with reasoning and tool calls expandable on demand.',
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: LoopsyColors.muted, fontSize: 13, height: 1.45),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
-class _LoadingRowState extends State<_LoadingRow> with SingleTickerProviderStateMixin {
+/// Small avatar circle with the sender's initial. Used inline at the top
+/// of each turn group instead of the old icon+text label.
+class _Avatar extends StatelessWidget {
+  final _AgentTheme theme;
+  final bool isUser;
+  const _Avatar({required this.theme, required this.isUser});
+
+  @override
+  Widget build(BuildContext context) {
+    final bg = isUser ? LoopsyColors.surfaceAlt : theme.soft;
+    final fg = isUser ? LoopsyColors.muted : theme.accent;
+    final border = isUser ? LoopsyColors.border : theme.accent.withValues(alpha: 0.45);
+    return Container(
+      width: 26,
+      height: 26,
+      decoration: BoxDecoration(
+        color: bg,
+        shape: BoxShape.circle,
+        border: Border.all(color: border, width: 1.2),
+      ),
+      alignment: Alignment.center,
+      child: Text(
+        isUser ? 'Y' : theme.initial,
+        style: TextStyle(
+          color: fg,
+          fontSize: 11,
+          fontWeight: FontWeight.w800,
+          fontFamily: 'JetBrainsMono',
+        ),
+      ),
+    );
+  }
+}
+
+/// Animated typing bubble — three pulsing dots inside a left-aligned
+/// chat bubble, sized like a real message. Replaces the old inline
+/// "Claude is working…" row for a much more chat-app-native feel.
+class _TypingBubble extends StatefulWidget {
+  final _AgentTheme theme;
+  const _TypingBubble({required this.theme});
+
+  @override
+  State<_TypingBubble> createState() => _TypingBubbleState();
+}
+
+class _TypingBubbleState extends State<_TypingBubble> with SingleTickerProviderStateMixin {
   late final AnimationController _c = AnimationController(
     vsync: this,
     duration: const Duration(milliseconds: 1100),
@@ -234,169 +358,87 @@ class _LoadingRowState extends State<_LoadingRow> with SingleTickerProviderState
     super.dispose();
   }
 
+  static double _dotPhase(int dot, double t) {
+    final shifted = (t - dot * 0.16) % 1.0;
+    return shifted < 0.5 ? shifted * 2 : (1 - shifted) * 2;
+  }
+
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6),
+      padding: const EdgeInsets.only(bottom: 12),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.end,
         children: [
-          HugeIcon(icon: HugeIcons.strokeRoundedAiChat02, color: LoopsyColors.accent, size: 14),
+          _Avatar(theme: widget.theme, isUser: false),
           const SizedBox(width: 8),
-          AnimatedBuilder(
-            animation: _c,
-            builder: (_, __) {
-              // Three dots that pulse in sequence.
-              return Row(
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            decoration: BoxDecoration(
+              color: LoopsyColors.surface,
+              borderRadius: const BorderRadius.only(
+                topLeft: Radius.circular(4),
+                topRight: Radius.circular(16),
+                bottomLeft: Radius.circular(16),
+                bottomRight: Radius.circular(16),
+              ),
+              border: Border.all(color: LoopsyColors.border),
+            ),
+            child: AnimatedBuilder(
+              animation: _c,
+              builder: (_, __) => Row(
+                mainAxisSize: MainAxisSize.min,
                 children: [
                   for (int i = 0; i < 3; i++) ...[
                     Opacity(
-                      opacity: 0.3 + 0.7 * _dotPhase(i, _c.value),
+                      opacity: 0.35 + 0.65 * _dotPhase(i, _c.value),
                       child: Container(
-                        width: 5,
-                        height: 5,
-                        decoration: const BoxDecoration(color: LoopsyColors.muted, shape: BoxShape.circle),
+                        width: 6,
+                        height: 6,
+                        decoration: BoxDecoration(
+                          color: widget.theme.accent,
+                          shape: BoxShape.circle,
+                        ),
                       ),
                     ),
-                    if (i < 2) const SizedBox(width: 4),
+                    if (i < 2) const SizedBox(width: 5),
                   ],
                 ],
-              );
-            },
-          ),
-          const SizedBox(width: 10),
-          Text(
-            '${widget.agentName} is working…',
-            style: const TextStyle(color: LoopsyColors.muted, fontSize: 12, fontStyle: FontStyle.italic),
+              ),
+            ),
           ),
         ],
       ),
     );
   }
-
-  /// Each dot pulses 1/3 of a cycle apart so the eye reads it as a wave.
-  static double _dotPhase(int dot, double t) {
-    final shifted = (t - dot * 0.16) % 1.0;
-    // Triangle wave: 0 → 1 → 0
-    return shifted < 0.5 ? shifted * 2 : (1 - shifted) * 2;
-  }
 }
 
-/// Bottom-anchored prompt composer. v1: single-line input that routes
-/// through the PTY stdin path the terminal view already uses, sending
-/// `<text>\r` to mimic the user pressing Enter at the prompt.
-///
-/// Known limits (per /codex review of the chat-input design, deferring
-/// to v2):
-///   - Multi-line: only the first line + \r gets sent.
-///   - Paste of multi-line: ditto.
-///   - Bracketed paste mode: not supported.
-///   - IME composition: untested.
-class _ChatComposer extends StatefulWidget {
-  final void Function(String text)? onSend;
-  final String agentName;
-  const _ChatComposer({required this.onSend, required this.agentName});
-
-  @override
-  State<_ChatComposer> createState() => _ChatComposerState();
-}
-
-class _ChatComposerState extends State<_ChatComposer> {
-  final TextEditingController _ctl = TextEditingController();
-  final FocusNode _focus = FocusNode();
-  bool _hasText = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _ctl.addListener(() {
-      final has = _ctl.text.trim().isNotEmpty;
-      if (has != _hasText) setState(() => _hasText = has);
-    });
-  }
-
-  @override
-  void dispose() {
-    _ctl.dispose();
-    _focus.dispose();
-    super.dispose();
-  }
-
-  void _send() {
-    final t = _ctl.text.trim();
-    if (t.isEmpty || widget.onSend == null) return;
-    widget.onSend!(t);
-    _ctl.clear();
-    // Keep the focus so the user can fire successive prompts without
-    // re-tapping the field — common pattern in chat UIs.
-    _focus.requestFocus();
-  }
+class _ScrollToBottomChip extends StatelessWidget {
+  final VoidCallback onTap;
+  const _ScrollToBottomChip({required this.onTap});
 
   @override
   Widget build(BuildContext context) {
-    final enabled = widget.onSend != null;
     return Material(
-      color: LoopsyColors.surface,
-      child: SafeArea(
-        top: false,
+      color: LoopsyColors.surfaceAlt,
+      shape: const CircleBorder(),
+      elevation: 4,
+      shadowColor: Colors.black.withValues(alpha: 0.35),
+      child: InkWell(
+        customBorder: const CircleBorder(),
+        onTap: onTap,
         child: Container(
-          decoration: const BoxDecoration(
-            border: Border(top: BorderSide(color: LoopsyColors.border)),
+          width: 36,
+          height: 36,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            border: Border.all(color: LoopsyColors.border),
           ),
-          padding: const EdgeInsets.fromLTRB(10, 8, 8, 10),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              Expanded(
-                child: TextField(
-                  controller: _ctl,
-                  focusNode: _focus,
-                  enabled: enabled,
-                  minLines: 1,
-                  maxLines: 5,
-                  textCapitalization: TextCapitalization.sentences,
-                  textInputAction: TextInputAction.send,
-                  onSubmitted: (_) => _send(),
-                  style: const TextStyle(color: LoopsyColors.fg, fontSize: 14),
-                  decoration: InputDecoration(
-                    hintText: enabled ? 'Message ${widget.agentName}…' : 'Disconnected',
-                    hintStyle: const TextStyle(color: LoopsyColors.muted),
-                    filled: true,
-                    fillColor: LoopsyColors.surfaceAlt,
-                    isDense: true,
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(22),
-                      borderSide: const BorderSide(color: LoopsyColors.border),
-                    ),
-                    enabledBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(22),
-                      borderSide: const BorderSide(color: LoopsyColors.border),
-                    ),
-                    focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(22),
-                      borderSide: const BorderSide(color: LoopsyColors.accent),
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 6),
-              Material(
-                color: (_hasText && enabled) ? LoopsyColors.accent : LoopsyColors.surfaceAlt,
-                shape: const CircleBorder(),
-                child: InkWell(
-                  customBorder: const CircleBorder(),
-                  onTap: (_hasText && enabled) ? _send : null,
-                  child: Padding(
-                    padding: const EdgeInsets.all(12),
-                    child: HugeIcon(
-                      icon: HugeIcons.strokeRoundedSent,
-                      color: (_hasText && enabled) ? LoopsyColors.bg : LoopsyColors.muted,
-                      size: 18,
-                    ),
-                  ),
-                ),
-              ),
-            ],
+          child: const HugeIcon(
+            icon: HugeIcons.strokeRoundedArrowDown02,
+            color: LoopsyColors.fg,
+            size: 18,
           ),
         ),
       ),
@@ -431,39 +473,6 @@ class _DroppedHeader extends StatelessWidget {
   }
 }
 
-class _PlaceholderMessage extends StatelessWidget {
-  final IconData icon;
-  final String title;
-  final String subtitle;
-  const _PlaceholderMessage({required this.icon, required this.title, required this.subtitle});
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 32),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            HugeIcon(icon: icon, color: LoopsyColors.muted, size: 36),
-            const SizedBox(height: 14),
-            Text(
-              title,
-              textAlign: TextAlign.center,
-              style: const TextStyle(color: LoopsyColors.fg, fontSize: 15, fontWeight: FontWeight.w600),
-            ),
-            const SizedBox(height: 6),
-            Text(
-              subtitle,
-              textAlign: TextAlign.center,
-              style: const TextStyle(color: LoopsyColors.muted, fontSize: 13),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
 class _ErrorRow extends StatelessWidget {
   final String message;
   const _ErrorRow(this.message);
@@ -487,19 +496,17 @@ class _ErrorRow extends StatelessWidget {
   }
 }
 
-/// One visual tile per *group* of consecutive same-role turns. Groups
-/// emerge naturally from Claude's multi-step responses (msg1 thinking +
-/// tool_use → tool_result → msg2 text), and rendering them as one tile
-/// gives the user the "this was one Claude response" reading instead of
-/// "Claude said something, then said something else."
+/// One visual tile per *group* of consecutive same-role turns.
 class _TurnGroupTile extends StatefulWidget {
   final List<ChatTurn> turns;
   final Map<String, ToolResultBlock> toolResults;
   final String agentName;
+  final _AgentTheme theme;
   const _TurnGroupTile({
     required this.turns,
     required this.toolResults,
     required this.agentName,
+    required this.theme,
   });
 
   @override
@@ -513,10 +520,6 @@ class _TurnGroupTileState extends State<_TurnGroupTile> {
   Widget build(BuildContext context) {
     final isUser = widget.turns.first.role == ChatRole.user;
     final allBlocks = widget.turns.expand((t) => t.blocks).toList();
-
-    // For assistant groups, split into response (text) vs internals
-    // (thinking + tool_use). Default state shows only response; internals
-    // hide behind a single small pill the user can tap to expand.
     final responseBlocks = isUser
         ? allBlocks
         : allBlocks.whereType<TextBlock>().cast<ChatBlock>().toList();
@@ -526,80 +529,76 @@ class _TurnGroupTileState extends State<_TurnGroupTile> {
     final thinkingCount = internalBlocks.whereType<ThinkingBlock>().length;
     final toolCount = internalBlocks.whereType<ToolUseBlock>().length;
 
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: Column(
-        crossAxisAlignment: isUser ? CrossAxisAlignment.end : CrossAxisAlignment.start,
-        children: [
-          // Single sender label per group. The previous design labeled
-          // every ChatTurn separately so a multi-step response read as
-          // multiple "Claude" headers stacked vertically.
-          Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              HugeIcon(
-                icon: isUser ? HugeIcons.strokeRoundedUser : HugeIcons.strokeRoundedAiChat02,
-                color: isUser ? LoopsyColors.muted : LoopsyColors.accent,
-                size: 14,
-              ),
-              const SizedBox(width: 6),
-              Text(
-                isUser ? 'You' : widget.agentName,
-                style: TextStyle(
-                  color: isUser ? LoopsyColors.muted : LoopsyColors.accent,
-                  fontSize: 11,
-                  fontWeight: FontWeight.w600,
-                  letterSpacing: 0.4,
-                ),
-              ),
-            ],
+    final content = Column(
+      crossAxisAlignment: isUser ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+      children: [
+        for (final b in responseBlocks)
+          _BlockView(block: b, isUser: isUser, theme: widget.theme),
+        if (internalBlocks.isNotEmpty) ...[
+          const SizedBox(height: 6),
+          _InternalsToggle(
+            thinkingCount: thinkingCount,
+            toolCount: toolCount,
+            expanded: _internalsExpanded,
+            theme: widget.theme,
+            onTap: () => setState(() => _internalsExpanded = !_internalsExpanded),
           ),
-          const SizedBox(height: 4),
-          for (final b in responseBlocks) _BlockView(block: b, isUser: isUser),
-          if (internalBlocks.isNotEmpty) ...[
-            const SizedBox(height: 6),
-            _InternalsToggle(
-              thinkingCount: thinkingCount,
-              toolCount: toolCount,
-              expanded: _internalsExpanded,
-              onTap: () => setState(() => _internalsExpanded = !_internalsExpanded),
-            ),
-            if (_internalsExpanded)
-              Padding(
-                padding: const EdgeInsets.only(top: 4),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    for (final b in internalBlocks) ...[
-                      _BlockView(block: b, isUser: false),
-                      // Pair each tool_use with its matching tool_result
-                      // when expanded — the user sees the full call →
-                      // return without hunting other turns.
-                      if (b is ToolUseBlock && widget.toolResults[b.id] != null)
-                        _BlockView(block: widget.toolResults[b.id]!, isUser: false),
-                    ],
+          if (_internalsExpanded)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  for (final b in internalBlocks) ...[
+                    _BlockView(block: b, isUser: false, theme: widget.theme),
+                    if (b is ToolUseBlock && widget.toolResults[b.id] != null)
+                      _BlockView(
+                        block: widget.toolResults[b.id]!,
+                        isUser: false,
+                        theme: widget.theme,
+                      ),
                   ],
-                ),
+                ],
               ),
-          ],
+            ),
         ],
+      ],
+    );
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 14),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: isUser
+            ? [
+                const SizedBox(),
+                Expanded(child: content),
+                const SizedBox(width: 8),
+                _Avatar(theme: widget.theme, isUser: true),
+              ]
+            : [
+                _Avatar(theme: widget.theme, isUser: false),
+                const SizedBox(width: 8),
+                Expanded(child: content),
+              ],
       ),
     );
   }
 }
 
-/// Compact "Reasoning · 2 tools" pill that toggles the internals view.
-/// Smaller than the prior iteration — chat surface stays clean, expert
-/// mode is one tap away.
+/// Compact reasoning/tools pill — accent-tinted border so each agent's
+/// chat has its own subtle visual signature.
 class _InternalsToggle extends StatelessWidget {
   final int thinkingCount;
   final int toolCount;
   final bool expanded;
+  final _AgentTheme theme;
   final VoidCallback onTap;
   const _InternalsToggle({
     required this.thinkingCount,
     required this.toolCount,
     required this.expanded,
+    required this.theme,
     required this.onTap,
   });
 
@@ -613,11 +612,11 @@ class _InternalsToggle extends StatelessWidget {
       onTap: onTap,
       borderRadius: BorderRadius.circular(14),
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
         decoration: BoxDecoration(
-          color: LoopsyColors.surfaceAlt,
+          color: theme.soft.withValues(alpha: 0.5),
           borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: LoopsyColors.border),
+          border: Border.all(color: theme.accent.withValues(alpha: 0.35)),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
@@ -626,16 +625,16 @@ class _InternalsToggle extends StatelessWidget {
               icon: expanded
                   ? HugeIcons.strokeRoundedArrowUp02
                   : HugeIcons.strokeRoundedArrowDown02,
-              color: LoopsyColors.muted,
-              size: 10,
+              color: theme.accent.withValues(alpha: 0.85),
+              size: 11,
             ),
-            const SizedBox(width: 3),
+            const SizedBox(width: 4),
             Text(
               label,
-              style: const TextStyle(
-                color: LoopsyColors.muted,
-                fontSize: 9.5,
-                fontWeight: FontWeight.w600,
+              style: TextStyle(
+                color: theme.accent.withValues(alpha: 0.95),
+                fontSize: 10.5,
+                fontWeight: FontWeight.w700,
                 fontFamily: 'JetBrainsMono',
               ),
             ),
@@ -649,13 +648,14 @@ class _InternalsToggle extends StatelessWidget {
 class _BlockView extends StatelessWidget {
   final ChatBlock block;
   final bool isUser;
-  const _BlockView({required this.block, required this.isUser});
+  final _AgentTheme theme;
+  const _BlockView({required this.block, required this.isUser, required this.theme});
 
   @override
   Widget build(BuildContext context) {
     switch (block) {
       case TextBlock(:final text):
-        return _TextBubble(text: text, isUser: isUser);
+        return _TextBubble(text: text, isUser: isUser, theme: theme);
       case ThinkingBlock(:final text):
         if (text.trim().isEmpty) {
           return const _ThinkingMarker(text: 'Reasoning…');
@@ -689,37 +689,52 @@ class _BlockView extends StatelessWidget {
   }
 }
 
+/// iMessage-shaped bubble: rounded except for the "tail" corner facing
+/// the sender's avatar. User bubbles use the loopsy accent gradient;
+/// assistant bubbles use the surface card.
 class _TextBubble extends StatelessWidget {
   final String text;
   final bool isUser;
-  const _TextBubble({required this.text, required this.isUser});
+  final _AgentTheme theme;
+  const _TextBubble({required this.text, required this.isUser, required this.theme});
+
   @override
   Widget build(BuildContext context) {
-    // User messages are typically short and never contain markdown they
-    // typed deliberately, so render them as plain text in the accent
-    // bubble. Assistant messages get the markdown renderer — code fences,
-    // inline code, bold, italics, URLs. Spike confirmed assistant text
-    // blocks arrive atomic so mid-render fence-flicker isn't a concern.
+    final bubbleShape = isUser
+        ? const BorderRadius.only(
+            topLeft: Radius.circular(16),
+            topRight: Radius.circular(4),
+            bottomLeft: Radius.circular(16),
+            bottomRight: Radius.circular(16),
+          )
+        : const BorderRadius.only(
+            topLeft: Radius.circular(4),
+            topRight: Radius.circular(16),
+            bottomLeft: Radius.circular(16),
+            bottomRight: Radius.circular(16),
+          );
     return Align(
       alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
       child: ConstrainedBox(
-        constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.88),
+        constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.78),
         child: Container(
-          margin: const EdgeInsets.only(top: 4),
+          margin: const EdgeInsets.only(top: 2, bottom: 2),
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
           decoration: BoxDecoration(
             color: isUser ? LoopsyColors.accentDark : LoopsyColors.surface,
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: isUser ? LoopsyColors.accentDark : LoopsyColors.border),
+            borderRadius: bubbleShape,
+            border: Border.all(
+              color: isUser ? LoopsyColors.accentDark : LoopsyColors.border,
+            ),
           ),
           child: isUser
               ? SelectableText(
                   text,
-                  style: const TextStyle(color: LoopsyColors.fg, fontSize: 14, height: 1.4),
+                  style: const TextStyle(color: LoopsyColors.fg, fontSize: 14.5, height: 1.4),
                 )
               : MarkdownText(
                   text,
-                  baseStyle: const TextStyle(color: LoopsyColors.fg, fontSize: 14, height: 1.45),
+                  baseStyle: const TextStyle(color: LoopsyColors.fg, fontSize: 14.5, height: 1.5),
                 ),
         ),
       ),
@@ -827,8 +842,6 @@ class _ToolCardState extends State<_ToolCard> {
                 ),
               ),
             ),
-            // Expand affordance only when there's more to see. Tap on the
-            // whole row so it's an easy mobile target, not just the chevron.
             if (hasMore)
               InkWell(
                 onTap: () => setState(() => _expanded = !_expanded),
@@ -865,6 +878,183 @@ class _ToolCardState extends State<_ToolCard> {
               ),
           ],
         ],
+      ),
+    );
+  }
+}
+
+/// Bottom-anchored composer with a frosted backdrop blur, pill-shaped
+/// input, and an animated send button that lights up with the agent's
+/// accent color when text is present. Designed to feel modern + chat-
+/// app native, not "form input dropped at the bottom".
+class _ChatComposer extends StatefulWidget {
+  final void Function(String text)? onSend;
+  final String agentName;
+  final _AgentTheme theme;
+  const _ChatComposer({required this.onSend, required this.agentName, required this.theme});
+
+  @override
+  State<_ChatComposer> createState() => _ChatComposerState();
+}
+
+class _ChatComposerState extends State<_ChatComposer> {
+  final TextEditingController _ctl = TextEditingController();
+  final FocusNode _focus = FocusNode();
+  bool _hasText = false;
+  bool _focused = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctl.addListener(() {
+      final has = _ctl.text.trim().isNotEmpty;
+      if (has != _hasText) setState(() => _hasText = has);
+    });
+    _focus.addListener(() {
+      if (_focus.hasFocus != _focused) setState(() => _focused = _focus.hasFocus);
+    });
+  }
+
+  @override
+  void dispose() {
+    _ctl.dispose();
+    _focus.dispose();
+    super.dispose();
+  }
+
+  void _send() {
+    final t = _ctl.text.trim();
+    if (t.isEmpty || widget.onSend == null) return;
+    widget.onSend!(t);
+    _ctl.clear();
+    _focus.requestFocus();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final enabled = widget.onSend != null;
+    return ClipRect(
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+        child: Container(
+          decoration: BoxDecoration(
+            color: LoopsyColors.surface.withValues(alpha: 0.92),
+            border: const Border(top: BorderSide(color: LoopsyColors.border)),
+          ),
+          child: SafeArea(
+            top: false,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(12, 10, 10, 10),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Expanded(
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 150),
+                      curve: Curves.easeOut,
+                      decoration: BoxDecoration(
+                        color: LoopsyColors.surfaceAlt,
+                        borderRadius: BorderRadius.circular(22),
+                        border: Border.all(
+                          color: _focused ? widget.theme.accent : LoopsyColors.border,
+                          width: _focused ? 1.5 : 1,
+                        ),
+                        boxShadow: _focused
+                            ? [
+                                BoxShadow(
+                                  color: widget.theme.accent.withValues(alpha: 0.18),
+                                  blurRadius: 16,
+                                  spreadRadius: 0,
+                                ),
+                              ]
+                            : null,
+                      ),
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                      child: TextField(
+                        controller: _ctl,
+                        focusNode: _focus,
+                        enabled: enabled,
+                        minLines: 1,
+                        maxLines: 6,
+                        textCapitalization: TextCapitalization.sentences,
+                        textInputAction: TextInputAction.send,
+                        onSubmitted: (_) => _send(),
+                        style: const TextStyle(color: LoopsyColors.fg, fontSize: 15, height: 1.4),
+                        decoration: InputDecoration(
+                          hintText: enabled ? 'Message ${widget.agentName}…' : 'Disconnected',
+                          hintStyle: const TextStyle(color: LoopsyColors.muted, fontSize: 15),
+                          border: InputBorder.none,
+                          isDense: true,
+                          contentPadding: const EdgeInsets.symmetric(vertical: 10),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  _SendButton(
+                    enabled: _hasText && enabled,
+                    accent: widget.theme.accent,
+                    onTap: _send,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Animated send button. Inactive state is a muted neutral circle; on
+/// "ready" the background fills with the agent's accent and the icon
+/// flips to high-contrast — telegraphs "ready to fly."
+class _SendButton extends StatelessWidget {
+  final bool enabled;
+  final Color accent;
+  final VoidCallback onTap;
+  const _SendButton({required this.enabled, required this.accent, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 160),
+      curve: Curves.easeOut,
+      decoration: BoxDecoration(
+        gradient: enabled
+            ? LinearGradient(
+                colors: [accent, Color.lerp(accent, Colors.white, 0.18) ?? accent],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              )
+            : null,
+        color: enabled ? null : LoopsyColors.surfaceAlt,
+        shape: BoxShape.circle,
+        boxShadow: enabled
+            ? [
+                BoxShadow(
+                  color: accent.withValues(alpha: 0.45),
+                  blurRadius: 14,
+                  offset: const Offset(0, 4),
+                ),
+              ]
+            : null,
+      ),
+      child: Material(
+        color: Colors.transparent,
+        shape: const CircleBorder(),
+        child: InkWell(
+          customBorder: const CircleBorder(),
+          onTap: enabled ? onTap : null,
+          child: Padding(
+            padding: const EdgeInsets.all(13),
+            child: HugeIcon(
+              icon: HugeIcons.strokeRoundedSent,
+              color: enabled ? LoopsyColors.bg : LoopsyColors.muted,
+              size: 18,
+            ),
+          ),
+        ),
       ),
     );
   }
