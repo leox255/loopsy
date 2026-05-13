@@ -6,11 +6,15 @@ import 'package:hugeicons/hugeicons.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'package:xterm/xterm.dart';
 
+import '../services/chat_event.dart';
 import '../services/relay_client.dart';
 import '../services/storage.dart';
 import '../theme.dart';
+import '../widgets/chat_panel.dart';
 import '../widgets/loopsy_modal.dart';
 import '../widgets/terminal_accessory_bar.dart';
+
+enum _ViewMode { terminal, chat }
 
 class TerminalScreen extends StatefulWidget {
   final String sessionId;
@@ -52,6 +56,13 @@ class _TerminalScreenState extends State<TerminalScreen> {
   // for the PTY.
   bool _ctrlArmed = false;
   bool _altArmed = false;
+
+  // Chat view state. The chat stream piggy-backs on the same relay
+  // sessionId — terminal and chat are two renderings of one session.
+  _ViewMode _view = _ViewMode.terminal;
+  final ChatLog _chatLog = ChatLog();
+  int _chatRevision = 0;
+  bool _chatSubscribed = false;
 
   // Voice
   final stt.SpeechToText _speech = stt.SpeechToText();
@@ -167,6 +178,23 @@ class _TerminalScreenState extends State<TerminalScreen> {
     if (!mounted) return;
     final type = msg['type'];
     switch (type) {
+      case 'chat-event':
+        final payload = msg['event'];
+        if (payload is Map<String, dynamic>) {
+          final ev = ChatEvent.fromJson(payload);
+          if (ev != null) {
+            _chatLog.apply(ev);
+            // Bump revision so the ChatPanel re-renders. Only setState when
+            // chat is visible; otherwise just accumulate quietly so toggling
+            // back doesn't replay the whole conversation as animations.
+            if (_view == _ViewMode.chat) {
+              setState(() => _chatRevision++);
+            } else {
+              _chatRevision++;
+            }
+          }
+        }
+        break;
       case 'device-disconnected':
         setState(() { _status = 'device disconnected'; _statusError = true; });
         break;
@@ -547,8 +575,23 @@ class _TerminalScreenState extends State<TerminalScreen> {
     ctl.dispose();
   }
 
+  /// Idempotent subscribe — the daemon dedupes on its side, but we still
+  /// avoid issuing a second `chat-subscribe` when the user toggles back to
+  /// chat after a brief look at the terminal. Re-subscribing after a
+  /// reconnect is handled by clearing this flag on session close (TODO
+  /// when we add that recovery path; v1 expects one continuous session).
+  void _ensureChatSubscribed() {
+    if (_chatSubscribed) return;
+    if (_session == null) return;
+    _session!.sendControl({'type': 'chat-subscribe'});
+    _chatSubscribed = true;
+  }
+
   @override
   void dispose() {
+    if (_chatSubscribed) {
+      _session?.sendControl({'type': 'chat-unsubscribe'});
+    }
     _session?.close();
     _termFocus.dispose();
     _controller.dispose();
@@ -583,6 +626,15 @@ class _TerminalScreenState extends State<TerminalScreen> {
           ],
         ),
         actions: [
+          _ViewToggle(
+            mode: _view,
+            onChanged: (m) {
+              if (m == _view) return;
+              setState(() => _view = m);
+              if (m == _ViewMode.chat) _ensureChatSubscribed();
+            },
+          ),
+          const SizedBox(width: 8),
           Padding(
             padding: const EdgeInsets.only(right: 12),
             child: Row(
@@ -608,42 +660,48 @@ class _TerminalScreenState extends State<TerminalScreen> {
           ),
         ],
       ),
+      // Keep both panes mounted via IndexedStack so toggling between
+      // terminal and chat is instant and the terminal keeps receiving
+      // PTY output even when hidden. The accessory bar lives below the
+      // stack but only renders when the terminal pane is on top — chat
+      // doesn't need the modifier row.
       body: Column(
         children: [
           Expanded(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-              child: TerminalView(
-                _terminal,
-                controller: _controller,
-                focusNode: _termFocus,
-                // System keyboard mode. `visiblePassword` is the lowest-
-                // friction layout iOS/Android expose for terminals: full
-                // QWERTY-style keys, no autocorrect, no period-on-double-
-                // space, no quote substitution. xterm.dart's internal
-                // CustomTextEdit handles the IME path and fires
-                // Terminal.onOutput with the right bytes per keystroke.
-                keyboardType: TextInputType.visiblePassword,
-                autofocus: false,
-                backgroundOpacity: 1,
-                padding: const EdgeInsets.all(6),
-                textStyle: const TerminalStyle(
-                  fontFamily: 'JetBrainsMono',
-                  fontFamilyFallback: ['Menlo', 'Courier New', 'monospace'],
-                  fontSize: 12,
+            child: IndexedStack(
+              index: _view == _ViewMode.terminal ? 0 : 1,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                  child: TerminalView(
+                    _terminal,
+                    controller: _controller,
+                    focusNode: _termFocus,
+                    keyboardType: TextInputType.visiblePassword,
+                    autofocus: false,
+                    backgroundOpacity: 1,
+                    padding: const EdgeInsets.all(6),
+                    textStyle: const TerminalStyle(
+                      fontFamily: 'JetBrainsMono',
+                      fontFamilyFallback: ['Menlo', 'Courier New', 'monospace'],
+                      fontSize: 12,
+                    ),
+                    theme: loopsyTerminalTheme,
+                  ),
                 ),
-                theme: loopsyTerminalTheme,
-              ),
+                ChatPanel(log: _chatLog, revision: _chatRevision),
+              ],
             ),
           ),
-          TerminalAccessoryBar(
-            onBytes: _sendRawBytes,
-            ctrlArmed: _ctrlArmed,
-            altArmed: _altArmed,
-            onToggleCtrl: () => setState(() { _ctrlArmed = !_ctrlArmed; if (_ctrlArmed) _altArmed = false; }),
-            onToggleAlt:  () => setState(() { _altArmed  = !_altArmed;  if (_altArmed)  _ctrlArmed = false; }),
-            onVoice: _voiceReady ? _openVoiceSheet : null,
-          ),
+          if (_view == _ViewMode.terminal)
+            TerminalAccessoryBar(
+              onBytes: _sendRawBytes,
+              ctrlArmed: _ctrlArmed,
+              altArmed: _altArmed,
+              onToggleCtrl: () => setState(() { _ctrlArmed = !_ctrlArmed; if (_ctrlArmed) _altArmed = false; }),
+              onToggleAlt:  () => setState(() { _altArmed  = !_altArmed;  if (_altArmed)  _ctrlArmed = false; }),
+              onVoice: _voiceReady ? _openVoiceSheet : null,
+            ),
         ],
       ),
     );
@@ -656,6 +714,84 @@ class _TerminalScreenState extends State<TerminalScreen> {
       case 'codex':  return HugeIcons.strokeRoundedSourceCode;
       default:       return HugeIcons.strokeRoundedCommandLine;
     }
+  }
+}
+
+/// Two-state segmented control in the AppBar that swaps the body between
+/// the terminal grid and the chat-style transcript. Stateless: parent
+/// owns [_ViewMode] and just rebuilds.
+class _ViewToggle extends StatelessWidget {
+  final _ViewMode mode;
+  final ValueChanged<_ViewMode> onChanged;
+  const _ViewToggle({required this.mode, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 8),
+      decoration: BoxDecoration(
+        color: LoopsyColors.surfaceAlt,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: LoopsyColors.border),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _toggleButton(
+            label: 'term',
+            icon: HugeIcons.strokeRoundedCommandLine,
+            selected: mode == _ViewMode.terminal,
+            onTap: () => onChanged(_ViewMode.terminal),
+          ),
+          _toggleButton(
+            label: 'chat',
+            icon: HugeIcons.strokeRoundedAiChat02,
+            selected: mode == _ViewMode.chat,
+            onTap: () => onChanged(_ViewMode.chat),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _toggleButton({
+    required String label,
+    required IconData icon,
+    required bool selected,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(7),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 140),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: selected ? LoopsyColors.accent : Colors.transparent,
+          borderRadius: BorderRadius.circular(7),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            HugeIcon(
+              icon: icon,
+              color: selected ? LoopsyColors.bg : LoopsyColors.muted,
+              size: 14,
+            ),
+            const SizedBox(width: 5),
+            Text(
+              label,
+              style: TextStyle(
+                color: selected ? LoopsyColors.bg : LoopsyColors.muted,
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+                fontFamily: 'JetBrainsMono',
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 

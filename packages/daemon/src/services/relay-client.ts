@@ -21,10 +21,20 @@ import type { CustomCommand, RelayConfig } from '@loopsy/protocol';
 import { PtySessionManager } from './pty-session-manager.js';
 import type { AgentKind } from './pty-session-manager.js';
 import { checkAutoApprove, grantAutoApprove, verifyMacPassword } from './auto-approve.js';
+import { ChatEventStream, type ChatEvent } from './chat-event-stream.js';
 
 const RECONNECT_INITIAL_MS = 1000;
 const RECONNECT_MAX_MS = 30_000;
 const HEARTBEAT_MS = 25_000;
+/**
+ * Per-session backpressure threshold for chat-event forwarding. If the
+ * outbound WS buffer is above this size, we assume the client is too slow
+ * (cellular network, app backgrounded, etc.) and rather than letting Node
+ * pile chat events into RAM indefinitely we drop the chat stream for that
+ * session with a `tail-gap` error. The client can resubscribe when ready.
+ * 4 MiB picked as a "few hundred typical assistant blocks" headroom.
+ */
+const CHAT_BACKPRESSURE_BYTES = 4 * 1024 * 1024;
 
 interface RoutedSession {
   sessionId: string;
@@ -121,6 +131,14 @@ export class RelayClient {
   private heartbeatTimer?: ReturnType<typeof setInterval>;
   /** sessionId → handle so we can tear down listeners on disconnect. */
   private sessions = new Map<string, RoutedSession>();
+  /**
+   * sessionId → live ChatEventStream. Chat is piggy-backed on an attached
+   * PTY session — the phone subscribes by the same sessionId it's using
+   * for the terminal view, and the daemon resolves the cwd from the PTY.
+   * Capped at one chat stream per session in v1 (the relay only ever has
+   * one client per sessionId anyway).
+   */
+  private chats = new Map<string, ChatEventStream>();
   /** Daemon-side custom command list. Mutated in-place and persisted. */
   private customCommands: CustomCommand[];
   private saveCustomCommands: (commands: CustomCommand[]) => Promise<void>;
@@ -156,6 +174,8 @@ export class RelayClient {
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
     for (const s of this.sessions.values()) s.detach();
     this.sessions.clear();
+    for (const c of this.chats.values()) c.stop();
+    this.chats.clear();
     if (this.ws) {
       try {
         this.ws.close(1000, 'shutdown');
@@ -345,6 +365,17 @@ export class RelayClient {
         if (!sessionId) return;
         this.pty.close(sessionId);
         this.sessions.delete(sessionId);
+        // Closing the PTY tears down the chat stream too — there's nothing
+        // to keep tailing once the underlying session is gone.
+        this.stopChatStream(sessionId);
+        break;
+      case 'chat-subscribe':
+        if (!sessionId) return;
+        this.handleChatSubscribe(sessionId, msg as { fromOffset?: number });
+        break;
+      case 'chat-unsubscribe':
+        if (!sessionId) return;
+        this.stopChatStream(sessionId);
         break;
       default:
         // Unknown control message — ignore for forward compatibility.
@@ -500,6 +531,69 @@ export class RelayClient {
     if (!s) return;
     s.detach();
     this.sessions.delete(sessionId);
+    // Detach also tears down the chat stream so we're not tailing the
+    // JSONL for a client that has nowhere to send frames. The client
+    // re-subscribes on reattach.
+    this.stopChatStream(sessionId);
+  }
+
+  /**
+   * Start tailing the Claude JSONL for `sessionId` and forward each
+   * translated ChatEvent back over the relay tagged with the same
+   * sessionId. The phone uses the same routing key for terminal and chat
+   * frames — that keeps the relay's session-routing logic untouched.
+   *
+   * If a chat stream is already running for this session, replace it so
+   * a reconnecting client can pass a fresh `fromOffset` for partial
+   * replay.
+   */
+  private handleChatSubscribe(sessionId: string, msg: { fromOffset?: number }): void {
+    this.stopChatStream(sessionId);
+    const info = this.pty.get(sessionId);
+    if (!info) {
+      this.sendText({
+        type: 'chat-event',
+        sessionId,
+        event: { v: 1, kind: 'capability', chat: 'unavailable', reason: 'no PTY session' } satisfies ChatEvent,
+      });
+      return;
+    }
+    const stream = new ChatEventStream({
+      cwd: info.cwd,
+      startByteOffset: msg.fromOffset,
+    });
+    stream.on('event', (event: ChatEvent) => {
+      // Backpressure: if the outbound WS is congested, dropping chat
+      // events on the floor without telling the client would leave the UI
+      // showing a stale conversation. Surface a `tail-gap` and stop the
+      // stream so the user sees "reconnect to resync" instead of silent
+      // half-state.
+      const buffered = this.ws?.bufferedAmount ?? 0;
+      if (buffered > CHAT_BACKPRESSURE_BYTES) {
+        this.sendText({
+          type: 'chat-event',
+          sessionId,
+          event: {
+            v: 1,
+            kind: 'error',
+            code: 'tail-gap',
+            message: `client too slow (${Math.round(buffered / 1024 / 1024)} MiB buffered); chat stream dropped`,
+          } satisfies ChatEvent,
+        });
+        this.stopChatStream(sessionId);
+        return;
+      }
+      this.sendText({ type: 'chat-event', sessionId, event });
+    });
+    this.chats.set(sessionId, stream);
+    void stream.start();
+  }
+
+  private stopChatStream(sessionId: string): void {
+    const existing = this.chats.get(sessionId);
+    if (!existing) return;
+    existing.stop();
+    this.chats.delete(sessionId);
   }
 
   /**
