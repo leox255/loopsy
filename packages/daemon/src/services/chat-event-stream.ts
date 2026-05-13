@@ -51,6 +51,12 @@ export interface ChatEventStreamOptions {
   /** Optional sessionId hint — used by adapters that support exact lookup. */
   sessionId?: string;
   /**
+   * Loopsy session id. Adapters use this to re-check tracker maps on
+   * every poll iteration, so a tracker entry that gets persisted by
+   * the async discovery service mid-poll is picked up immediately.
+   */
+  loopsySessionId?: string;
+  /**
    * Epoch-ms when the owning PTY was spawned. Used to bind to the right
    * file when multiple sessions share a directory.
    */
@@ -72,6 +78,7 @@ export class ChatEventStream extends EventEmitter {
   private adapter: TranscriptAdapter;
   private cwd: string;
   private sessionId?: string;
+  private loopsySessionId?: string;
   private ptySpawnedAtMs?: number;
   private pollMs: number;
   private startByteOffset?: number;
@@ -90,6 +97,7 @@ export class ChatEventStream extends EventEmitter {
     this.adapter = options.adapter;
     this.cwd = options.cwd;
     this.sessionId = options.sessionId;
+    this.loopsySessionId = options.loopsySessionId;
     this.ptySpawnedAtMs = options.ptySpawnedAtMs;
     this.pollMs = options.pollMs ?? DEFAULT_POLL_MS;
     this.startByteOffset = options.startByteOffset;
@@ -98,25 +106,26 @@ export class ChatEventStream extends EventEmitter {
   }
 
   async start(): Promise<void> {
-    let path = await this.adapter.resolveFile({
+    const resolveOpts = () => ({
       cwd: this.cwd,
       spawnedAtMs: this.ptySpawnedAtMs ?? 0,
       sessionId: this.sessionId,
+      loopsySessionId: this.loopsySessionId,
     });
 
+    let path = await this.adapter.resolveFile(resolveOpts());
+
     // Race-window poll: when the PTY just spawned, the agent CLI takes a
-    // moment to create its transcript. Without polling we'd either fail
-    // capability immediately or (with non-strict resolution) bind to a
-    // stale neighbour file. Poll every 500ms for up to 15s.
+    // moment to create its transcript AND the loopsy→agent-session-id
+    // tracker takes a moment to discover and persist the mapping. The
+    // adapter's resolveFile re-checks both on every iteration so we pick
+    // up whichever signal lands first. 30s gives slow systems plenty of
+    // headroom — agent first-write is normally <2s.
     if (!path && this.ptySpawnedAtMs !== undefined) {
-      const deadline = Date.now() + 15_000;
+      const deadline = Date.now() + 30_000;
       while (!path && !this.stopped && Date.now() < deadline) {
         await new Promise((r) => setTimeout(r, 500));
-        path = await this.adapter.resolveFile({
-          cwd: this.cwd,
-          spawnedAtMs: this.ptySpawnedAtMs,
-          sessionId: this.sessionId,
-        });
+        path = await this.adapter.resolveFile(resolveOpts());
       }
     }
 
@@ -128,7 +137,7 @@ export class ChatEventStream extends EventEmitter {
         chat: 'unavailable',
         reason: this.sessionId
           ? `no transcript file for sessionId=${this.sessionId} in ${this.cwd}`
-          : `no transcript appeared within 15s of spawn — agent may not write a transcript`,
+          : `no transcript appeared within 30s of spawn — agent may not write a transcript`,
       } satisfies ChatEvent);
       return;
     }

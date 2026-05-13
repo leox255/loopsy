@@ -755,23 +755,25 @@ class _TerminalScreenState extends State<TerminalScreen> {
                   log: _chatLog,
                   revision: _chatRevision,
                   agentName: _agentDisplayName(),
-                  // Chat input v1 routes through the same PTY stdin
-                  // channel the terminal view uses. Three deliberate
-                  // choices:
-                  //
-                  //   1. Bracketed paste around the text so TUIs that
-                  //      buffer paste mode (Codex's ratatui in
-                  //      particular) treat the body as ONE unit and
-                  //      don't interpret embedded newlines mid-text.
-                  //   2. Send the text + brackets, wait 80ms, then
-                  //      submit. The delay gives ratatui-style event
-                  //      loops time to drain the paste before they
-                  //      see the Enter key.
-                  //   3. Submit as `\r\n` (CR+LF) instead of just `\r`.
-                  //      Some agent TUIs treat `\r` as cursor-to-start
-                  //      and only fire submit on a true line feed; the
-                  //      pair satisfies both interpretations.
-                  onSend: _session == null
+                  // Composer is gated on chat-capability being confirmed
+                  // by the daemon (i.e., we've found the transcript and
+                  // the agent is actively writing to it). Sending into
+                  // the PTY before the agent has fully booted risked
+                  // the input landing in a buffer the agent hadn't yet
+                  // started reading from — looked like the message
+                  // "didn't go through". Once chat is available, this
+                  // path uses three deliberate choices:
+                  //   1. Bracketed paste around the text so ratatui-
+                  //      style TUIs (Codex) treat the body as ONE unit
+                  //      and don't interpret embedded newlines mid-
+                  //      text.
+                  //   2. 80ms delay between paste and submit, giving
+                  //      the agent's event loop time to drain the
+                  //      paste before it sees the Enter key.
+                  //   3. \r\n as submit so TUIs that treat \r as
+                  //      cursor-to-start still see the line feed and
+                  //      fire submit.
+                  onSend: (_session == null || !_chatLog.available)
                       ? null
                       : (text) async {
                           final session = _session;

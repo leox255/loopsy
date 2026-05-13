@@ -628,6 +628,7 @@ export class RelayClient {
         cwd: info.cwd,
         startByteOffset: msg.fromOffset,
         sessionId: priorSessionId ?? undefined,
+        loopsySessionId: sessionId,
         ptySpawnedAtMs: info.createdAt,
       });
       stream.on('event', (event: ChatEvent) => {

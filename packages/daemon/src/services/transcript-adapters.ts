@@ -31,6 +31,13 @@ export interface ResolveOptions {
   spawnedAtMs: number;
   /** Explicit session id when we already know it from a prior discovery. */
   sessionId?: string;
+  /**
+   * Loopsy-side session id. Adapters that maintain a discovered-on-spawn
+   * mapping (currently only Claude) use this to re-check the tracker on
+   * each poll iteration — so a JSONL that appears mid-poll is picked up
+   * the instant the discovery service finishes persisting it.
+   */
+  loopsySessionId?: string;
 }
 
 export interface RecordTranslator {
@@ -203,8 +210,22 @@ export const claudeAdapter: TranscriptAdapter = {
     let entries: string[];
     try { entries = await readdir(dir); } catch { return null; }
     const jsonls = entries.filter((e) => e.endsWith('.jsonl'));
-    if (opts.sessionId) {
-      const match = jsonls.find((e) => e === `${opts.sessionId}.jsonl`);
+
+    // Tracker re-check: discovery on PTY spawn runs async and may have
+    // landed the loopsy→claude mapping AFTER ChatEventStream started.
+    // Re-reading on every poll lets us pick up the JSONL the moment it
+    // becomes known, instead of stalling out on birthtime correlation.
+    let effectiveSessionId = opts.sessionId;
+    if (!effectiveSessionId && opts.loopsySessionId) {
+      try {
+        const { getClaudeSessionForLoopsy } = await import('./claude-session-tracker.js');
+        const tracked = await getClaudeSessionForLoopsy(opts.loopsySessionId);
+        if (tracked) effectiveSessionId = tracked;
+      } catch { /* ignore — fall back to birthtime */ }
+    }
+
+    if (effectiveSessionId) {
+      const match = jsonls.find((e) => e === `${effectiveSessionId}.jsonl`);
       return match ? join(dir, match) : null;
     }
     return pickBySpawnBirthtime(dir, jsonls, opts.spawnedAtMs);
@@ -647,7 +668,14 @@ async function pickBySpawnBirthtime(
   dir: string,
   filenames: string[],
   spawnedAtMs: number,
-  graceMs = 10_000,
+  // 60s window: agents can take a few seconds to write their first
+  // transcript record (config load, login refresh, etc.). 10s was too
+  // tight on slower laptops or first-spawn-after-cache-clear. Multiple
+  // sessions in the same cwd are still disambiguated because we pick
+  // the file with birthtime CLOSEST to the spawn — collisions only
+  // happen if two sessions were spawned within 60s of each other,
+  // which is rare and still resolvable by re-checking the tracker.
+  graceMs = 60_000,
 ): Promise<string | null> {
   const candidates: { path: string; birthtimeMs: number }[] = [];
   for (const f of filenames) {
