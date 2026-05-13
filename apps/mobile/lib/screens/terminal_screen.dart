@@ -21,6 +21,7 @@ class TerminalScreen extends StatefulWidget {
   final String agent;
   final bool fresh;
   final bool auto;
+
   /// Set when [agent] is `'custom'` — id of the user-defined entry on
   /// the daemon. Sent to the daemon via session-open so the daemon can
   /// resolve it against its trusted customCommands list (the phone never
@@ -99,15 +100,22 @@ class _TerminalScreenState extends State<TerminalScreen> {
       _session?.sendStdin(transformed);
       _captureSummary(transformed);
     };
-    _terminal.onResize = (w, h, _, __) => _session?.resize(w, h);
+    _terminal.onResize = (w, h, pixelWidth, pixelHeight) =>
+        _session?.resize(w, h);
 
     final session = RelaySession(
       pairing: pairing,
       sessionId: widget.sessionId,
-      onPty: (bytes) => _terminal.write(utf8.decode(bytes, allowMalformed: true)),
+      onPty: (bytes) =>
+          _terminal.write(utf8.decode(bytes, allowMalformed: true)),
       onControl: _handleControl,
       onClose: (code, _) {
-        if (mounted) setState(() { _status = 'closed (${code ?? '?'})'; _statusError = code != 1000; });
+        if (mounted) {
+          setState(() {
+            _status = 'closed (${code ?? '?'})';
+            _statusError = code != 1000;
+          });
+        }
       },
     );
 
@@ -179,6 +187,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
       }
       WidgetsBinding.instance.addPostFrameCallback((_) => poll());
     }
+
     WidgetsBinding.instance.addPostFrameCallback((_) => poll());
     return completer.future;
   }
@@ -208,7 +217,10 @@ class _TerminalScreenState extends State<TerminalScreen> {
         }
         break;
       case 'device-disconnected':
-        setState(() { _status = 'device disconnected'; _statusError = true; });
+        setState(() {
+          _status = 'device disconnected';
+          _statusError = true;
+        });
         break;
       case 'auto-approve-granted':
         // Daemon successfully verified our sudo password and minted a token.
@@ -240,11 +252,16 @@ class _TerminalScreenState extends State<TerminalScreen> {
             _status = 'auto-approve denied';
             _statusError = true;
           });
-          final reason = msg['message'] is String ? msg['message'] as String : 'Auto-approve denied.';
+          final reason = msg['message'] is String
+              ? msg['message'] as String
+              : 'Auto-approve denied.';
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               backgroundColor: LoopsyColors.surface,
-              content: Text(reason, style: const TextStyle(color: LoopsyColors.bad)),
+              content: Text(
+                reason,
+                style: const TextStyle(color: LoopsyColors.bad),
+              ),
               duration: const Duration(seconds: 4),
             ),
           );
@@ -261,7 +278,8 @@ class _TerminalScreenState extends State<TerminalScreen> {
             _status = 'cannot start session';
             _statusError = true;
           });
-          final reason = (msg['message'] as String?) ??
+          final reason =
+              (msg['message'] as String?) ??
               'The Loopsy daemon rejected this session.';
           await showLoopsyDialog<void>(
             context: context,
@@ -269,10 +287,10 @@ class _TerminalScreenState extends State<TerminalScreen> {
             title: 'Cannot start session',
             subtitle: reason,
             actions: [
-              LoopsyModalAction.primary(
-                'Back',
-                () { Navigator.pop(context); if (mounted) Navigator.of(context).pop(); },
-              ),
+              LoopsyModalAction.primary('Back', () {
+                Navigator.pop(context);
+                if (mounted) Navigator.of(context).pop();
+              }),
             ],
           );
         }
@@ -326,7 +344,9 @@ class _TerminalScreenState extends State<TerminalScreen> {
             ),
             suffixIcon: IconButton(
               icon: HugeIcon(
-                icon: obscure ? HugeIcons.strokeRoundedView : HugeIcons.strokeRoundedViewOff,
+                icon: obscure
+                    ? HugeIcons.strokeRoundedView
+                    : HugeIcons.strokeRoundedViewOff,
                 color: LoopsyColors.muted,
                 size: 18,
               ),
@@ -339,7 +359,10 @@ class _TerminalScreenState extends State<TerminalScreen> {
       ),
       actions: [
         LoopsyModalAction.text('Cancel', () => Navigator.pop(context)),
-        LoopsyModalAction.primary('Enable', () => Navigator.pop(context, ctl.text)),
+        LoopsyModalAction.primary(
+          'Enable',
+          () => Navigator.pop(context, ctl.text),
+        ),
       ],
     );
   }
@@ -355,14 +378,16 @@ class _TerminalScreenState extends State<TerminalScreen> {
       final b = bytes[0];
       if (_ctrlArmed) {
         setState(() => _ctrlArmed = false);
-        if (b >= 0x61 && b <= 0x7a) return [b - 0x60];          // ctrl+a..z -> 0x01..0x1A
-        if (b >= 0x41 && b <= 0x5a) return [b - 0x40];          // ctrl+A..Z -> same
-        if (b == 0x5b) return [0x1b];                            // ctrl+[ -> ESC
-        return bytes;                                             // ctrl + non-letter: pass through
+        if (b >= 0x61 && b <= 0x7a) {
+          return [b - 0x60]; // ctrl+a..z -> 0x01..0x1A
+        }
+        if (b >= 0x41 && b <= 0x5a) return [b - 0x40]; // ctrl+A..Z -> same
+        if (b == 0x5b) return [0x1b]; // ctrl+[ -> ESC
+        return bytes; // ctrl + non-letter: pass through
       }
       if (_altArmed) {
         setState(() => _altArmed = false);
-        return [0x1b, b];                                         // alt+key -> ESC prefix
+        return [0x1b, b]; // alt+key -> ESC prefix
       }
     }
     // Multi-byte input with a modifier armed: drop the modifier without
@@ -378,6 +403,30 @@ class _TerminalScreenState extends State<TerminalScreen> {
   void _sendRawBytes(List<int> bytes) {
     _session?.sendStdin(bytes);
     _captureSummary(bytes);
+  }
+
+  Future<void> _sendChatPrompt(String text) async {
+    final session = _session;
+    if (session == null) return;
+
+    final body = utf8.encode(text);
+    _captureSummary([...body, 0x0d]);
+
+    if (widget.agent == 'claude') {
+      session.sendStdin([...body, 0x0d]);
+      return;
+    }
+
+    // Codex and Gemini both distinguish plain Enter from Ctrl+J/LF:
+    // Enter submits, while LF is treated as an insert-newline binding.
+    // Send the prompt as bracketed paste so their paste/fast-return
+    // heuristics do not reinterpret a fast synthetic send as multiline
+    // typing, then send a plain CR key event.
+    const pasteStart = [0x1b, 0x5b, 0x32, 0x30, 0x30, 0x7e]; // ESC[200~
+    const pasteEnd = [0x1b, 0x5b, 0x32, 0x30, 0x31, 0x7e]; // ESC[201~
+    session.sendStdin([...pasteStart, ...body, ...pasteEnd]);
+    await Future<void>.delayed(const Duration(milliseconds: 160));
+    session.sendStdin([0x0d]);
   }
 
   /// Build a one-line summary from the first user input the session sees and
@@ -437,182 +486,217 @@ class _TerminalScreenState extends State<TerminalScreen> {
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
       ),
-      builder: (ctx) => StatefulBuilder(builder: (ctx, setSheet) {
-        Future<void> startListening() async {
-          // Guard against double-start: speech_to_text throws if listen() is
-          // called while a session is already active.
-          if (_speech.isListening) return;
-          try {
-            userEdited = false;
-            await _speech.listen(
-              onResult: (res) {
-                if (userEdited) return; // honor manual edits, stop overwriting
-                setSheet(() {
-                  lastSpeech = res.recognizedWords;
-                  ctl.value = TextEditingValue(
-                    text: lastSpeech,
-                    selection: TextSelection.collapsed(offset: lastSpeech.length),
-                  );
-                });
-              },
-              listenOptions: stt.SpeechListenOptions(partialResults: true),
-            );
-            setSheet(() => listening = true);
-          } catch (e) {
-            // Speech can fail mid-listen (mic permission revoked, system
-            // recognizer unavailable on simulator, AVAudioSession contention
-            // with another app). Surface as muted state instead of crashing
-            // the whole route.
-            setSheet(() => listening = false);
-          }
-        }
-
-        Future<void> stopListening() async {
-          if (!_speech.isListening) {
-            setSheet(() => listening = false);
-            return;
-          }
-          try {
-            await _speech.stop();
-          } catch (_) {/* engine already torn down — fine */}
-          setSheet(() => listening = false);
-        }
-
-        // Auto-start listening ONCE when the sheet first opens. Gating on a
-        // flag rather than ctl.text/listening because those can flip during
-        // the session and we don't want to re-arm mid-edit.
-        if (!autoStartFired) {
-          autoStartFired = true;
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (Navigator.of(ctx).canPop()) startListening();
-          });
-        }
-
-        return Padding(
-          padding: EdgeInsets.fromLTRB(20, 18, 20, 20 + MediaQuery.of(ctx).viewInsets.bottom),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  HugeIcon(
-                    icon: listening ? HugeIcons.strokeRoundedMic01 : HugeIcons.strokeRoundedMicOff01,
-                    color: listening ? LoopsyColors.bad : LoopsyColors.muted,
-                    size: 22,
-                  ),
-                  const SizedBox(width: 10),
-                  Text(
-                    listening ? 'Listening… tap text to edit' : (userEdited ? 'Edited — review and send' : 'Tap mic to start'),
-                    style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 16),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 16),
-              TextField(
-                controller: ctl,
-                focusNode: focus,
-                autofocus: false,
-                minLines: 4,
-                maxLines: 8,
-                style: const TextStyle(
-                  color: LoopsyColors.fg,
-                  fontFamily: 'JetBrainsMono',
-                  fontSize: 15,
-                ),
-                decoration: InputDecoration(
-                  hintText: 'Speak now, then edit before sending…',
-                  hintStyle: const TextStyle(color: LoopsyColors.muted),
-                  filled: true,
-                  fillColor: LoopsyColors.surfaceAlt,
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: const BorderSide(color: LoopsyColors.border),
-                  ),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: const BorderSide(color: LoopsyColors.border),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: const BorderSide(color: LoopsyColors.accent),
-                  ),
-                  contentPadding: const EdgeInsets.all(14),
-                ),
-                textCapitalization: TextCapitalization.sentences,
-                onChanged: (v) {
-                  // If the user typed something different from the latest
-                  // speech result, lock further speech updates so we don't
-                  // overwrite. Tapping the field also pauses recognition.
-                  if (v != lastSpeech) {
-                    userEdited = true;
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheet) {
+          Future<void> startListening() async {
+            // Guard against double-start: speech_to_text throws if listen() is
+            // called while a session is already active.
+            if (_speech.isListening) return;
+            try {
+              userEdited = false;
+              await _speech.listen(
+                onResult: (res) {
+                  if (userEdited) {
+                    return; // honor manual edits, stop overwriting
                   }
+                  setSheet(() {
+                    lastSpeech = res.recognizedWords;
+                    ctl.value = TextEditingValue(
+                      text: lastSpeech,
+                      selection: TextSelection.collapsed(
+                        offset: lastSpeech.length,
+                      ),
+                    );
+                  });
                 },
-                onTap: () {
-                  if (listening) stopListening();
-                },
-              ),
-              const SizedBox(height: 6),
-              Text(
-                listening
-                    ? 'Tip: pinch the text to edit — listening pauses on tap.'
-                    : 'Edit freely. Tap the mic to dictate again.',
-                style: const TextStyle(color: LoopsyColors.muted, fontSize: 11),
-              ),
-              const SizedBox(height: 14),
-              Row(
-                children: [
-                  TextButton.icon(
-                    onPressed: listening ? stopListening : startListening,
-                    icon: HugeIcon(
-                      icon: listening ? HugeIcons.strokeRoundedStopCircle : HugeIcons.strokeRoundedMic01,
-                      color: LoopsyColors.fg,
-                      size: 18,
+                listenOptions: stt.SpeechListenOptions(partialResults: true),
+              );
+              setSheet(() => listening = true);
+            } catch (e) {
+              // Speech can fail mid-listen (mic permission revoked, system
+              // recognizer unavailable on simulator, AVAudioSession contention
+              // with another app). Surface as muted state instead of crashing
+              // the whole route.
+              setSheet(() => listening = false);
+            }
+          }
+
+          Future<void> stopListening() async {
+            if (!_speech.isListening) {
+              setSheet(() => listening = false);
+              return;
+            }
+            try {
+              await _speech.stop();
+            } catch (_) {
+              /* engine already torn down — fine */
+            }
+            setSheet(() => listening = false);
+          }
+
+          // Auto-start listening ONCE when the sheet first opens. Gating on a
+          // flag rather than ctl.text/listening because those can flip during
+          // the session and we don't want to re-arm mid-edit.
+          if (!autoStartFired) {
+            autoStartFired = true;
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (Navigator.of(ctx).canPop()) startListening();
+            });
+          }
+
+          return Padding(
+            padding: EdgeInsets.fromLTRB(
+              20,
+              18,
+              20,
+              20 + MediaQuery.of(ctx).viewInsets.bottom,
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    HugeIcon(
+                      icon: listening
+                          ? HugeIcons.strokeRoundedMic01
+                          : HugeIcons.strokeRoundedMicOff01,
+                      color: listening ? LoopsyColors.bad : LoopsyColors.muted,
+                      size: 22,
                     ),
-                    label: Text(listening ? 'Stop' : 'Listen'),
-                  ),
-                  IconButton(
-                    onPressed: () {
-                      ctl.clear();
-                      lastSpeech = '';
-                      userEdited = false;
-                      setSheet(() {});
-                    },
-                    icon: const HugeIcon(
-                      icon: HugeIcons.strokeRoundedDelete02,
-                      color: LoopsyColors.muted,
-                      size: 18,
+                    const SizedBox(width: 10),
+                    Text(
+                      listening
+                          ? 'Listening… tap text to edit'
+                          : (userEdited
+                                ? 'Edited — review and send'
+                                : 'Tap mic to start'),
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w600,
+                        fontSize: 16,
+                      ),
                     ),
-                    tooltip: 'Clear',
+                  ],
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: ctl,
+                  focusNode: focus,
+                  autofocus: false,
+                  minLines: 4,
+                  maxLines: 8,
+                  style: const TextStyle(
+                    color: LoopsyColors.fg,
+                    fontFamily: 'JetBrainsMono',
+                    fontSize: 15,
                   ),
-                  const Spacer(),
-                  TextButton(
-                    onPressed: () => Navigator.pop(ctx),
-                    child: const Text('Cancel'),
+                  decoration: InputDecoration(
+                    hintText: 'Speak now, then edit before sending…',
+                    hintStyle: const TextStyle(color: LoopsyColors.muted),
+                    filled: true,
+                    fillColor: LoopsyColors.surfaceAlt,
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: const BorderSide(color: LoopsyColors.border),
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: const BorderSide(color: LoopsyColors.border),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: const BorderSide(color: LoopsyColors.accent),
+                    ),
+                    contentPadding: const EdgeInsets.all(14),
                   ),
-                  const SizedBox(width: 8),
-                  ElevatedButton.icon(
-                    onPressed: ctl.text.trim().isEmpty
-                        ? null
-                        : () {
-                            _session?.sendStdin(utf8.encode('${ctl.text}\r'));
-                            Navigator.pop(ctx);
-                          },
-                    icon: const HugeIcon(icon: HugeIcons.strokeRoundedSent, color: LoopsyColors.bg, size: 18),
-                    label: const Text('Send'),
+                  textCapitalization: TextCapitalization.sentences,
+                  onChanged: (v) {
+                    // If the user typed something different from the latest
+                    // speech result, lock further speech updates so we don't
+                    // overwrite. Tapping the field also pauses recognition.
+                    if (v != lastSpeech) {
+                      userEdited = true;
+                    }
+                  },
+                  onTap: () {
+                    if (listening) stopListening();
+                  },
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  listening
+                      ? 'Tip: pinch the text to edit — listening pauses on tap.'
+                      : 'Edit freely. Tap the mic to dictate again.',
+                  style: const TextStyle(
+                    color: LoopsyColors.muted,
+                    fontSize: 11,
                   ),
-                ],
-              ),
-            ],
-          ),
-        );
-      }),
+                ),
+                const SizedBox(height: 14),
+                Row(
+                  children: [
+                    TextButton.icon(
+                      onPressed: listening ? stopListening : startListening,
+                      icon: HugeIcon(
+                        icon: listening
+                            ? HugeIcons.strokeRoundedStopCircle
+                            : HugeIcons.strokeRoundedMic01,
+                        color: LoopsyColors.fg,
+                        size: 18,
+                      ),
+                      label: Text(listening ? 'Stop' : 'Listen'),
+                    ),
+                    IconButton(
+                      onPressed: () {
+                        ctl.clear();
+                        lastSpeech = '';
+                        userEdited = false;
+                        setSheet(() {});
+                      },
+                      icon: const HugeIcon(
+                        icon: HugeIcons.strokeRoundedDelete02,
+                        color: LoopsyColors.muted,
+                        size: 18,
+                      ),
+                      tooltip: 'Clear',
+                    ),
+                    const Spacer(),
+                    TextButton(
+                      onPressed: () => Navigator.pop(ctx),
+                      child: const Text('Cancel'),
+                    ),
+                    const SizedBox(width: 8),
+                    ElevatedButton.icon(
+                      onPressed: ctl.text.trim().isEmpty
+                          ? null
+                          : () {
+                              unawaited(_sendChatPrompt(ctl.text));
+                              Navigator.pop(ctx);
+                            },
+                      icon: const HugeIcon(
+                        icon: HugeIcons.strokeRoundedSent,
+                        color: LoopsyColors.bg,
+                        size: 18,
+                      ),
+                      label: const Text('Send'),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          );
+        },
+      ),
     );
     // Defensive: the sheet dismisses through several paths (Cancel, Send,
     // swipe-down, route pop on backgrounding). Stopping speech here is the
     // single common cleanup — wrap in try/catch since the engine may be
     // already-stopped or never started in some of those paths.
-    try { await _speech.stop(); } catch (_) { /* already stopped */ }
+    try {
+      await _speech.stop();
+    } catch (_) {
+      /* already stopped */
+    }
     focus.dispose();
     ctl.dispose();
   }
@@ -647,7 +731,10 @@ class _TerminalScreenState extends State<TerminalScreen> {
       backgroundColor: LoopsyColors.bg,
       appBar: AppBar(
         leading: IconButton(
-          icon: const HugeIcon(icon: HugeIcons.strokeRoundedArrowLeft02, color: LoopsyColors.fg),
+          icon: const HugeIcon(
+            icon: HugeIcons.strokeRoundedArrowLeft02,
+            color: LoopsyColors.fg,
+          ),
           onPressed: () => Navigator.of(context).maybePop(),
         ),
         // Title kept tight: agent icon + agent name. The 6-char sessionId
@@ -658,11 +745,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
         title: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            HugeIcon(
-              icon: _agentIcon(),
-              color: LoopsyColors.accent,
-              size: 18,
-            ),
+            HugeIcon(icon: _agentIcon(), color: LoopsyColors.accent, size: 18),
             const SizedBox(width: 8),
             Flexible(
               child: Text(
@@ -734,7 +817,10 @@ class _TerminalScreenState extends State<TerminalScreen> {
               index: _chatSupported && _view == _ViewMode.chat ? 1 : 0,
               children: [
                 Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 6,
+                  ),
                   child: TerminalView(
                     _terminal,
                     controller: _controller,
@@ -759,53 +845,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
                   // alive — NOT gated on chat capability, because the
                   // user's first message is what causes the agent to
                   // create its transcript file in the first place.
-                  //
-                  // Send strategy: type chunked, then submit with the
-                  // agent-specific key:
-                  //   - claude:  \r — its TUI maps CR to submit
-                  //   - codex:   \n — ratatui multi-line textarea where
-                  //              CR inserts newline and Ctrl+J (LF, \n)
-                  //              fires submit. \r typed bare produced
-                  //              the "flicker then vanish" symptom.
-                  //   - gemini:  \n — same shape as codex; the user's
-                  //              report ("appears in terminal, but
-                  //              went to new line instead of sending")
-                  //              confirms CR inserts newline there.
-                  // The submit byte is sent as a separate write after
-                  // an 80ms gap so the TUI's event loop drains the
-                  // typed buffer before processing it.
-                  //
-                  // NOT bracketed paste: codex's TUI doesn't enable
-                  // paste mode, so bare ESC bytes trip its cancel
-                  // handler and clear the input.
-                  onSend: _session == null
-                      ? null
-                      : (text) async {
-                          final session = _session;
-                          if (session == null) return;
-                          final body = utf8.encode(text);
-                          _captureSummary(body);
-                          // 32-byte chunks with 8ms gaps — fast enough
-                          // to feel instant, slow enough that TUIs
-                          // process each chunk as discrete keypresses.
-                          const chunkSize = 32;
-                          for (var i = 0; i < body.length; i += chunkSize) {
-                            final end = (i + chunkSize < body.length) ? i + chunkSize : body.length;
-                            session.sendStdin(body.sublist(i, end));
-                            if (end < body.length) {
-                              await Future.delayed(const Duration(milliseconds: 8));
-                            }
-                          }
-                          await Future.delayed(const Duration(milliseconds: 80));
-                          // Per-agent submit byte. \r for Claude (CR
-                          // submits), \n / Ctrl+J for Codex+Gemini
-                          // (ratatui textarea — CR makes a newline
-                          // within multi-line input).
-                          final submit = widget.agent == 'claude'
-                              ? [0x0d]   // CR
-                              : [0x0a];  // LF / Ctrl+J
-                          session.sendStdin(submit);
-                        },
+                  onSend: _session == null ? null : _sendChatPrompt,
                 ),
               ],
             ),
@@ -815,8 +855,14 @@ class _TerminalScreenState extends State<TerminalScreen> {
               onBytes: _sendRawBytes,
               ctrlArmed: _ctrlArmed,
               altArmed: _altArmed,
-              onToggleCtrl: () => setState(() { _ctrlArmed = !_ctrlArmed; if (_ctrlArmed) _altArmed = false; }),
-              onToggleAlt:  () => setState(() { _altArmed  = !_altArmed;  if (_altArmed)  _ctrlArmed = false; }),
+              onToggleCtrl: () => setState(() {
+                _ctrlArmed = !_ctrlArmed;
+                if (_ctrlArmed) _altArmed = false;
+              }),
+              onToggleAlt: () => setState(() {
+                _altArmed = !_altArmed;
+                if (_altArmed) _ctrlArmed = false;
+              }),
               onVoice: _voiceReady ? _openVoiceSheet : null,
             ),
         ],
@@ -826,10 +872,14 @@ class _TerminalScreenState extends State<TerminalScreen> {
 
   IconData _agentIcon() {
     switch (widget.agent) {
-      case 'claude': return HugeIcons.strokeRoundedAiChat02;
-      case 'gemini': return HugeIcons.strokeRoundedAiBrain02;
-      case 'codex':  return HugeIcons.strokeRoundedSourceCode;
-      default:       return HugeIcons.strokeRoundedCommandLine;
+      case 'claude':
+        return HugeIcons.strokeRoundedAiChat02;
+      case 'gemini':
+        return HugeIcons.strokeRoundedAiBrain02;
+      case 'codex':
+        return HugeIcons.strokeRoundedSourceCode;
+      default:
+        return HugeIcons.strokeRoundedCommandLine;
     }
   }
 
@@ -837,11 +887,16 @@ class _TerminalScreenState extends State<TerminalScreen> {
   /// hint ("Message Codex…"), and loading dots ("Codex is working…").
   String _agentDisplayName() {
     switch (widget.agent) {
-      case 'claude': return 'Claude';
-      case 'gemini': return 'Gemini';
-      case 'codex':  return 'Codex';
-      case 'opencode': return 'OpenCode';
-      default:       return widget.agent;
+      case 'claude':
+        return 'Claude';
+      case 'gemini':
+        return 'Gemini';
+      case 'codex':
+        return 'Codex';
+      case 'opencode':
+        return 'OpenCode';
+      default:
+        return widget.agent;
     }
   }
 }
@@ -945,4 +1000,3 @@ class _SegmentButton extends StatelessWidget {
     );
   }
 }
-
