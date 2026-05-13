@@ -668,14 +668,19 @@ async function pickBySpawnBirthtime(
   dir: string,
   filenames: string[],
   spawnedAtMs: number,
-  // 60s window: agents can take a few seconds to write their first
-  // transcript record (config load, login refresh, etc.). 10s was too
-  // tight on slower laptops or first-spawn-after-cache-clear. Multiple
-  // sessions in the same cwd are still disambiguated because we pick
-  // the file with birthtime CLOSEST to the spawn — collisions only
-  // happen if two sessions were spawned within 60s of each other,
-  // which is rare and still resolvable by re-checking the tracker.
-  graceMs = 60_000,
+  // Post-spawn window: the file we want was created AT-OR-AFTER PTY
+  // spawn. A small 1s past-grace covers clock skew between the daemon
+  // process and the filesystem. graceFutureMs=60s gives slow agents
+  // time to write their first record.
+  //
+  // Why asymmetric (was symmetric ±60s, now [-1s, +60s]): when multiple
+  // sessions share a cwd, an OLD session's JSONL is always BEFORE the
+  // new spawn. The previous symmetric window matched OLD files whose
+  // birthtime was within ±60s of the new spawn — so two sessions
+  // created back-to-back in the same cwd shared their chat panel.
+  // Filtering by ≥ spawn excludes prior siblings cleanly.
+  graceMsPast = 1_000,
+  graceMsFuture = 60_000,
 ): Promise<string | null> {
   const candidates: { path: string; birthtimeMs: number }[] = [];
   for (const f of filenames) {
@@ -686,7 +691,10 @@ async function pickBySpawnBirthtime(
     } catch { /* skip */ }
   }
   if (candidates.length === 0) return null;
-  const inWindow = candidates.filter((c) => Math.abs(c.birthtimeMs - spawnedAtMs) <= graceMs);
+  const inWindow = candidates.filter((c) => {
+    const delta = c.birthtimeMs - spawnedAtMs;
+    return delta >= -graceMsPast && delta <= graceMsFuture;
+  });
   if (inWindow.length === 0) return null;
   inWindow.sort((a, b) => Math.abs(a.birthtimeMs - spawnedAtMs) - Math.abs(b.birthtimeMs - spawnedAtMs));
   return inWindow[0].path;

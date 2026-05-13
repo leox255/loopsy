@@ -755,36 +755,56 @@ class _TerminalScreenState extends State<TerminalScreen> {
                   log: _chatLog,
                   revision: _chatRevision,
                   agentName: _agentDisplayName(),
-                  // Composer is enabled whenever we have a live PTY
-                  // session — NOT gated on chat capability, because the
+                  // Composer is enabled whenever the relay session is
+                  // alive — NOT gated on chat capability, because the
                   // user's first message is what causes the agent to
-                  // create its transcript file in the first place. The
-                  // poll loop on the daemon side will pick the file up
-                  // the moment it appears and back-fill the chat panel.
+                  // create its transcript file in the first place.
                   //
-                  // The send sequence has three deliberate choices:
-                  //   1. Bracketed paste around the text so ratatui-
-                  //      style TUIs (Codex) treat the body as ONE unit
-                  //      and don't interpret embedded newlines mid-
-                  //      text.
-                  //   2. 80ms delay between paste and submit, giving
-                  //      the agent's event loop time to drain the
-                  //      paste before it sees the Enter key.
-                  //   3. \r\n as submit so TUIs that treat \r as
-                  //      cursor-to-start still see the line feed and
-                  //      fire submit.
+                  // Send strategy: type chunked, then submit with the
+                  // agent-specific key:
+                  //   - claude:  \r — its TUI maps CR to submit
+                  //   - codex:   \n — ratatui multi-line textarea where
+                  //              CR inserts newline and Ctrl+J (LF, \n)
+                  //              fires submit. \r typed bare produced
+                  //              the "flicker then vanish" symptom.
+                  //   - gemini:  \n — same shape as codex; the user's
+                  //              report ("appears in terminal, but
+                  //              went to new line instead of sending")
+                  //              confirms CR inserts newline there.
+                  // The submit byte is sent as a separate write after
+                  // an 80ms gap so the TUI's event loop drains the
+                  // typed buffer before processing it.
+                  //
+                  // NOT bracketed paste: codex's TUI doesn't enable
+                  // paste mode, so bare ESC bytes trip its cancel
+                  // handler and clear the input.
                   onSend: _session == null
                       ? null
                       : (text) async {
                           final session = _session;
                           if (session == null) return;
-                          const pasteStart = [0x1b, 0x5b, 0x32, 0x30, 0x30, 0x7e]; // ESC[200~
-                          const pasteEnd   = [0x1b, 0x5b, 0x32, 0x30, 0x31, 0x7e]; // ESC[201~
                           final body = utf8.encode(text);
-                          session.sendStdin([...pasteStart, ...body, ...pasteEnd]);
                           _captureSummary(body);
+                          // 32-byte chunks with 8ms gaps — fast enough
+                          // to feel instant, slow enough that TUIs
+                          // process each chunk as discrete keypresses.
+                          const chunkSize = 32;
+                          for (var i = 0; i < body.length; i += chunkSize) {
+                            final end = (i + chunkSize < body.length) ? i + chunkSize : body.length;
+                            session.sendStdin(body.sublist(i, end));
+                            if (end < body.length) {
+                              await Future.delayed(const Duration(milliseconds: 8));
+                            }
+                          }
                           await Future.delayed(const Duration(milliseconds: 80));
-                          session.sendStdin(utf8.encode('\r\n'));
+                          // Per-agent submit byte. \r for Claude (CR
+                          // submits), \n / Ctrl+J for Codex+Gemini
+                          // (ratatui textarea — CR makes a newline
+                          // within multi-line input).
+                          final submit = widget.agent == 'claude'
+                              ? [0x0d]   // CR
+                              : [0x0a];  // LF / Ctrl+J
+                          session.sendStdin(submit);
                         },
                 ),
               ],
