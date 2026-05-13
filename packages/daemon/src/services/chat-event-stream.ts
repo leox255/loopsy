@@ -54,8 +54,18 @@ export type ChatEvent =
 export interface ChatEventStreamOptions {
   /** The cwd Claude was launched from. Used to compute the project dir. */
   cwd: string;
-  /** Optional sessionId. When omitted, we pick the newest *.jsonl under the project dir. */
+  /** Optional sessionId. When omitted, we resolve by birthtime / mtime. */
   sessionId?: string;
+  /**
+   * Epoch-ms timestamp when the owning PTY was spawned. Used to bind to
+   * the *correct* JSONL when multiple sessions share a cwd: Claude creates
+   * a fresh `<sessionId>.jsonl` immediately on launch, so the file whose
+   * `birthtime` is closest to our spawn time is ours. Without this, two
+   * concurrent Claude sessions in the same directory would both resolve
+   * to the most-recently-mtimed file and the wrong conversation would
+   * render in the chat panel.
+   */
+  ptySpawnedAtMs?: number;
   /** Override Claude's project root. Default `~/.claude/projects`. Mostly for testing. */
   claudeProjectsRoot?: string;
   /** Polling interval used as fs.watch backup. Default 500ms. */
@@ -77,10 +87,25 @@ export function encodeCwdToProjectDir(cwd: string): string {
   return cwd.replace(/\//g, '-');
 }
 
-/** Resolve the JSONL file path for a session, given just a cwd. */
+/**
+ * Resolve the JSONL file path for a session.
+ *
+ * Resolution order:
+ *   1. Explicit `sessionId` → exact `<sessionId>.jsonl` lookup.
+ *   2. `ptySpawnedAtMs` → file whose birthtime is closest to spawn time,
+ *      within a ±10s grace window. This disambiguates between multiple
+ *      Claude sessions sharing a cwd (the bug fix: previously two PTYs
+ *      in the same directory both resolved to the most-recently-mtimed
+ *      file, so the wrong conversation rendered).
+ *   3. Newest mtime — best-effort fallback when neither hint is given,
+ *      and a second-line fallback when the spawn-time window matches no
+ *      files (e.g., Claude hadn't yet written the JSONL at subscribe
+ *      time on a slow filesystem).
+ */
 async function resolveSessionFile(opts: {
   cwd: string;
   sessionId?: string;
+  ptySpawnedAtMs?: number;
   claudeProjectsRoot: string;
 }): Promise<string | null> {
   const dir = join(opts.claudeProjectsRoot, encodeCwdToProjectDir(opts.cwd));
@@ -92,20 +117,46 @@ async function resolveSessionFile(opts: {
   }
   const jsonls = entries.filter((e) => e.endsWith('.jsonl'));
   if (jsonls.length === 0) return null;
+
   if (opts.sessionId) {
     const match = jsonls.find((e) => e === `${opts.sessionId}.jsonl`);
     return match ? join(dir, match) : null;
   }
-  // Pick newest by mtime.
-  let best: { path: string; mtimeMs: number } | null = null;
+
+  // Stat all candidates once. `birthtimeMs` is the file creation time —
+  // present on macOS and Windows natively, falls back to ctime on Linux
+  // (which is fine for our purposes since Claude's JSONLs aren't moved
+  // or hard-linked).
+  const stats: { path: string; birthtimeMs: number; mtimeMs: number }[] = [];
   for (const f of jsonls) {
     const full = join(dir, f);
     try {
       const s = await stat(full);
-      if (!best || s.mtimeMs > best.mtimeMs) best = { path: full, mtimeMs: s.mtimeMs };
-    } catch { /* skip */ }
+      stats.push({ path: full, birthtimeMs: s.birthtimeMs, mtimeMs: s.mtimeMs });
+    } catch { /* skip unreadable */ }
   }
-  return best?.path ?? null;
+  if (stats.length === 0) return null;
+
+  if (opts.ptySpawnedAtMs !== undefined) {
+    const spawn = opts.ptySpawnedAtMs;
+    const GRACE_MS = 10_000;
+    const inWindow = stats.filter(
+      (s) => Math.abs(s.birthtimeMs - spawn) <= GRACE_MS,
+    );
+    if (inWindow.length > 0) {
+      inWindow.sort((a, b) =>
+        Math.abs(a.birthtimeMs - spawn) - Math.abs(b.birthtimeMs - spawn),
+      );
+      return inWindow[0].path;
+    }
+    // No file in the window — Claude may not have written the JSONL yet,
+    // or the PTY was started outside Claude (shell/gemini/etc). Fall
+    // through to newest-mtime; if it's wrong the caller will see stale
+    // events and can resubscribe once Claude's file appears.
+  }
+
+  stats.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  return stats[0].path;
 }
 
 interface ParsedLine {
@@ -279,7 +330,7 @@ class JsonlTranslator {
  *      delivers the closing `\n`.
  */
 export class ChatEventStream extends EventEmitter {
-  private opts: Required<Omit<ChatEventStreamOptions, 'sessionId' | 'startByteOffset'>> & Pick<ChatEventStreamOptions, 'sessionId' | 'startByteOffset'>;
+  private opts: Required<Omit<ChatEventStreamOptions, 'sessionId' | 'startByteOffset' | 'ptySpawnedAtMs'>> & Pick<ChatEventStreamOptions, 'sessionId' | 'startByteOffset' | 'ptySpawnedAtMs'>;
   private filePath: string | null = null;
   private watcher: fs.FSWatcher | null = null;
   private pollTimer: ReturnType<typeof setInterval> | null = null;
@@ -294,6 +345,7 @@ export class ChatEventStream extends EventEmitter {
     this.opts = {
       cwd: options.cwd,
       sessionId: options.sessionId,
+      ptySpawnedAtMs: options.ptySpawnedAtMs,
       claudeProjectsRoot: options.claudeProjectsRoot ?? join(homedir(), '.claude', 'projects'),
       pollMs: options.pollMs ?? DEFAULT_POLL_MS,
       startByteOffset: options.startByteOffset,
@@ -305,6 +357,7 @@ export class ChatEventStream extends EventEmitter {
     const path = await resolveSessionFile({
       cwd: this.opts.cwd,
       sessionId: this.opts.sessionId,
+      ptySpawnedAtMs: this.opts.ptySpawnedAtMs,
       claudeProjectsRoot: this.opts.claudeProjectsRoot,
     });
     if (!path) {

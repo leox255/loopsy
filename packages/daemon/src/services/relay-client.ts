@@ -561,6 +561,10 @@ export class RelayClient {
     const stream = new ChatEventStream({
       cwd: info.cwd,
       startByteOffset: msg.fromOffset,
+      // Disambiguate when multiple Claude sessions share the same cwd:
+      // we want the JSONL whose birthtime matches this PTY's spawn, not
+      // whichever file in the project dir was mtimed most recently.
+      ptySpawnedAtMs: info.createdAt,
     });
     stream.on('event', (event: ChatEvent) => {
       // Backpressure: if the outbound WS is congested, dropping chat

@@ -33,28 +33,59 @@ class ChatPanel extends StatefulWidget {
   State<ChatPanel> createState() => _ChatPanelState();
 }
 
-class _ChatPanelState extends State<ChatPanel> {
+class _ChatPanelState extends State<ChatPanel> with WidgetsBindingObserver {
   final ScrollController _scroll = ScrollController();
-  int _lastTurnCount = 0;
+  int _lastRevision = -1;
+
+  @override
+  void initState() {
+    super.initState();
+    // Observe so we can re-pin to bottom when the keyboard pops up (viewport
+    // shrinks → previously-visible "latest" content scrolls out of view if
+    // we don't react). Combined with the revision-based scroll on new
+    // events, this keeps the conversation glued to the bottom whether the
+    // change is a new event or a layout change.
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void didChangeMetrics() {
+    _scrollToBottom(animated: false);
+  }
 
   @override
   void didUpdateWidget(covariant ChatPanel old) {
     super.didUpdateWidget(old);
-    if (widget.log.turns.length != _lastTurnCount) {
-      _lastTurnCount = widget.log.turns.length;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted || !_scroll.hasClients) return;
+    // Scroll on EVERY revision bump (each new event), not just turn-count
+    // change. Assistant turns commonly span multiple records that
+    // share a messageId, so blocks get appended to the same ChatTurn —
+    // without this, the chat appeared to "freeze" mid-response while
+    // text was actively streaming in.
+    if (widget.revision != _lastRevision) {
+      _lastRevision = widget.revision;
+      _scrollToBottom(animated: true);
+    }
+  }
+
+  void _scrollToBottom({required bool animated}) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_scroll.hasClients) return;
+      final target = _scroll.position.maxScrollExtent;
+      if (animated) {
         _scroll.animateTo(
-          _scroll.position.maxScrollExtent,
-          duration: const Duration(milliseconds: 220),
+          target,
+          duration: const Duration(milliseconds: 200),
           curve: Curves.easeOut,
         );
-      });
-    }
+      } else {
+        _scroll.jumpTo(target);
+      }
+    });
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _scroll.dispose();
     super.dispose();
   }
@@ -76,31 +107,135 @@ class _ChatPanelState extends State<ChatPanel> {
         subtitle: 'Type in the terminal to start. The conversation will mirror here.',
       );
     }
+    // Filter out tool-result-only "user" turns — they're SDK plumbing,
+    // not user prompts. They're surfaced inside the relevant assistant
+    // turn's expand-tools view via the toolResults index built below.
+    final visibleTurns = [
+      for (final t in log.turns)
+        if (!t.isToolResultOnly) t,
+    ];
+
+    // Build a tool_use_id → ToolResultBlock map across all turns so each
+    // assistant turn's tool_use cards can show their matching result
+    // when the user expands the tools section.
+    final toolResults = <String, ToolResultBlock>{};
+    for (final t in log.turns) {
+      for (final b in t.blocks) {
+        if (b is ToolResultBlock) toolResults[b.toolUseId] = b;
+      }
+    }
+
+    // Loading indicator: show "Claude is working…" when the most recent
+    // *visible* turn is incomplete (assistant mid-stream) or is the user
+    // prompt with no follow-up turn yet. Stops as soon as the assistant
+    // turn finishes (turn-end arrives).
+    bool showLoading = false;
+    if (visibleTurns.isNotEmpty) {
+      final last = visibleTurns.last;
+      if (last.role == ChatRole.user) {
+        // User just sent; Claude hasn't started responding yet.
+        showLoading = true;
+      } else if (last.role == ChatRole.assistant && !last.done) {
+        // Claude is partway through its turn.
+        showLoading = true;
+      }
+    }
+
     final hasDroppedHeader = log.droppedTurns > 0;
     final hasErrorFooter = log.lastError != null;
     final extraTop = hasDroppedHeader ? 1 : 0;
+    final extraBottom = (showLoading ? 1 : 0) + (hasErrorFooter ? 1 : 0);
+
     return Column(
       children: [
         Expanded(
           child: ListView.builder(
             controller: _scroll,
             padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
-            itemCount: log.turns.length + extraTop + (hasErrorFooter ? 1 : 0),
+            itemCount: visibleTurns.length + extraTop + extraBottom,
             itemBuilder: (context, i) {
               if (hasDroppedHeader && i == 0) {
                 return _DroppedHeader(count: log.droppedTurns);
               }
               final idx = i - extraTop;
-              if (idx == log.turns.length && hasErrorFooter) {
-                return _ErrorRow(log.lastError!);
+              if (idx < visibleTurns.length) {
+                return _TurnTile(turn: visibleTurns[idx], toolResults: toolResults);
               }
-              return _TurnTile(turn: log.turns[idx]);
+              // Bottom slots: loading first, then error.
+              final tail = idx - visibleTurns.length;
+              if (showLoading && tail == 0) return const _LoadingRow();
+              return _ErrorRow(log.lastError!);
             },
           ),
         ),
         _ChatComposer(onSend: widget.onSend),
       ],
     );
+  }
+}
+
+class _LoadingRow extends StatefulWidget {
+  const _LoadingRow();
+  @override
+  State<_LoadingRow> createState() => _LoadingRowState();
+}
+
+class _LoadingRowState extends State<_LoadingRow> with SingleTickerProviderStateMixin {
+  late final AnimationController _c = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1100),
+  )..repeat();
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(
+        children: [
+          HugeIcon(icon: HugeIcons.strokeRoundedAiChat02, color: LoopsyColors.accent, size: 14),
+          const SizedBox(width: 8),
+          AnimatedBuilder(
+            animation: _c,
+            builder: (_, __) {
+              // Three dots that pulse in sequence.
+              return Row(
+                children: [
+                  for (int i = 0; i < 3; i++) ...[
+                    Opacity(
+                      opacity: 0.3 + 0.7 * _dotPhase(i, _c.value),
+                      child: Container(
+                        width: 5,
+                        height: 5,
+                        decoration: const BoxDecoration(color: LoopsyColors.muted, shape: BoxShape.circle),
+                      ),
+                    ),
+                    if (i < 2) const SizedBox(width: 4),
+                  ],
+                ],
+              );
+            },
+          ),
+          const SizedBox(width: 10),
+          const Text(
+            'Claude is working…',
+            style: TextStyle(color: LoopsyColors.muted, fontSize: 12, fontStyle: FontStyle.italic),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Each dot pulses 1/3 of a cycle apart so the eye reads it as a wave.
+  static double _dotPhase(int dot, double t) {
+    final shifted = (t - dot * 0.16) % 1.0;
+    // Triangle wave: 0 → 1 → 0
+    return shifted < 0.5 ? shifted * 2 : (1 - shifted) * 2;
   }
 }
 
@@ -309,13 +444,35 @@ class _ErrorRow extends StatelessWidget {
   }
 }
 
-class _TurnTile extends StatelessWidget {
+class _TurnTile extends StatefulWidget {
   final ChatTurn turn;
-  const _TurnTile({required this.turn});
+  final Map<String, ToolResultBlock> toolResults;
+  const _TurnTile({required this.turn, required this.toolResults});
+
+  @override
+  State<_TurnTile> createState() => _TurnTileState();
+}
+
+class _TurnTileState extends State<_TurnTile> {
+  bool _internalsExpanded = false;
 
   @override
   Widget build(BuildContext context) {
-    final isUser = turn.role == ChatRole.user;
+    final isUser = widget.turn.role == ChatRole.user;
+    final blocks = widget.turn.blocks;
+
+    // For assistant turns, split into "response" (text) vs "internals"
+    // (thinking + tool_use). Default state shows only response; internals
+    // live behind a small pill the user taps to expand.
+    final responseBlocks = isUser
+        ? blocks
+        : blocks.where((b) => b is TextBlock).toList();
+    final internalBlocks = isUser
+        ? const <ChatBlock>[]
+        : blocks.where((b) => b is ThinkingBlock || b is ToolUseBlock).toList();
+    final thinkingCount = internalBlocks.whereType<ThinkingBlock>().length;
+    final toolCount = internalBlocks.whereType<ToolUseBlock>().length;
+
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
       child: Column(
@@ -342,8 +499,97 @@ class _TurnTile extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 4),
-          for (final b in turn.blocks) _BlockView(block: b, isUser: isUser),
+          // Render response blocks (text bubbles, etc.) first so the user
+          // always sees the answer without scrolling past reasoning.
+          for (final b in responseBlocks) _BlockView(block: b, isUser: isUser),
+          // Internals pill: only when there are internals AND it's an
+          // assistant turn.
+          if (internalBlocks.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            _InternalsToggle(
+              thinkingCount: thinkingCount,
+              toolCount: toolCount,
+              expanded: _internalsExpanded,
+              onTap: () => setState(() => _internalsExpanded = !_internalsExpanded),
+            ),
+            if (_internalsExpanded)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    for (final b in internalBlocks) ...[
+                      _BlockView(block: b, isUser: false),
+                      // For tool_use blocks, also render the matching
+                      // tool_result inline so the user sees the full call
+                      // → return pair without hunting through other turns.
+                      if (b is ToolUseBlock && widget.toolResults[b.id] != null)
+                        _BlockView(block: widget.toolResults[b.id]!, isUser: false),
+                    ],
+                  ],
+                ),
+              ),
+          ],
         ],
+      ),
+    );
+  }
+}
+
+/// Compact "Reasoning · 2 tools" pill that toggles the internals view.
+/// Mirrors how ChatGPT/Claude desktop hide chain-of-thought + tool use
+/// by default — the chat surface stays clean, expert mode is one tap
+/// away.
+class _InternalsToggle extends StatelessWidget {
+  final int thinkingCount;
+  final int toolCount;
+  final bool expanded;
+  final VoidCallback onTap;
+  const _InternalsToggle({
+    required this.thinkingCount,
+    required this.toolCount,
+    required this.expanded,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final parts = <String>[];
+    if (thinkingCount > 0) parts.add(thinkingCount == 1 ? 'Reasoning' : 'Reasoning ($thinkingCount)');
+    if (toolCount > 0) parts.add(toolCount == 1 ? '1 tool' : '$toolCount tools');
+    final label = parts.join(' · ');
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(20),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+        decoration: BoxDecoration(
+          color: LoopsyColors.surfaceAlt,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: LoopsyColors.border),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            HugeIcon(
+              icon: expanded
+                  ? HugeIcons.strokeRoundedArrowUp02
+                  : HugeIcons.strokeRoundedArrowDown02,
+              color: LoopsyColors.muted,
+              size: 12,
+            ),
+            const SizedBox(width: 5),
+            Text(
+              label,
+              style: const TextStyle(
+                color: LoopsyColors.muted,
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+                fontFamily: 'JetBrainsMono',
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

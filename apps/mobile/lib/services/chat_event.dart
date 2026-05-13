@@ -203,7 +203,10 @@ class ChatLog {
         t.blocks.add(block);
       case ChatTurnEnd(:final turnId, :final stopReason):
         final t = _turnFor(turnId, createIfMissing: false);
-        if (t != null) t.stopReason = stopReason;
+        if (t != null) {
+          t.stopReason = stopReason;
+          t.done = true;
+        }
       case ChatError(:final code, :final message):
         lastError = '$code: $message';
     }
@@ -227,5 +230,18 @@ class ChatTurn {
   final String? messageId;
   final List<ChatBlock> blocks = [];
   String? stopReason;
+  /// True once a `turn-end` event arrived for this turn. The UI uses this
+  /// to decide whether to draw a "Claude is working…" loading footer
+  /// after the most recent turn (incomplete = still streaming).
+  bool done = false;
   ChatTurn({required this.turnId, required this.role, this.ts, this.messageId});
+
+  /// True iff the turn is a "user" record whose only blocks are
+  /// tool_results. These are plumbing — Anthropic's SDK roundtrips tool
+  /// outputs back to the model as user-role messages — and shouldn't
+  /// show up in the chat feed as user prompts.
+  bool get isToolResultOnly =>
+      role == ChatRole.user &&
+      blocks.isNotEmpty &&
+      blocks.every((b) => b is ToolResultBlock);
 }
