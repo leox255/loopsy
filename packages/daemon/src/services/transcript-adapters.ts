@@ -584,17 +584,19 @@ function extractCodexMessageText(content: unknown): string {
 export const codexAdapter: TranscriptAdapter = {
   async resolveFile(opts) {
     // Codex shards by date: ~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<id>.jsonl.
-    // We need to know roughly when the PTY spawned, then scan that day's
-    // dir (and the adjacent day in case of UTC/local rollover) for a
-    // rollout whose `session_meta` cwd matches and whose birthtime is
-    // closest to spawn.
+    // First narrow by stat-based birthtime window (cheap), THEN verify
+    // session_meta.cwd matches (expensive — opens the file). Order
+    // matters because rollouts in the same cwd can pile up over weeks
+    // and we'd otherwise pay a JSON parse for every one of them.
     const root = join(homedir(), '.codex', 'sessions');
-    const days = [new Date(opts.spawnedAtMs)];
-    // Include yesterday + tomorrow in UTC for timezone slop.
-    days.push(new Date(opts.spawnedAtMs - 86400_000));
-    days.push(new Date(opts.spawnedAtMs + 86400_000));
+    const GRACE_MS = 10_000;
+    const days = [
+      new Date(opts.spawnedAtMs),
+      new Date(opts.spawnedAtMs - 86400_000),
+      new Date(opts.spawnedAtMs + 86400_000),
+    ];
 
-    const candidates: { path: string; birthtimeMs: number }[] = [];
+    const inWindow: { path: string; birthtimeMs: number }[] = [];
     for (const d of days) {
       const dayDir = join(root, String(d.getUTCFullYear()), pad2(d.getUTCMonth() + 1), pad2(d.getUTCDate()));
       let entries: string[];
@@ -603,14 +605,22 @@ export const codexAdapter: TranscriptAdapter = {
         const full = join(dayDir, f);
         let s;
         try { s = await stat(full); } catch { continue; }
-        // Verify session_meta cwd matches before considering this file.
-        const matches = await codexFileMatchesCwd(full, opts.cwd);
-        if (matches) candidates.push({ path: full, birthtimeMs: s.birthtimeMs });
+        if (Math.abs(s.birthtimeMs - opts.spawnedAtMs) <= GRACE_MS) {
+          inWindow.push({ path: full, birthtimeMs: s.birthtimeMs });
+        }
       }
     }
-    if (candidates.length === 0) return null;
-    candidates.sort((a, b) => Math.abs(a.birthtimeMs - opts.spawnedAtMs) - Math.abs(b.birthtimeMs - opts.spawnedAtMs));
-    return candidates[0].path;
+    if (inWindow.length === 0) return null;
+
+    // Verify cwd on the in-window candidates only. Closer-to-spawn
+    // first so we typically only check one file.
+    inWindow.sort((a, b) =>
+      Math.abs(a.birthtimeMs - opts.spawnedAtMs) - Math.abs(b.birthtimeMs - opts.spawnedAtMs),
+    );
+    for (const c of inWindow) {
+      if (await codexFileMatchesCwd(c.path, opts.cwd)) return c.path;
+    }
+    return null;
   },
   createTranslator: () => new CodexTranslator(),
 };

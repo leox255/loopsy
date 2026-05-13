@@ -755,23 +755,34 @@ class _TerminalScreenState extends State<TerminalScreen> {
                   log: _chatLog,
                   revision: _chatRevision,
                   agentName: _agentDisplayName(),
-                  // Chat input v1 routes through the same PTY stdin channel
-                  // the terminal view uses. Two-step send: text first,
-                  // brief delay, then \r as a separate write. This
-                  // mimics "type then press Enter" as the agent CLI
-                  // would observe it from a real keyboard, instead of
-                  // one fused buffer. Codex's TUI specifically rejects
-                  // the fused form ("seems to break"), while Claude
-                  // accepted both — splitting works for both agents.
+                  // Chat input v1 routes through the same PTY stdin
+                  // channel the terminal view uses. Three deliberate
+                  // choices:
+                  //
+                  //   1. Bracketed paste around the text so TUIs that
+                  //      buffer paste mode (Codex's ratatui in
+                  //      particular) treat the body as ONE unit and
+                  //      don't interpret embedded newlines mid-text.
+                  //   2. Send the text + brackets, wait 80ms, then
+                  //      submit. The delay gives ratatui-style event
+                  //      loops time to drain the paste before they
+                  //      see the Enter key.
+                  //   3. Submit as `\r\n` (CR+LF) instead of just `\r`.
+                  //      Some agent TUIs treat `\r` as cursor-to-start
+                  //      and only fire submit on a true line feed; the
+                  //      pair satisfies both interpretations.
                   onSend: _session == null
                       ? null
                       : (text) async {
                           final session = _session;
                           if (session == null) return;
-                          session.sendStdin(utf8.encode(text));
-                          _captureSummary(utf8.encode(text));
-                          await Future.delayed(const Duration(milliseconds: 60));
-                          session.sendStdin(utf8.encode('\r'));
+                          const pasteStart = [0x1b, 0x5b, 0x32, 0x30, 0x30, 0x7e]; // ESC[200~
+                          const pasteEnd   = [0x1b, 0x5b, 0x32, 0x30, 0x31, 0x7e]; // ESC[201~
+                          final body = utf8.encode(text);
+                          session.sendStdin([...pasteStart, ...body, ...pasteEnd]);
+                          _captureSummary(body);
+                          await Future.delayed(const Duration(milliseconds: 80));
+                          session.sendStdin(utf8.encode('\r\n'));
                         },
                 ),
               ],
