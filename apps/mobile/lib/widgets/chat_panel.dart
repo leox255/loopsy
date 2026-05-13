@@ -376,12 +376,7 @@ class _TypingBubbleState extends State<_TypingBubble> with SingleTickerProviderS
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
             decoration: BoxDecoration(
               color: LoopsyColors.surface,
-              borderRadius: const BorderRadius.only(
-                topLeft: Radius.circular(4),
-                topRight: Radius.circular(16),
-                bottomLeft: Radius.circular(16),
-                bottomRight: Radius.circular(16),
-              ),
+              borderRadius: BorderRadius.circular(4),
               border: Border.all(color: LoopsyColors.border),
             ),
             child: AnimatedBuilder(
@@ -690,19 +685,6 @@ class _TextBubble extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final bubbleShape = isUser
-        ? const BorderRadius.only(
-            topLeft: Radius.circular(16),
-            topRight: Radius.circular(4),
-            bottomLeft: Radius.circular(16),
-            bottomRight: Radius.circular(16),
-          )
-        : const BorderRadius.only(
-            topLeft: Radius.circular(4),
-            topRight: Radius.circular(16),
-            bottomLeft: Radius.circular(16),
-            bottomRight: Radius.circular(16),
-          );
     return Align(
       alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
       child: ConstrainedBox(
@@ -715,7 +697,7 @@ class _TextBubble extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
           decoration: BoxDecoration(
             color: isUser ? LoopsyColors.accentDark : LoopsyColors.surface,
-            borderRadius: bubbleShape,
+            borderRadius: BorderRadius.circular(4),
             border: Border.all(
               color: isUser ? LoopsyColors.accentDark : LoopsyColors.border,
             ),
