@@ -149,10 +149,12 @@ async function resolveSessionFile(opts: {
       );
       return inWindow[0].path;
     }
-    // No file in the window — Claude may not have written the JSONL yet,
-    // or the PTY was started outside Claude (shell/gemini/etc). Fall
-    // through to newest-mtime; if it's wrong the caller will see stale
-    // events and can resubscribe once Claude's file appears.
+    // STRICT MODE: when the caller gave us a spawn-time hint, refuse to
+    // fall back to newest-mtime. Two sessions in the same cwd would both
+    // see the same fallback file and the wrong conversation would render
+    // (the original "chat mixes up sessions" bug). Return null and let
+    // start() poll until our actual JSONL appears.
+    return null;
   }
 
   stats.sort((a, b) => b.mtimeMs - a.mtimeMs);
@@ -365,12 +367,34 @@ export class ChatEventStream extends EventEmitter {
   }
 
   async start(): Promise<void> {
-    const path = await resolveSessionFile({
+    let path = await resolveSessionFile({
       cwd: this.opts.cwd,
       sessionId: this.opts.sessionId,
       ptySpawnedAtMs: this.opts.ptySpawnedAtMs,
       claudeProjectsRoot: this.opts.claudeProjectsRoot,
     });
+
+    // Race-window poll: when the PTY just spawned, Claude takes ~500ms to
+    // create its JSONL — chat-subscribe often arrives before the file
+    // exists. Without polling we'd fail capability or (worse, with
+    // non-strict resolution) bind to a stale neighbour file. Poll every
+    // 500ms for up to 15s. If we still see nothing, the session may not
+    // be Claude (shell/gemini/etc.) and we fall back to capability
+    // unavailable.
+    if (!path && this.opts.ptySpawnedAtMs !== undefined) {
+      const deadline = Date.now() + 15_000;
+      while (!path && !this.stopped && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 500));
+        path = await resolveSessionFile({
+          cwd: this.opts.cwd,
+          sessionId: this.opts.sessionId,
+          ptySpawnedAtMs: this.opts.ptySpawnedAtMs,
+          claudeProjectsRoot: this.opts.claudeProjectsRoot,
+        });
+      }
+    }
+
+    if (this.stopped) return;
     if (!path) {
       this.emit('event', {
         v: 1,
@@ -378,7 +402,7 @@ export class ChatEventStream extends EventEmitter {
         chat: 'unavailable',
         reason: this.opts.sessionId
           ? `no JSONL file for sessionId=${this.opts.sessionId} under ${encodeCwdToProjectDir(this.opts.cwd)}`
-          : `no JSONL files under ${encodeCwdToProjectDir(this.opts.cwd)}`,
+          : `no Claude JSONL appeared within 15s of spawn — agent may not be Claude`,
       } satisfies ChatEvent);
       return;
     }
