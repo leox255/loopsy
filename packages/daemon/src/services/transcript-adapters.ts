@@ -368,17 +368,21 @@ function extractGeminiText(content: unknown): string {
 }
 
 async function resolveGeminiProjectDir(cwd: string): Promise<string | null> {
-  // Gemini stores chats under ~/.gemini/tmp/<project-name>/chats/.
-  // The "project name" defaults to basename(cwd), but Gemini will append
-  // -1, -2 etc when basenames collide across projects. We try the bare
-  // basename first, then scan the parent dir for any folder whose
-  // `.project_root` matches our cwd.
+  // Gemini stores chats under ~/.gemini/tmp/<project-name>/chats/. The
+  // project-name is usually basename(cwd) — except for special cwds
+  // like `/` where basename is "" and gemini falls back to "project".
+  // Authoritative source of truth: the `.project_root` file each
+  // gemini-managed dir keeps. We try basename(cwd) first (cheap hit
+  // for the common case), then scan every subdir for a .project_root
+  // that exactly matches our cwd.
   const root = join(homedir(), '.gemini', 'tmp');
   const base = basename(cwd);
-  const direct = join(root, base);
-  if (existsSync(direct)) {
-    const probe = await readProjectRoot(direct);
-    if (probe === cwd || probe === null) return direct;
+  if (base) {
+    const direct = join(root, base);
+    if (existsSync(direct)) {
+      const probe = await readProjectRoot(direct);
+      if (probe === cwd) return direct;
+    }
   }
   try {
     const all = await readdir(root, { withFileTypes: true });
