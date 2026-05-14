@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
@@ -32,11 +33,22 @@ class _HomeScreenState extends State<HomeScreen> {
   /// indefinitely if the daemon doesn't answer (it's still paired,
   /// we just couldn't probe for hostname/agents).
   bool _deviceInfoAttempted = false;
+  /// Background re-probe timer. Keeps trying every 5s when the first
+  /// probe came back empty so a transient relay-link blip doesn't leave
+  /// the strip stuck on "Paired (daemon offline)" until the user taps
+  /// it. Cancelled once we have a hostname.
+  Timer? _probeTimer;
 
   @override
   void initState() {
     super.initState();
     _load();
+  }
+
+  @override
+  void dispose() {
+    _probeTimer?.cancel();
+    super.dispose();
   }
 
   Future<void> _load() async {
@@ -61,7 +73,10 @@ class _HomeScreenState extends State<HomeScreen> {
   /// Fetch device-info from the daemon. Always sets _deviceInfoAttempted
   /// so the paired-strip can stop showing "Connecting…" — even when the
   /// daemon doesn't answer (the pairing itself is still valid; we just
-  /// don't know the hostname/agents for this run).
+  /// don't know the hostname/agents for this run). Schedules a background
+  /// retry every 5s while the answer is still empty, so a transient relay
+  /// hiccup doesn't strand the strip on "daemon offline" until the user
+  /// taps to retry.
   Future<void> _probeDeviceInfo(Pairing pairing) async {
     final info = await fetchDeviceInfo(pairing);
     if (!mounted) return;
@@ -69,6 +84,25 @@ class _HomeScreenState extends State<HomeScreen> {
       _deviceInfoAttempted = true;
       if (info != null) _deviceInfo = info;
     });
+    // Consider the probe "complete" only when we have a real hostname.
+    // Older daemons (pre-ESM-fix) returned `hostname: null` while still
+    // being technically reachable; we want to keep retrying so the
+    // strip can flip green once the user updates the daemon.
+    final settled = info != null && info.hostname != null;
+    if (settled) {
+      _probeTimer?.cancel();
+      _probeTimer = null;
+    } else {
+      _probeTimer ??= Timer.periodic(const Duration(seconds: 5), (_) {
+        if (!mounted) return;
+        if (_deviceInfo?.hostname != null) {
+          _probeTimer?.cancel();
+          _probeTimer = null;
+          return;
+        }
+        _probeDeviceInfo(pairing);
+      });
+    }
   }
 
   /// Show an add/edit modal for a [CustomCommand] and send the result to
@@ -669,10 +703,11 @@ class _HomeScreenState extends State<HomeScreen> {
       body: SafeArea(
         top: false,
         child: ListView(
-          // Tighter side margins (12 vs 16) — pulls content closer to
-          // the edges so cards have more horizontal room without
-          // feeling cramped. Top trimmed from 8→6.
-          padding: const EdgeInsets.fromLTRB(12, 6, 12, 96),
+          // Tighter side margins (12 vs 16). Top padding matches the
+          // gap below the paired strip (SizedBox 14 + label vert pad)
+          // so the strip is visually balanced inside the AppBar→list
+          // sandwich rather than hugging the AppBar edge.
+          padding: const EdgeInsets.fromLTRB(12, 18, 12, 96),
           children: [
             // Slim paired-device strip — replaces the bulky card that
             // showed the raw device UUID. Shows the laptop's hostname
@@ -818,7 +853,11 @@ class _PairedStrip extends StatelessWidget {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Text(
-                      hostname ?? (probing ? 'Connecting…' : 'Paired (daemon offline)'),
+                      // Never claim "daemon offline" — we can't actually
+                      // verify it from the phone (relay drops the reply if
+                      // the daemon's link is in a brief reconnect window).
+                      // The dot color already conveys probe state.
+                      hostname ?? (probing ? 'Connecting…' : 'Paired'),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(

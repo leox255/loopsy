@@ -49,7 +49,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
   String _status = 'connecting…';
   bool _statusError = false;
   // First-prompt buffer for auto-summary
-  final StringBuffer _firstLine = StringBuffer();
+  final List<int> _summaryBytes = <int>[];
   bool _summaryCaptured = false;
 
   // One-shot modifiers from the accessory bar. The system soft keyboard
@@ -512,37 +512,70 @@ class _TerminalScreenState extends State<TerminalScreen> {
   }
 
   /// Build a one-line summary from the first user input the session sees and
-  /// persist it on SessionMeta so it shows on the home list. We append to a
-  /// buffer until we see CR/LF, ignore control characters, and truncate.
+  /// persist it on SessionMeta so it shows on the home list. Bytes are
+  /// accumulated as raw UTF-8 then decoded at the CR/LF boundary, so
+  /// multi-byte characters (accents, CJK, emoji) survive. Escape sequences
+  /// like arrow keys (ESC [ A) are filtered as a unit instead of leaking
+  /// their final byte into the summary.
   void _captureSummary(List<int> bytes) {
     if (_summaryCaptured) return;
-    for (final b in bytes) {
+    for (var i = 0; i < bytes.length; i++) {
+      final b = bytes[i];
+
+      // Drop ANSI escape sequences as a unit. CSI ("ESC [") and SS3
+      // ("ESC O") finish at the first byte in 0x40-0x7e (e.g. arrow keys
+      // end at 'A'/'B'/'C'/'D'). Plain "ESC <letter>" sequences (alt-key
+      // combos) drop the next byte too. Without this, the previous
+      // implementation skipped only the ESC and let "[A" leak into the
+      // captured summary.
+      if (b == 0x1b) {
+        if (i + 1 < bytes.length) {
+          final next = bytes[i + 1];
+          if (next == 0x5b /* [ */ || next == 0x4f /* O */) {
+            i++; // consume the bracket/O
+            while (i + 1 < bytes.length) {
+              final c = bytes[i + 1];
+              i++;
+              if (c >= 0x40 && c <= 0x7e) break;
+            }
+          } else {
+            i++; // ESC<letter>: drop both
+          }
+        }
+        continue;
+      }
+
       if (b == 0x0d || b == 0x0a) {
-        final s = _firstLine.toString().trim();
-        _firstLine.clear();
-        if (s.isEmpty) continue;
-        _summaryCaptured = true;
-        Storage.updateSession(widget.sessionId, (m) => m.copyWith(summary: s));
+        _flushSummary();
         return;
       }
       if (b == 0x7f) {
-        // backspace
-        final cur = _firstLine.toString();
-        _firstLine.clear();
-        if (cur.isNotEmpty) _firstLine.write(cur.substring(0, cur.length - 1));
+        // backspace: drop last UTF-8 character from the byte buffer
+        while (_summaryBytes.isNotEmpty) {
+          final last = _summaryBytes.removeLast();
+          // Stop once we drop a non-continuation byte (top bits != 10).
+          if ((last & 0xc0) != 0x80) break;
+        }
         continue;
       }
-      if (b < 0x20) continue; // skip control chars (esc, ctrl-c, etc.)
-      _firstLine.writeCharCode(b);
-      if (_firstLine.length > 200) {
-        _summaryCaptured = true;
-        Storage.updateSession(
-          widget.sessionId,
-          (m) => m.copyWith(summary: _firstLine.toString().trim()),
-        );
+      if (b < 0x20) continue; // other control bytes (tab, ctrl-c, …)
+      _summaryBytes.add(b);
+      if (_summaryBytes.length > 400) {
+        _flushSummary();
         return;
       }
     }
+  }
+
+  void _flushSummary() {
+    if (_summaryCaptured) return;
+    if (_summaryBytes.isEmpty) return;
+    var s = utf8.decode(_summaryBytes, allowMalformed: true).trim();
+    _summaryBytes.clear();
+    if (s.isEmpty) return;
+    if (s.length > 120) s = '${s.substring(0, 120).trimRight()}…';
+    _summaryCaptured = true;
+    Storage.updateSession(widget.sessionId, (m) => m.copyWith(summary: s));
   }
 
   Future<void> _openVoiceSheet() async {

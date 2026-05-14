@@ -16,6 +16,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { hostname as osHostname } from 'node:os';
 import WebSocket from 'ws';
 import type { CustomCommand, RelayConfig } from '@loopsy/protocol';
 import { PtySessionManager } from './pty-session-manager.js';
@@ -702,8 +703,13 @@ export class RelayClient {
       type: 'device-info',
       sessionId,
       platform: process.platform,
+      // The daemon is an ESM module ("type":"module" in package.json), so
+      // `require()` is NOT in scope — the previous inline require threw
+      // ReferenceError on every call, the try-catch swallowed it, and the
+      // phone always saw `hostname:null` which surfaced as the orange
+      // "Paired (tap to retry)" strip even when the daemon was online.
       hostname: (() => {
-        try { return require('node:os').hostname() as string; } catch { return null; }
+        try { return osHostname(); } catch { return null; }
       })(),
       agents: PtySessionManager.availableAgents(),
       // Auto-approve uses /usr/bin/dscl; only meaningful on darwin.

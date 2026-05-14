@@ -187,16 +187,23 @@ Future<List<CustomCommand>?> mutateCustomCommands(
 /// Open a short-lived WebSocket to the relay just to query
 /// [device-info-request]. Returns null if the daemon never answered (e.g.
 /// it's offline, or it's an old build that doesn't support the message).
-Future<DeviceInfo?> fetchDeviceInfo(Pairing p, {Duration timeout = const Duration(seconds: 4)}) async {
+Future<DeviceInfo?> fetchDeviceInfo(Pairing p, {Duration timeout = const Duration(seconds: 8)}) async {
   final base = p.relayUrl.replaceFirst(RegExp(r'^http'), 'ws');
   final uri = Uri.parse(
     '$base/phone/connect/${Uri.encodeComponent(p.deviceId)}'
     '?phone_id=${Uri.encodeComponent(p.phoneId)}'
-    '&session_id=device-info',
+    '&session_id=device-info-${DateTime.now().millisecondsSinceEpoch}',
   );
   WebSocketChannel? channel;
   try {
-    channel = WebSocketChannel.connect(uri, protocols: ['loopsy.bearer.${p.phoneSecret}']);
+    // IOWebSocketChannel matches the path the working terminal session
+    // uses. Fresh session_id per probe prevents the relay's
+    // "replace prior WS for same session" logic from terminating an
+    // in-flight retry mid-handshake.
+    channel = IOWebSocketChannel.connect(
+      uri,
+      protocols: ['loopsy.bearer.${p.phoneSecret}'],
+    );
     final completer = Completer<DeviceInfo?>();
     final sub = channel.stream.listen(
       (event) {
