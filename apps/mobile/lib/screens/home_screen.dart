@@ -27,6 +27,11 @@ class _HomeScreenState extends State<HomeScreen> {
   // (assume everything available) are used if the daemon never answers
   // — graceful fallback for older daemons that don't speak device-info.
   DeviceInfo? _deviceInfo;
+  /// True after fetchDeviceInfo has resolved at least once — success
+  /// OR failure. Lets the paired-strip stop showing "Connecting…"
+  /// indefinitely if the daemon doesn't answer (it's still paired,
+  /// we just couldn't probe for hostname/agents).
+  bool _deviceInfoAttempted = false;
 
   @override
   void initState() {
@@ -50,9 +55,19 @@ class _HomeScreenState extends State<HomeScreen> {
     // Probe the daemon in the background — non-blocking. If it never
     // answers (offline, old daemon, network hiccup) the agent picker
     // falls back to "show everything" rather than punishing the user.
-    fetchDeviceInfo(pairing).then((info) {
-      if (!mounted || info == null) return;
-      setState(() => _deviceInfo = info);
+    _probeDeviceInfo(pairing);
+  }
+
+  /// Fetch device-info from the daemon. Always sets _deviceInfoAttempted
+  /// so the paired-strip can stop showing "Connecting…" — even when the
+  /// daemon doesn't answer (the pairing itself is still valid; we just
+  /// don't know the hostname/agents for this run).
+  Future<void> _probeDeviceInfo(Pairing pairing) async {
+    final info = await fetchDeviceInfo(pairing);
+    if (!mounted) return;
+    setState(() {
+      _deviceInfoAttempted = true;
+      if (info != null) _deviceInfo = info;
     });
   }
 
@@ -667,7 +682,12 @@ class _HomeScreenState extends State<HomeScreen> {
             _PairedStrip(
               hostname: _deviceInfo?.hostname,
               relayUrl: p.relayUrl,
-              connected: _deviceInfo != null,
+              connected: _deviceInfo != null || _deviceInfoAttempted,
+              probing: !_deviceInfoAttempted,
+              onRetry: () {
+                setState(() => _deviceInfoAttempted = false);
+                _probeDeviceInfo(p);
+              },
             ),
 
             const SizedBox(height: 14),
@@ -741,61 +761,94 @@ class _HomeScreenState extends State<HomeScreen> {
 class _PairedStrip extends StatelessWidget {
   final String? hostname;
   final String relayUrl;
+  /// True when we either know the daemon answered (have hostname /
+  /// device-info), OR the probe completed with a timeout (pairing is
+  /// still valid, we just don't have live hostname). False only while
+  /// the first probe is in flight.
   final bool connected;
+  /// True only while the first probe is in flight. Distinguishes
+  /// "still asking the daemon" from "asked + got nothing back".
+  final bool probing;
+  /// Tap handler to retry the probe — visible affordance helps users
+  /// recover from a transient daemon hiccup without restarting the app.
+  final VoidCallback onRetry;
   const _PairedStrip({
     required this.hostname,
     required this.relayUrl,
     required this.connected,
+    required this.probing,
+    required this.onRetry,
   });
 
   @override
   Widget build(BuildContext context) {
     final relayHost = _hostOnly(relayUrl);
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-        color: LoopsyColors.surface,
-        borderRadius: BorderRadius.circular(4),
-        border: Border.all(color: LoopsyColors.border),
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 8,
-            height: 8,
-            decoration: BoxDecoration(
-              color: connected ? LoopsyColors.good : LoopsyColors.muted,
-              shape: BoxShape.circle,
-            ),
+    final shape = BorderRadius.circular(4);
+    return Material(
+      color: LoopsyColors.surface,
+      borderRadius: shape,
+      child: InkWell(
+        borderRadius: shape,
+        onTap: onRetry,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          decoration: BoxDecoration(
+            borderRadius: shape,
+            border: Border.all(color: LoopsyColors.border),
           ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  hostname ?? (connected ? 'Connected' : 'Connecting…'),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: LoopsyColors.fg,
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                  ),
+          child: Row(
+            children: [
+              Container(
+                width: 8,
+                height: 8,
+                decoration: BoxDecoration(
+                  // Green when daemon has answered (hostname known),
+                  // muted when we tried + got nothing, slow-pulse-feel
+                  // muted when still probing.
+                  color: (hostname != null)
+                      ? LoopsyColors.good
+                      : (probing ? LoopsyColors.muted : LoopsyColors.warn),
+                  shape: BoxShape.circle,
                 ),
-                const SizedBox(height: 1),
-                Text(
-                  'via $relayHost',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(color: LoopsyColors.muted, fontSize: 11),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      hostname ?? (probing ? 'Connecting…' : 'Paired (daemon offline)'),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: LoopsyColors.fg,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 1),
+                    Text(
+                      hostname == null && !probing
+                          ? 'tap to retry · $relayHost'
+                          : 'via $relayHost',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(color: LoopsyColors.muted, fontSize: 11),
+                    ),
+                  ],
                 ),
-              ],
-            ),
+              ),
+              HugeIcon(
+                icon: probing
+                    ? HugeIcons.strokeRoundedRefresh
+                    : HugeIcons.strokeRoundedLaptop,
+                color: LoopsyColors.muted,
+                size: 18,
+              ),
+            ],
           ),
-          const HugeIcon(icon: HugeIcons.strokeRoundedLaptop, color: LoopsyColors.muted, size: 18),
-        ],
+        ),
       ),
     );
   }
