@@ -13,7 +13,7 @@
     "test": "tsx scripts/check-html-scripts.mts"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20250410.0",
+    "@cloudflare/workers-types": "^4.20260503.1",
     "tsx": "^4.16.0",
     "typescript": "^5.5.0",
     "wrangler": "^4.67.0"
