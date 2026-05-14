@@ -229,27 +229,51 @@ Future<DeviceInfo?> fetchDeviceInfo(Pairing p, {Duration timeout = const Duratio
 ///
 /// CSO #14: [sas] is the 4-digit verification code shown on the laptop next
 /// to the QR. Required by the relay if the issued token included one.
+///
+/// Retries on 5xx Cloudflare Worker exceptions (specifically 500/1101 —
+/// transient CF cold-start crash that surfaced to an App Store reviewer
+/// in the May 14 2026 rejection). 4xx errors (bad SAS, expired token,
+/// already-redeemed) are surfaced immediately — those are deterministic
+/// failures the user needs to know about.
 Future<Pairing> redeemPairToken(ParsedPair parsed, {String? label, String? sas}) async {
-  final res = await http.post(
-    Uri.parse('${parsed.relayUrl.replaceAll(RegExp(r'/+$'), '')}/pair/redeem'),
-    headers: {'content-type': 'application/json'},
-    body: jsonEncode({
-      'token': parsed.token,
-      if (label != null) 'label': label,
-      if (sas != null) 'sas': sas,
-    }),
-  );
-  if (res.statusCode != 200) {
-    throw Exception('Pair failed: ${res.statusCode} ${res.body}');
+  final url = Uri.parse('${parsed.relayUrl.replaceAll(RegExp(r'/+$'), '')}/pair/redeem');
+  final body = jsonEncode({
+    'token': parsed.token,
+    if (label != null) 'label': label,
+    if (sas != null) 'sas': sas,
+  });
+  const maxAttempts = 4;
+  http.Response? lastRes;
+  for (var attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      final res = await http.post(
+        url,
+        headers: {'content-type': 'application/json'},
+        body: body,
+      );
+      if (res.statusCode == 200) {
+        final j = jsonDecode(res.body) as Map<String, dynamic>;
+        return Pairing(
+          relayUrl: parsed.relayUrl,
+          deviceId: j['device_id'] as String,
+          phoneId: j['phone_id'] as String,
+          phoneSecret: j['phone_secret'] as String,
+          label: label,
+        );
+      }
+      lastRes = res;
+      // 5xx → retry with backoff. 4xx is a real client error (bad SAS,
+      // expired token, etc.) — surface immediately so the user sees a
+      // useful message.
+      if (res.statusCode < 500 || attempt == maxAttempts) break;
+    } catch (_) {
+      // Network error / timeout. Retry until we run out of attempts.
+      if (attempt == maxAttempts) rethrow;
+    }
+    // 250ms → 500ms → 1s → done. Total wait <2s for 4 tries.
+    await Future<void>.delayed(Duration(milliseconds: 250 * (1 << (attempt - 1))));
   }
-  final j = jsonDecode(res.body) as Map<String, dynamic>;
-  return Pairing(
-    relayUrl: parsed.relayUrl,
-    deviceId: j['device_id'] as String,
-    phoneId: j['phone_id'] as String,
-    phoneSecret: j['phone_secret'] as String,
-    label: label,
-  );
+  throw Exception('Pair failed: ${lastRes?.statusCode ?? '?'} ${lastRes?.body ?? '(no response)'}');
 }
 
 /// Wraps a single phone-side session WebSocket. Routes inbound binary frames
