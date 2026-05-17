@@ -69,6 +69,31 @@ class _TerminalScreenState extends State<TerminalScreen> {
   final ChatLog _chatLog = ChatLog();
   int _chatRevision = 0;
   bool _chatSubscribed = false;
+  /// True while the PTY is in **alternate screen** mode — the standard
+  /// escape sequence (ESC[?1049h / ESC[?1049l) used by ratatui (claude,
+  /// codex) and ink (gemini) when they take over the screen for a TUI
+  /// prompt. Plain streaming output (status spinners, log lines, syntax
+  /// highlighting) does NOT enter alt-screen, so this avoids the
+  /// "dot is always on" false positive of a byte-arrival heuristic.
+  bool _ptyInAltScreen = false;
+  /// True when we auto-switched the user into the terminal pane because
+  /// the agent entered a TUI prompt while they were in chat view. On
+  /// alt-screen exit we flip them back to chat — unless they manually
+  /// swiped to a tab during the prompt, in which case they're driving
+  /// the view and we hands-off the auto-switch.
+  bool _autoSwitchedToTerm = false;
+  /// True when the PTY has emitted bytes in the recent past (~2.5s).
+  /// Drives the chat typing indicator so the user sees a pulsing
+  /// "agent working" affordance even when the agent isn't writing
+  /// new JSONL transcript entries (the case during TUI prompt waits).
+  bool _agentLikelyWorking = false;
+  Timer? _agentWorkingTimer;
+  /// Derived: show the unread dot on the term tab. With auto-switch
+  /// landing the user in term as soon as a TUI appears, this only
+  /// matters if they then manually swiped back to chat — the dot
+  /// then signals "the TUI is still up, tap to return".
+  bool get _termHasUnreadActivity =>
+      _ptyInAltScreen && _view == _ViewMode.chat;
 
   // Auto-reconnect state. When the relay WS drops while the user is
   // still on this screen, we transparently reopen the session so the
@@ -113,7 +138,18 @@ class _TerminalScreenState extends State<TerminalScreen> {
 
     _terminal.onOutput = (data) {
       final raw = utf8.encode(data);
-      final transformed = _applyModifiers(raw);
+      // iOS system keyboard's Return key produces LF (0x0a), but TUIs in
+      // raw-mode (claude, codex, gemini ratatui/ink renderers) listen for
+      // CR (0x0d) — the same byte a real terminal sends on Return. Without
+      // this transform every Enter press is silently dropped by the TUI,
+      // breaking option selection / message submit in the term view. Only
+      // single-byte LF gets remapped: multi-byte payloads (paste, IME
+      // composition) keep their internal LFs so multi-line text stays
+      // multi-line.
+      final keyboardBytes = (raw.length == 1 && raw[0] == 0x0a)
+          ? const <int>[0x0d]
+          : raw;
+      final transformed = _applyModifiers(keyboardBytes);
       _session?.sendStdin(transformed);
       _captureSummary(transformed);
     };
@@ -162,8 +198,33 @@ class _TerminalScreenState extends State<TerminalScreen> {
     final session = RelaySession(
       pairing: pairing,
       sessionId: widget.sessionId,
-      onPty: (bytes) =>
-          _terminal.write(utf8.decode(bytes, allowMalformed: true)),
+      onPty: (bytes) {
+        _terminal.write(utf8.decode(bytes, allowMalformed: true));
+        _bumpAgentWorking();
+        final altBefore = _ptyInAltScreen;
+        _scanAltScreenToggle(bytes);
+        if (_ptyInAltScreen == altBefore) return;
+        if (!mounted) return;
+        // Auto-switch: when the agent (or a CLI it spawned) opens a
+        // TUI prompt while the user is in chat view, jump them to the
+        // terminal so they can see + respond. When the TUI exits we
+        // flip them back to chat. Surfacing both events with a tiny
+        // snackbar so the view jump isn't disorienting.
+        if (_ptyInAltScreen && _view == _ViewMode.chat) {
+          _autoSwitchedToTerm = true;
+          setState(() => _view = _ViewMode.terminal);
+          _flashAutoSwitchToast('Agent needs your input · switched to term');
+        } else if (!_ptyInAltScreen && _autoSwitchedToTerm) {
+          _autoSwitchedToTerm = false;
+          if (_view == _ViewMode.terminal && _chatSupported) {
+            setState(() => _view = _ViewMode.chat);
+            _ensureChatSubscribed();
+            _flashAutoSwitchToast('Done · back to chat');
+          }
+        } else {
+          setState(() {});
+        }
+      },
       onControl: _handleControl,
       onClose: (code, _) {
         if (!mounted || _disposed) return;
@@ -490,8 +551,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
     if (session == null) return;
 
     // Universal submit sequence verified against real PTY runs of all
-    // three agents (see packages/daemon/scripts/_test-{claude,codex,
-    // gemini}-input.mjs):
+    // three agents:
     //
     //   ESC[200~ <text> \n ESC[201~  +  160ms  +  \r
     //
@@ -506,8 +566,33 @@ class _TerminalScreenState extends State<TerminalScreen> {
 
     const pasteStart = [0x1b, 0x5b, 0x32, 0x30, 0x30, 0x7e]; // ESC[200~
     const pasteEnd = [0x1b, 0x5b, 0x32, 0x30, 0x31, 0x7e]; // ESC[201~
+    final altAtSend = _ptyInAltScreen;
+    final beforeUserTurns =
+        _chatLog.turns.where((t) => t.role == ChatRole.user).length;
+
     session.sendStdin([...pasteStart, ...body, 0x0a, ...pasteEnd]);
     await Future<void>.delayed(const Duration(milliseconds: 160));
+    session.sendStdin([0x0d]);
+
+    // Backup CR. If the first CR didn't actually trigger submit (the
+    // user's repro: text landed in claude's input as a newline but
+    // the agent never moved off the composer), re-send Enter after a
+    // generous beat. Skipped if any of these is true:
+    //   - The chat log already shows a new user turn (submit worked).
+    //   - The agent's alt-screen state changed since send (a
+    //     permission dialog or different prompt is now up — sending
+    //     a stray CR could confirm it).
+    //   - The session was closed in the meantime.
+    // claude / codex / gemini all treat Enter on an empty composer as
+    // a no-op, so the redundant CR is harmless when the first CR did
+    // work and alt-screen happens to be in the same state.
+    await Future<void>.delayed(const Duration(milliseconds: 700));
+    if (!mounted) return;
+    if (!session.isOpen) return;
+    if (_ptyInAltScreen != altAtSend) return;
+    final nowUserTurns =
+        _chatLog.turns.where((t) => t.role == ChatRole.user).length;
+    if (nowUserTurns > beforeUserTurns) return;
     session.sendStdin([0x0d]);
   }
 
@@ -576,6 +661,88 @@ class _TerminalScreenState extends State<TerminalScreen> {
     if (s.length > 120) s = '${s.substring(0, 120).trimRight()}…';
     _summaryCaptured = true;
     Storage.updateSession(widget.sessionId, (m) => m.copyWith(summary: s));
+  }
+
+  /// Flag the agent as "likely working" for the next ~2.5s. Refreshed
+  /// on every PTY byte burst so the indicator stays on as long as the
+  /// agent is streaming output. After 2.5s of silence we clear the
+  /// flag and the chat shows its idle state. Chat still drops back to
+  /// the post-response idle state immediately if a JSONL `turn-end`
+  /// event arrives — but for the TUI-prompt case (no JSONL but live
+  /// PTY) this keeps the typing bubble visible.
+  void _bumpAgentWorking() {
+    _agentWorkingTimer?.cancel();
+    if (!_agentLikelyWorking && mounted) {
+      setState(() {
+        _agentLikelyWorking = true;
+        _chatRevision++;
+      });
+    }
+    _agentWorkingTimer = Timer(const Duration(milliseconds: 2500), () {
+      if (!mounted) return;
+      setState(() {
+        _agentLikelyWorking = false;
+        _chatRevision++;
+      });
+    });
+  }
+
+  /// Tiny snackbar shown when the auto-switch fires, so the view jump
+  /// has a visible explanation. Auto-clears existing snackbars so a
+  /// fast enter-exit-enter sequence doesn't stack.
+  void _flashAutoSwitchToast(String message) {
+    if (!mounted) return;
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    messenger?.clearSnackBars();
+    messenger?.showSnackBar(
+      SnackBar(
+        content: Text(message, style: const TextStyle(fontSize: 13)),
+        duration: const Duration(seconds: 2),
+        backgroundColor: LoopsyColors.surfaceAlt,
+        behavior: SnackBarBehavior.floating,
+        margin: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.all(Radius.circular(6)),
+        ),
+      ),
+    );
+  }
+
+  /// Toggle [_ptyInAltScreen] when the PTY enters / exits alternate
+  /// screen mode. The escape sequences are CSI `?1049h` / `?1049l` and
+  /// the older CSI `?47h` / `?47l` and `?1047h` / `?1047l` variants —
+  /// all three are what ratatui (claude, codex) and ink (gemini) use
+  /// when they take over the screen for a TUI prompt. We don't try to
+  /// fully parse SGR/CSI here; we just look for these specific final
+  /// bytes after a `0x1b 0x5b 0x3f` prefix.
+  void _scanAltScreenToggle(List<int> bytes) {
+    for (var i = 0; i + 3 < bytes.length; i++) {
+      if (bytes[i] != 0x1b) continue;
+      if (bytes[i + 1] != 0x5b) continue; // '['
+      if (bytes[i + 2] != 0x3f) continue; // '?'
+      var j = i + 3;
+      while (j < bytes.length) {
+        final c = bytes[j];
+        // 'h' (set/enter) or 'l' (reset/exit) terminates the sequence.
+        if (c == 0x68 || c == 0x6c) break;
+        // Bail out if we run into something that's not a digit or ';'.
+        if (!((c >= 0x30 && c <= 0x39) || c == 0x3b)) {
+          j = -1;
+          break;
+        }
+        j++;
+      }
+      if (j < 0 || j >= bytes.length) continue;
+      final param = String.fromCharCodes(bytes.sublist(i + 3, j));
+      final entering = bytes[j] == 0x68;
+      // ';'-separated lists are valid (rare for alt-screen). Check each.
+      for (final p in param.split(';')) {
+        if (p == '1049' || p == '1047' || p == '47') {
+          _ptyInAltScreen = entering;
+        }
+      }
+      i = j;
+    }
   }
 
   Future<void> _openVoiceSheet() async {
@@ -833,6 +1000,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
   void dispose() {
     _disposed = true;
     _reconnectTimer?.cancel();
+    _agentWorkingTimer?.cancel();
     if (_chatSubscribed) {
       _session?.sendControl({'type': 'chat-unsubscribe'});
     }
@@ -923,8 +1091,12 @@ class _TerminalScreenState extends State<TerminalScreen> {
           if (_chatSupported)
             _ViewToggleBar(
               mode: _view,
+              termHasUnread: _termHasUnreadActivity,
               onChanged: (m) {
                 if (m == _view) return;
+                // User took the wheel — drop the auto-switch flag so
+                // when alt-screen exits we don't yank them back.
+                _autoSwitchedToTerm = false;
                 setState(() => _view = m);
                 if (m == _ViewMode.chat) _ensureChatSubscribed();
               },
@@ -958,6 +1130,12 @@ class _TerminalScreenState extends State<TerminalScreen> {
                   log: _chatLog,
                   revision: _chatRevision,
                   agentName: _agentDisplayName(),
+                  // Drive the typing indicator off recent PTY activity
+                  // so the chat shows "agent working" even when the
+                  // agent isn't writing JSONL events (the TUI prompt
+                  // case). Without this the indicator disappears the
+                  // instant streaming pauses for an interactive prompt.
+                  agentLikelyWorking: _agentLikelyWorking,
                   // Composer is enabled whenever the relay session is
                   // alive — NOT gated on chat capability, because the
                   // user's first message is what causes the agent to
@@ -1028,7 +1206,15 @@ class _TerminalScreenState extends State<TerminalScreen> {
 class _ViewToggleBar extends StatelessWidget {
   final _ViewMode mode;
   final ValueChanged<_ViewMode> onChanged;
-  const _ViewToggleBar({required this.mode, required this.onChanged});
+  /// True when the term pane received PTY output the user hasn't seen.
+  /// Shown as a small dot on the term tab to signal "agent is waiting
+  /// for terminal input" when chat view is empty.
+  final bool termHasUnread;
+  const _ViewToggleBar({
+    required this.mode,
+    required this.onChanged,
+    this.termHasUnread = false,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -1062,6 +1248,7 @@ class _ViewToggleBar extends StatelessWidget {
                 label: 'term',
                 icon: HugeIcons.strokeRoundedCommandLine,
                 selected: mode == _ViewMode.terminal,
+                showDot: termHasUnread && mode != _ViewMode.terminal,
                 onTap: () => onChanged(_ViewMode.terminal),
               ),
             ),
@@ -1076,12 +1263,14 @@ class _SegmentButton extends StatelessWidget {
   final String label;
   final IconData icon;
   final bool selected;
+  final bool showDot;
   final VoidCallback onTap;
   const _SegmentButton({
     required this.label,
     required this.icon,
     required this.selected,
     required this.onTap,
+    this.showDot = false,
   });
 
   @override
@@ -1115,6 +1304,17 @@ class _SegmentButton extends StatelessWidget {
                 fontFamily: 'JetBrainsMono',
               ),
             ),
+            if (showDot) ...[
+              const SizedBox(width: 6),
+              Container(
+                width: 6,
+                height: 6,
+                decoration: const BoxDecoration(
+                  color: LoopsyColors.warn,
+                  shape: BoxShape.circle,
+                ),
+              ),
+            ],
           ],
         ),
       ),

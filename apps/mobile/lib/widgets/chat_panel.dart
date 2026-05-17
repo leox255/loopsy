@@ -44,6 +44,11 @@ class ChatPanel extends StatefulWidget {
   /// the two surfaces). Pass null when speech recognition isn't
   /// available — composer hides the mic.
   final VoidCallback? onVoice;
+  /// External signal that the agent is currently doing work even if the
+  /// chat log doesn't reflect it. Parent toggles this based on recent
+  /// PTY activity so the typing indicator stays visible during TUI
+  /// prompt waits (when no JSONL events flow but the terminal is alive).
+  final bool agentLikelyWorking;
   const ChatPanel({
     super.key,
     required this.log,
@@ -51,6 +56,7 @@ class ChatPanel extends StatefulWidget {
     required this.agentName,
     this.onSend,
     this.onVoice,
+    this.agentLikelyWorking = false,
   });
 
   @override
@@ -176,8 +182,11 @@ class _ChatPanelState extends State<ChatPanel> with WidgetsBindingObserver {
       }
     }
 
-    // Typing indicator: show when the most recent turn is incomplete OR
-    // is a user prompt without a follow-up. The bubble lives at the
+    // Typing indicator: show when (a) the most recent turn is
+    // incomplete or a user prompt awaiting a reply, OR (b) the parent
+    // told us the agent is likely still working based on PTY activity
+    // (the TUI-prompt case where no JSONL events flow but the agent
+    // is very much alive on the terminal). The bubble lives at the
     // bottom of the list so it appears right where the next response
     // will materialize.
     bool showTyping = false;
@@ -186,13 +195,11 @@ class _ChatPanelState extends State<ChatPanel> with WidgetsBindingObserver {
       if (last.role == ChatRole.user) {
         showTyping = true;
       } else if (last.role == ChatRole.assistant && !last.done) {
-        // Only show typing for the empty-thinking case — if the assistant
-        // is already streaming visible text we let the bubble itself
-        // signal liveness.
         final hasText = last.blocks.any((b) => b is TextBlock && (b).text.trim().isNotEmpty);
         if (!hasText) showTyping = true;
       }
     }
+    if (widget.agentLikelyWorking) showTyping = true;
 
     final hasDroppedHeader = log.droppedTurns > 0;
     final hasErrorFooter = log.lastError != null;
