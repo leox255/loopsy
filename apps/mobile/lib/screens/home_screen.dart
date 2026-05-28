@@ -128,6 +128,11 @@ class _HomeScreenState extends State<HomeScreen> {
           TextField(
             controller: labelCtl,
             autofocus: !isEdit,
+            autocorrect: false,
+            enableSuggestions: false,
+            autofillHints: const <String>[],
+            smartDashesType: SmartDashesType.disabled,
+            smartQuotesType: SmartQuotesType.disabled,
             decoration: const InputDecoration(
               labelText: 'Label',
               hintText: 'Edit README',
@@ -541,6 +546,11 @@ class _HomeScreenState extends State<HomeScreen> {
       body: TextField(
         controller: ctl,
         autofocus: true,
+        autocorrect: false,
+        enableSuggestions: false,
+        autofillHints: const <String>[],
+        smartDashesType: SmartDashesType.disabled,
+        smartQuotesType: SmartQuotesType.disabled,
         textCapitalization: TextCapitalization.sentences,
         decoration: InputDecoration(
           hintText: 'e.g. fix logging bug',
@@ -628,25 +638,32 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _removeFromList(SessionMeta s) async {
     final next = _sessions.where((e) => e.id != s.id).toList();
-    await Storage.writeSessions(next);
+    // Optimistic: setState first so the row disappears next frame; the
+    // Keychain/Keystore write (30–100ms on iOS) happens in the background.
     if (mounted) setState(() => _sessions = next);
+    unawaited(Storage.writeSessions(next));
   }
 
   Future<void> _deleteSession(SessionMeta s) async {
     if (_pairing == null) return;
-    // Open a brief WS, send session-close, drop the connection.
-    final session = RelaySession(
-      pairing: _pairing!,
-      sessionId: s.id,
-      onPty: (_) {},
-      onClose: (_, __) {},
-    );
-    try {
-      await session.open(agent: s.agent, cols: 80, rows: 24);
-      await Future<void>.delayed(const Duration(milliseconds: 250));
-      await session.killOnDaemon();
-    } catch (_) {/* best-effort; remove locally regardless */}
+    // Optimistic: drop from local list immediately so the row disappears on
+    // the next frame. The daemon-side kill is best-effort and fires in the
+    // background — if it fails the session keeps running on the laptop but
+    // the phone already moved on, which matches the user's mental model.
     await _removeFromList(s);
+    unawaited(() async {
+      final session = RelaySession(
+        pairing: _pairing!,
+        sessionId: s.id,
+        onPty: (_) {},
+        onClose: (_, __) {},
+      );
+      try {
+        await session.open(agent: s.agent, cols: 80, rows: 24);
+        await Future<void>.delayed(const Duration(milliseconds: 250));
+        await session.killOnDaemon();
+      } catch (_) {/* best-effort */}
+    }());
   }
 
   Future<void> _resetPairing() async {
@@ -664,12 +681,13 @@ class _HomeScreenState extends State<HomeScreen> {
       ],
     );
     if (ok != true) return;
-    // CSO #8: also revoke on the relay so the phone record stops existing
-    // server-side. Without this, a stolen device backup with the
-    // phone_secret could keep connecting.
+    // Optimistic: wipe local pairing + navigate immediately. Server-side
+    // revoke fires in the background so the UI doesn't stall on the relay
+    // HTTP round-trip. selfRevoke is best-effort either way (already wrapped
+    // in try/catch internally).
     final p = _pairing;
-    if (p != null) await selfRevoke(p);
     await Storage.deletePairing();
+    if (p != null) unawaited(selfRevoke(p));
     if (!mounted) return;
     context.go('/pair');
   }

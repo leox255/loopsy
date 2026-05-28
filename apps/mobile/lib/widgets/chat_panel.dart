@@ -995,6 +995,15 @@ class _ChatComposerState extends State<_ChatComposer> {
                         textCapitalization: TextCapitalization.sentences,
                         textInputAction: TextInputAction.send,
                         onSubmitted: (_) => _send(),
+                        // Kill iOS QuickType bar + Android autofill chip
+                        // row so the keyboard sits flush against the
+                        // composer with no floating mic/predict popup.
+                        // Voice input has its own dedicated mic button.
+                        autocorrect: false,
+                        enableSuggestions: false,
+                        autofillHints: const <String>[],
+                        smartDashesType: SmartDashesType.disabled,
+                        smartQuotesType: SmartQuotesType.disabled,
                         style: const TextStyle(color: LoopsyColors.fg, fontSize: 15, height: 1.4),
                         decoration: InputDecoration(
                           hintText: enabled ? 'Message ${widget.agentName}…' : 'Disconnected',

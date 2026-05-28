@@ -208,6 +208,10 @@ class _PairScreenState extends State<PairScreen> with WidgetsBindingObserver {
         controller: ctl,
         autofocus: true,
         autocorrect: false,
+        enableSuggestions: false,
+        autofillHints: const <String>[],
+        smartDashesType: SmartDashesType.disabled,
+        smartQuotesType: SmartQuotesType.disabled,
         keyboardType: TextInputType.url,
         decoration: InputDecoration(
           hintText: 'https://<your-relay>/app#loopsy%3A…',
