@@ -122,6 +122,8 @@ export const LANDING_HTML = /* html */ `<!doctype html>
     .pill.live .dot { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 6px var(--accent); }
     .pill.done    { background: rgba(158,206,106,0.12); color: var(--good); border: 1px solid rgba(158,206,106,0.4); }
     .pill.done svg { width: 11px; height: 11px; }
+    a.pill { text-decoration: none; transition: filter 0.15s ease; }
+    a.pill:hover { filter: brightness(1.25); }
     .pill.queued  { background: var(--surface-alt); color: var(--muted); border: 1px solid var(--border); }
     .pill.warn    { background: rgba(224,175,104,0.14); color: var(--warn); border: 1px solid rgba(224,175,104,0.4); }
 
@@ -428,7 +430,9 @@ export const LANDING_HTML = /* html */ `<!doctype html>
       </div>
 
       <div class="actions">
-        <a href="/app" class="btn primary">${ICONS.bolt}Open web app</a>
+        <a href="https://apps.apple.com/app/id6764653011" class="btn primary" target="_blank" rel="noopener">${ICONS.apple}App Store</a>
+        <a href="https://play.google.com/store/apps/details?id=com.loopsy.mobile" class="btn primary" target="_blank" rel="noopener">${ICONS.android}Google Play</a>
+        <a href="/app" class="btn secondary">${ICONS.bolt}Web app</a>
         <a href="${GITHUB_URL}" class="btn secondary" target="_blank" rel="noopener">${ICONS.github}GitHub</a>
       </div>
 
@@ -520,20 +524,20 @@ export const LANDING_HTML = /* html */ `<!doctype html>
           <span class="task-id">platforms</span>
         </div>
         <h3 class="task-title">Native apps</h3>
-        <p class="task-meta">Web works today. Native apps in submission review.</p>
+        <p class="task-meta">Live on the App Store and Google Play. Or skip the install and open the web app.</p>
 
         <div style="margin-top: 8px;">
           <div class="status-row">
             <div class="label">${ICONS.globe}<span>Web app — <code style="font-family:var(--font-mono);font-size:12px">/app</code></span></div>
-            <span class="pill done">${ICONS.check}Live</span>
+            <a href="/app" class="pill done">${ICONS.check}Open</a>
           </div>
           <div class="status-row">
             <div class="label">${ICONS.apple}<span>iOS · iPadOS</span></div>
-            <span class="pill queued">Submitted</span>
+            <a href="https://apps.apple.com/app/id6764653011" target="_blank" rel="noopener" class="pill done">${ICONS.check}App Store</a>
           </div>
           <div class="status-row">
             <div class="label">${ICONS.android}<span>Android</span></div>
-            <span class="pill queued">Submitted</span>
+            <a href="https://play.google.com/store/apps/details?id=com.loopsy.mobile" target="_blank" rel="noopener" class="pill done">${ICONS.check}Google Play</a>
           </div>
         </div>
       </div>

@@ -8,7 +8,7 @@ Control Claude Code, Cursor, Codex, or any shell on your laptop from your phone.
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 `macOS` · `Linux` · `Windows`
 
-→ [loopsy.dev](https://loopsy.dev)
+→ [loopsy.dev](https://loopsy.dev) · [App Store](https://apps.apple.com/app/id6764653011) · [Google Play](https://play.google.com/store/apps/details?id=com.loopsy.mobile)
 
 ---
 
@@ -77,13 +77,13 @@ Cloudflare Workers free tier covers personal use comfortably. SQLite-backed Dura
 
 ## Phone client
 
-The web client at `/app` runs on iOS Safari and Android Chrome with no install. Native iOS & Android apps are in submission review.
+The web client at `/app` runs on iOS Safari and Android Chrome with no install. Native iOS & Android apps are live on the App Store and Google Play.
 
 | Feature | Status |
 |---|---|
 | Web app (`/app`) | ✅ Live |
-| iOS / iPadOS native | ⏳ App Store review |
-| Android native | ⏳ Play Store review |
+| iOS / iPadOS native | ✅ [App Store](https://apps.apple.com/app/id6764653011) |
+| Android native | ✅ [Google Play](https://play.google.com/store/apps/details?id=com.loopsy.mobile) |
 
 ## CLI
 
@@ -267,7 +267,7 @@ packages/
   mcp-server/     MCP server for AI coding agents (LAN mode)
   dashboard/      Local web dashboard
 apps/
-  mobile/         Flutter iOS/Android app (in submission review)
+  mobile/         Flutter iOS/Android app (App Store + Google Play)
 ```
 
 ## Development
