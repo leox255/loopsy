@@ -8,6 +8,9 @@ package-dist/
 # they may include URLs, paths, and internal architecture details.
 .gstack/
 
+# Local Claude Code agent state: worktrees, settings, memory. Machine-local.
+.claude/
+
 # CSO #21: stale fixtures and one-off tooling crumbs.
 test-from-kai.txt
 test-transfer.txt
