@@ -30,6 +30,24 @@ const RECONNECT_INITIAL_MS = 1000;
 const RECONNECT_MAX_MS = 30_000;
 const HEARTBEAT_MS = 25_000;
 /**
+ * Hard ceiling on how long a single connection attempt may sit in the
+ * CONNECTING state before we give up and force a reconnect. The `ws`
+ * library has NO default handshake timeout, so a TCP connect that's
+ * black-holed after a network change or laptop sleep/wake leaves the
+ * socket stuck in CONNECTING forever — never firing 'open', 'error', or
+ * 'close'. Because scheduleReconnect() only runs from the 'close' handler,
+ * the whole reconnect chain then dies silently (observed in the wild: the
+ * daemon reported "connected" locally but was unreachable from the phone
+ * for 21h after one stuck attempt). We set the `ws` handshakeTimeout to
+ * this AND run our own watchdog as a belt-and-suspenders guarantee the
+ * chain can never stall.
+ */
+const CONNECT_TIMEOUT_MS = 15_000;
+/** Watchdog fires just after handshakeTimeout so the clean ws error→close
+ *  path normally wins; the watchdog only catches the case where even that
+ *  fails to fire. */
+const CONNECT_WATCHDOG_MS = CONNECT_TIMEOUT_MS + 5_000;
+/**
  * Per-session backpressure threshold for chat-event forwarding. If the
  * outbound WS buffer is above this size, we assume the client is too slow
  * (cellular network, app backgrounded, etc.) and rather than letting Node
@@ -136,7 +154,17 @@ export class RelayClient {
   private stopped = false;
   private reconnectMs = RECONNECT_INITIAL_MS;
   private reconnectTimer?: ReturnType<typeof setTimeout>;
+  /** Guards a single CONNECTING attempt from hanging forever (see CONNECT_TIMEOUT_MS). */
+  private connectWatchdog?: ReturnType<typeof setTimeout>;
   private heartbeatTimer?: ReturnType<typeof setInterval>;
+  /**
+   * Liveness flag for the heartbeat. Set false right after we send a ping,
+   * back to true when the matching pong arrives. If it's still false at the
+   * next heartbeat tick the peer never answered, so we treat the
+   * OPEN-but-dead socket as gone and terminate it to force a reconnect —
+   * covers a NAT/firewall silently dropping the flow with no TCP FIN.
+   */
+  private pongReceived = true;
   /** sessionId → handle so we can tear down listeners on disconnect. */
   private sessions = new Map<string, RoutedSession>();
   /**
@@ -178,7 +206,11 @@ export class RelayClient {
 
   stop(): void {
     this.stopped = true;
-    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = undefined;
+    }
+    this.clearConnectWatchdog();
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
     for (const s of this.sessions.values()) s.detach();
     this.sessions.clear();
@@ -195,21 +227,55 @@ export class RelayClient {
   }
 
   private connect(): void {
-    const url = new URL(this.cfg.url.replace(/^http/, 'ws'));
-    url.pathname = '/laptop/connect';
-    url.searchParams.set('device_id', this.cfg.deviceId);
+    this.clearConnectWatchdog();
+    let ws: WebSocket;
+    try {
+      const url = new URL(this.cfg.url.replace(/^http/, 'ws'));
+      url.pathname = '/laptop/connect';
+      url.searchParams.set('device_id', this.cfg.deviceId);
 
-    // CSO #3: pass the bearer via the Authorization header (Node side uses
-    // `ws` which can set headers). The relay also accepts a
-    // `Sec-WebSocket-Protocol: loopsy.bearer.<secret>` subprotocol so
-    // browsers and other WHATWG-compliant clients can authenticate without
-    // putting the secret in URL query strings (which leak into CF logs).
-    const ws = new WebSocket(url.toString(), [`loopsy.bearer.${this.cfg.deviceSecret}`], {
-      headers: { Authorization: `Bearer ${this.cfg.deviceSecret}` },
-    });
+      // CSO #3: pass the bearer via the Authorization header (Node side uses
+      // `ws` which can set headers). The relay also accepts a
+      // `Sec-WebSocket-Protocol: loopsy.bearer.<secret>` subprotocol so
+      // browsers and other WHATWG-compliant clients can authenticate without
+      // putting the secret in URL query strings (which leak into CF logs).
+      ws = new WebSocket(url.toString(), [`loopsy.bearer.${this.cfg.deviceSecret}`], {
+        headers: { Authorization: `Bearer ${this.cfg.deviceSecret}` },
+        // Bound the handshake so a black-holed connect can't hang in
+        // CONNECTING forever (ws has no default). Emits an 'error' →
+        // 'close', which drives the normal reconnect path.
+        handshakeTimeout: CONNECT_TIMEOUT_MS,
+      });
+    } catch (err) {
+      // new URL()/new WebSocket() can throw synchronously (e.g. malformed
+      // relay url in config). Without this catch the throw unwinds past the
+      // caller, no 'close' handler is ever attached, and the reconnect
+      // chain dies. Treat it like any other connect failure and back off.
+      this.lastError = err instanceof Error ? err.message : String(err);
+      this.log.error('relay connect threw', { message: this.lastError });
+      if (!this.stopped) this.scheduleReconnect();
+      return;
+    }
     this.ws = ws;
 
+    // Belt-and-suspenders to handshakeTimeout: if the socket is still
+    // CONNECTING past the watchdog window, force it down. terminate()
+    // emits 'close', which schedules the reconnect.
+    this.connectWatchdog = setTimeout(() => {
+      this.connectWatchdog = undefined;
+      if (ws.readyState === WebSocket.CONNECTING) {
+        this.log.warn('relay connect timed out', { timeoutMs: CONNECT_WATCHDOG_MS });
+        try {
+          ws.terminate();
+        } catch {
+          /* ignore */
+        }
+        if (!this.stopped) this.scheduleReconnect();
+      }
+    }, CONNECT_WATCHDOG_MS);
+
     ws.on('open', () => {
+      this.clearConnectWatchdog();
       this.log.info('relay connected', { url: this.cfg.url, deviceId: this.cfg.deviceId });
       this.reconnectMs = RECONNECT_INITIAL_MS;
       this.lastError = null;
@@ -224,7 +290,12 @@ export class RelayClient {
       }
     });
 
+    ws.on('pong', () => {
+      this.pongReceived = true;
+    });
+
     ws.on('close', (code, reason) => {
+      this.clearConnectWatchdog();
       this.stopHeartbeat();
       this.log.warn('relay disconnected', { code, reason: reason?.toString() });
       // Detach all session listeners; PTYs keep running.
@@ -237,25 +308,57 @@ export class RelayClient {
     ws.on('error', (err) => {
       this.lastError = err.message;
       this.log.error('relay socket error', { message: err.message });
-      // 'close' fires after error — handle reconnect there.
+      // 'close' fires after 'error' for established sockets and for most
+      // connect failures; the connect watchdog covers the rare case where
+      // it doesn't.
     });
   }
 
   private scheduleReconnect(): void {
+    if (this.stopped) return;
+    // Idempotent: the connect watchdog and the 'close' handler can both
+    // request a reconnect off the same dead socket. Keep at most one timer
+    // in flight so we never spin up parallel connect chains (doubled
+    // sockets, doubled backoff).
+    if (this.reconnectTimer) return;
     const delay = this.reconnectMs;
     this.reconnectMs = Math.min(this.reconnectMs * 2, RECONNECT_MAX_MS);
-    this.reconnectTimer = setTimeout(() => this.connect(), delay);
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = undefined;
+      this.connect();
+    }, delay);
+  }
+
+  private clearConnectWatchdog(): void {
+    if (this.connectWatchdog) {
+      clearTimeout(this.connectWatchdog);
+      this.connectWatchdog = undefined;
+    }
   }
 
   private startHeartbeat(): void {
     this.stopHeartbeat();
+    this.pongReceived = true;
     this.heartbeatTimer = setInterval(() => {
-      if (this.ws?.readyState === WebSocket.OPEN) {
+      if (this.ws?.readyState !== WebSocket.OPEN) return;
+      if (!this.pongReceived) {
+        // The previous ping went unanswered for a full interval — the link
+        // is dead even though the socket still reads OPEN (silent NAT /
+        // firewall drop with no FIN). terminate() emits 'close', which
+        // tears down and reconnects.
+        this.log.warn('relay heartbeat timed out; terminating dead socket');
         try {
-          this.ws.ping();
+          this.ws.terminate();
         } catch {
           /* ignore */
         }
+        return;
+      }
+      this.pongReceived = false;
+      try {
+        this.ws.ping();
+      } catch {
+        /* ignore */
       }
     }, HEARTBEAT_MS);
   }
