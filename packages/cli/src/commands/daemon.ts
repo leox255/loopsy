@@ -3,8 +3,9 @@ import { readFile, unlink, access } from 'node:fs/promises';
 import { join } from 'node:path';
 import { homedir, platform } from 'node:os';
 import { CONFIG_DIR } from '@loopsy/protocol';
-import { daemonRequest } from '../utils.js';
+import { daemonRequest, loadCliConfig } from '../utils.js';
 import { daemonMainPath } from '../package-root.js';
+import { findDaemonPidsByPort } from '../find-daemon-pids.js';
 
 const LAUNCHD_PLIST = join(homedir(), 'Library', 'LaunchAgents', 'com.loopsy.daemon.plist');
 const LAUNCHD_LABEL = 'com.loopsy.daemon';
@@ -164,64 +165,40 @@ export async function stopCommand() {
     return;
   }
 
+  const pidsToKill = new Set<number>();
+
   const pidFromFile = await readPidFile();
-  let pidsToKill: number[] = [];
+  if (pidFromFile && isProcessAlive(pidFromFile)) pidsToKill.add(pidFromFile);
 
-  if (pidFromFile && isProcessAlive(pidFromFile)) {
-    pidsToKill.push(pidFromFile);
-  } else {
-    // PID file missing or stale. Probe HTTP — if a daemon is responding, look
-    // it up by port. This recovers from a previous `loopsy start` that saved
-    // the wrong PID (the macOS caffeinate parent) and left the node child
-    // orphaned.
-    try {
-      await daemonRequest('/health');
-      const orphans = await findOrphanDaemonPids();
-      pidsToKill = orphans;
-    } catch {
-      // Nothing responding.
-    }
-  }
+  // Always also reclaim whatever is bound to the daemon port. This recovers an
+  // orphan whose PID file is missing or stale — the failure mode the old
+  // macOS-only `ps` scan couldn't handle on Windows or flat npm installs, and
+  // which a prior failed `loopsy stop` actively creates by deleting the PID
+  // file below while the process keeps running. It also catches a hung daemon
+  // that still binds the port but no longer answers /health.
+  try {
+    const { port } = await loadCliConfig();
+    for (const pid of await findDaemonPidsByPort(port)) pidsToKill.add(pid);
+  } catch { /* best-effort port lookup */ }
 
-  if (pidsToKill.length === 0) {
+  if (pidsToKill.size === 0) {
     console.log('Daemon is not running');
     try { await unlink(PID_FILE); } catch { /* ignore */ }
     return;
   }
 
-  for (const pid of pidsToKill) {
+  const pids = [...pidsToKill];
+  for (const pid of pids) {
     try { process.kill(pid, 'SIGTERM'); } catch { /* already gone */ }
   }
-  const allDead = (await Promise.all(pidsToKill.map((p) => waitForDeath(p)))).every(Boolean);
+  const allDead = (await Promise.all(pids.map((p) => waitForDeath(p)))).every(Boolean);
   try { await unlink(PID_FILE); } catch { /* daemon may have cleaned up first */ }
 
   if (allDead) {
-    console.log(`Daemon stopped (${pidsToKill.length === 1 ? `PID ${pidsToKill[0]}` : `PIDs ${pidsToKill.join(', ')}`})`);
+    console.log(`Daemon stopped (${pids.length === 1 ? `PID ${pids[0]}` : `PIDs ${pids.join(', ')}`})`);
   } else {
-    console.error(`Daemon may not have stopped cleanly. Surviving PIDs: ${pidsToKill.filter(isProcessAlive).join(', ')}`);
+    console.error(`Daemon may not have stopped cleanly. Surviving PIDs: ${pids.filter(isProcessAlive).join(', ')}`);
   }
-}
-
-/**
- * Locate orphan loopsy daemon processes by scanning `ps`. Used when the PID
- * file is gone but a daemon is still bound to the port (the failure mode the
- * old restart logic created).
- */
-async function findOrphanDaemonPids(): Promise<number[]> {
-  const { execFile } = await import('node:child_process');
-  return new Promise((resolve) => {
-    execFile('ps', ['-Ao', 'pid,command'], (err, stdout) => {
-      if (err) return resolve([]);
-      const pids: number[] = [];
-      for (const line of stdout.split('\n')) {
-        if (/packages\/daemon\/dist\/main\.js/.test(line) && !/grep/.test(line)) {
-          const m = line.match(/^\s*(\d+)/);
-          if (m) pids.push(parseInt(m[1], 10));
-        }
-      }
-      resolve(pids);
-    });
-  });
 }
 
 export async function restartCommand(argv?: { lan?: boolean }) {
@@ -254,9 +231,17 @@ export async function restartCommand(argv?: { lan?: boolean }) {
   }
 
   await stopCommand();
-  // Brief pause to let the OS release the listening port. macOS sometimes
-  // holds it in TIME_WAIT briefly even after the listener exits.
-  await new Promise((r) => setTimeout(r, 500));
+  // Wait until the listener has actually released the port before starting,
+  // rather than guessing with a fixed sleep. Otherwise startCommand can see the
+  // dying daemon still answering /health (or still bound) and abort with
+  // "a daemon is already responding" — the main reason restart looked flaky.
+  try {
+    const { port } = await loadCliConfig();
+    for (let i = 0; i < 50; i++) {
+      if ((await findDaemonPidsByPort(port)).length === 0) break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+  } catch { /* best-effort; fall through to start */ }
   await startCommand(argv);
 }
 
