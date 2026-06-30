@@ -151,10 +151,11 @@ writeFileSync(
  *
  *   2. First-time \`loopsy init\` if no config exists yet.
  */
-import { mkdirSync, writeFileSync, cpSync, existsSync } from 'node:fs';
+import { mkdirSync, writeFileSync, cpSync, existsSync, chmodSync } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execSync } from 'node:child_process';
+import { createRequire } from 'node:module';
 import { homedir } from 'node:os';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -181,6 +182,28 @@ for (const stub of stubs) {
     }, null, 2),
   );
   console.log(\`loopsy: rebuilt @loopsy/\${stub.name} stub (Yarn 1 fallback)\`);
+}
+
+// 1b. node-pty prebuild fix: restore the execute bit on spawn-helper.
+//     node-pty 1.1.0 publishes its macOS/Linux spawn-helper as mode 0644
+//     (no +x); it's exec'd via posix_spawnp, so every PTY spawn fails with
+//     "posix_spawnp failed." without this. The daemon also self-heals this at
+//     startup, for installs where this script never runs (npm 11.17+ blocks
+//     postinstall by default; so does --ignore-scripts).
+if (process.platform !== 'win32') {
+  try {
+    const require = createRequire(import.meta.url);
+    const ptyRoot = dirname(require.resolve('node-pty/package.json'));
+    const helpers = [
+      join(ptyRoot, 'prebuilds', \`\${process.platform}-\${process.arch}\`, 'spawn-helper'),
+      join(ptyRoot, 'build', 'Release', 'spawn-helper'),
+    ];
+    for (const helper of helpers) {
+      if (existsSync(helper)) chmodSync(helper, 0o755);
+    }
+  } catch {
+    // Best-effort: the daemon self-heals at startup if this fails.
+  }
 }
 
 // 2. First-run init.

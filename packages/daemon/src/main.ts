@@ -6,6 +6,7 @@ import { homedir } from 'node:os';
 import { CONFIG_DIR } from '@loopsy/protocol';
 import { loadConfig } from './config.js';
 import { createDaemon } from './server.js';
+import { ensurePtyHelperExecutable } from './utils/ensure-pty-helper.js';
 
 function parseArgs(): { dataDir?: string } {
   const args = process.argv.slice(2);
@@ -19,6 +20,10 @@ function parseArgs(): { dataDir?: string } {
 const PID_FILE = join(homedir(), CONFIG_DIR, 'daemon.pid');
 
 async function main() {
+  // node-pty's prebuilt spawn-helper ships without the execute bit; restore it
+  // before we open any PTY, or every shell/agent session fails to spawn.
+  ensurePtyHelperExecutable();
+
   const { dataDir } = parseArgs();
   const config = await loadConfig(dataDir);
   const daemon = await createDaemon(config);
