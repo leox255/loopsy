@@ -1,9 +1,9 @@
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import { loadApiKey, parsePeerAddress } from '../utils.js';
+import { loadApiKey, resolvePeerAddress } from '../utils.js';
 
 export async function sendCommand(argv: any) {
-  const { address, port } = parsePeerAddress(argv.peer);
+  const { address, port } = await resolvePeerAddress(argv.peer);
   const apiKey = argv.key || await loadApiKey();
 
   try {
@@ -33,7 +33,7 @@ export async function sendCommand(argv: any) {
 }
 
 export async function pullCommand(argv: any) {
-  const { address, port } = parsePeerAddress(argv.peer);
+  const { address, port } = await resolvePeerAddress(argv.peer);
   const apiKey = argv.key || await loadApiKey();
 
   try {

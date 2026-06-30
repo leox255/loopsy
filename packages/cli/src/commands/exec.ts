@@ -1,7 +1,7 @@
-import { loadApiKey, parsePeerAddress } from '../utils.js';
+import { loadApiKey, resolvePeerAddress } from '../utils.js';
 
 export async function execCommand(argv: any) {
-  const { address, port } = parsePeerAddress(argv.peer);
+  const { address, port } = await resolvePeerAddress(argv.peer);
   const apiKey = argv.key || await loadApiKey();
   const cmd = argv.cmd as string[];
   const command = cmd[0];
